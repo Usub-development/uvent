@@ -74,6 +74,6 @@ install(EXPORT uventTargets
 )
 
 if(BUILD_MAIN)
-    add_executable(uvent_exe main.cpp)
+    add_executable(uvent_exe examples/main.cpp)
     target_link_libraries(uvent_exe usub::uvent)
 endif()
