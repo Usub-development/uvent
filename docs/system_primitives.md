@@ -13,7 +13,7 @@ Namespace: `usub::uvent::system::this_coroutine`
 ```cpp
 template <typename Rep, typename Period>
 task::Awaitable<void> sleep_for(const std::chrono::duration<Rep, Period>& duration);
-````
+```
 
 Usage:
 
