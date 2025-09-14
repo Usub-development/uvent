@@ -20,7 +20,7 @@ namespace usub {
       uvent::ThreadPool pool;
   };
 }
-````
+```
 
 * **Constructor**
 
