@@ -13,6 +13,7 @@ High-performance asynchronous I/O library for C++23.
 - **Sockets**: TCP/UDP (client and server).  
 - **Timers**: custom `TimerWheel` with minimal overhead.  
 - **Queues & synchronization**: lock-free data structures, QSBR, and reference counting.  
+- **Custom frames**: ability to override coroutine promise frames (`AwaitableFrameBase`), enabling custom scheduling and integration.
 
 ---
 
