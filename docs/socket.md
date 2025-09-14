@@ -9,7 +9,7 @@ using TCPServerSocket = Socket<Proto::TCP, Role::PASSIVE>;
 using TCPClientSocket = Socket<Proto::TCP, Role::ACTIVE>;
 using UDPBoundSocket  = Socket<Proto::UDP, Role::ACTIVE>;
 using UDPSocket       = Socket<Proto::UDP, Role::PASSIVE>;
-````
+```
 
 ## Header layout (internal)
 
