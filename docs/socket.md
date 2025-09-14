@@ -184,5 +184,3 @@ Destruction path (internal):
 * `ssize_t` I/O: `>0` bytes, `0` EOF (read), `-1` error, `-2` read cap reached.
 * `std::optional<T>`: `std::nullopt` = success/absent; set = error/value present.
 * `std::expected<T,E>`: value on success, error enum on failure.
-
-```
