@@ -148,3 +148,54 @@ auto* promise = someAwaitable.get_promise(); // FrameType*
 * Frames must inherit from `AwaitableFrameBase`.
 * Exceptions are preserved: `await_resume()` rethrows if `exception_` was set.
 * You can define custom scheduling/lifetime semantics via your own frame type.
+
+---
+
+## Why customizable frames matter
+
+Most coroutine frameworks (Boost.Asio, libuv, cppcoro, etc.) hard-wire their promise types.  
+In **uvent**, `Awaitable` is decoupled from the frame implementation — you can plug in your own by inheriting from `AwaitableFrameBase`.
+
+### Benefits
+
+- **Execution semantics**  
+  Decide whether a coroutine starts immediately (`suspend_never`) or waits (`suspend_always`), control destruction policy, or add custom rescheduling logic.
+
+- **Integration**  
+  Connect coroutines with external systems (GPU tasks, RPC frameworks, custom pollers) without rewriting the runtime.
+
+- **Extensibility**  
+  Add your own data members, flags, exception handling rules, or intermediate yields while still working seamlessly with `task::Awaitable`.
+
+- **Low-level control**  
+  Own the lifetime, result storage, and coroutine chaining strategy (`prev_`, `next_`), instead of being locked to one default.
+
+### In practice
+
+This makes `uvent` not just an async I/O runtime, but a **foundation for building your own higher-level concurrency abstractions** (custom futures, channels, pipelines, schedulers).
+
+```cpp
+// Example: use a custom Frame type
+task::Awaitable<int, MyFrame> compute() {
+    co_return 123;
+}
+```
+
+---
+
+## Typical mistakes when writing custom frames
+
+!!! warning "Forgetting cleanup"
+Not calling `push_frame_to_be_destroyed()` in `final_suspend()` → memory leaks.
+
+!!! warning "Not unsetting `awaited`"
+Caller stays marked as "awaiting" if you don’t call `unset_awaited()` → deadlock-like hangs.
+
+!!! warning "Incorrect `get()`"
+Returning without checking `exception_` → exceptions are silently lost.
+
+!!! warning "Missing destructor logic"
+If you use `return_value(T)` with placement-new, you must destroy the stored object in the frame’s destructor.
+
+!!! warning "Wrong suspend policy"
+Using `suspend_never` when the coroutine must be scheduled by the runtime → skipped scheduling, inconsistent execution.
