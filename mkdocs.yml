@@ -1,0 +1,57 @@
+site_name: uvent Documentation
+site_description: High-performance asynchronous I/O library for modern C++23
+site_url: https://usub-development.github.io/uvent/
+repo_url: https://github.com/Usub-development/uvent
+repo_name: Usub-development/uvent
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+  features:
+    - navigation.top
+    - search.highlight
+    - content.code.copy
+
+plugins:
+  - search
+  - autorefs
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Usub-development/uvent
+      name: GitHub Repository
+    - icon: fontawesome/solid/star
+      link: https://github.com/Usub-development/uvent/stargazers
+      name: Star on GitHub
+      
+copyright: >
+  Copyright &copy; 2025 Usub-development
