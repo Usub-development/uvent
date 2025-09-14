@@ -1,4 +1,4 @@
-# uvent
+# Uvent
 
 High-performance asynchronous I/O library for C++23.
 
