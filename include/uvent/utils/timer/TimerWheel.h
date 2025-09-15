@@ -66,6 +66,12 @@ namespace usub::uvent::utils
 
         void updateNextExpiryTime();
 
+        inline static bool is_due(timeout_t now, timeout_t expiry, uint64_t interval) noexcept {
+            if (expiry <= now) return true;
+            const uint64_t diff = expiry - now;
+            return diff < interval;
+        }
+
     private:
         struct Wheel
         {

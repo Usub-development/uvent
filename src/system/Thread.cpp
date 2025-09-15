@@ -40,7 +40,7 @@ namespace usub::uvent::system
             {
                 auto next_timeout = wh->getNextTimeout();
                 pl->poll((q->empty() && utils::detail::thread::is_started.load(std::memory_order_relaxed))
-                             ? (next_timeout <= 0)
+                             ? (next_timeout > 0)
                                    ? next_timeout
                                    : 5000
                              : 0);
@@ -49,7 +49,7 @@ namespace usub::uvent::system
             {
                 auto next_timeout = wh->getNextTimeout();
                 pl->lock_poll((q->empty() && utils::detail::thread::is_started.load(std::memory_order_relaxed))
-                                  ? (next_timeout <= 0)
+                                  ? (next_timeout > 0)
                                         ? next_timeout
                                         : 5000
                                   : 0);
