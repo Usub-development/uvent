@@ -7,7 +7,6 @@
 
 #include <coroutine>
 #include <atomic>
-#include <iostream>
 
 #include "include/uvent/utils/sync/RefCountedSession.h"
 #include "include/uvent/utils/intrinsincs/optimizations.h"
@@ -27,11 +26,6 @@ namespace usub::uvent::net
         uint8_t socket_info;
         std::coroutine_handle<> first, second;
         std::atomic<uint64_t> state;
-
-        ~SocketHeader()
-        {
-            std::cout << "Deleted socket header\n";
-        }
 
         __attribute__((always_inline)) void close_for_new_refs() noexcept
         {
