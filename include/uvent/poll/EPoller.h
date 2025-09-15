@@ -22,11 +22,11 @@ namespace usub::uvent::core {
 
         ~EPoller() override = default;
 
-        void addEvent(net::SocketHeader *socket, OperationType initialState) override;
+        void addEvent(net::SocketHeader *header, OperationType initialState) override;
 
-        void updateEvent(net::SocketHeader *socket, OperationType initialState) override;
+        void updateEvent(net::SocketHeader *header, OperationType initialState) override;
 
-        void removeEvent(int fd, uint64_t timerId, OperationType op) override;
+        void removeEvent(net::SocketHeader* header, OperationType op) override;
 
         bool poll(int timeout) override;
 

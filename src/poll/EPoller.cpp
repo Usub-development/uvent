@@ -6,10 +6,11 @@
 #include "include/uvent/system/Settings.h"
 #include "include/uvent/utils/thread/ThreadStats.h"
 #include "include/uvent/system/SystemContext.h"
+#include "uvent/net/Socket.h"
 
 namespace usub::uvent::core
 {
-    EPoller::EPoller(utils::TimerWheel* wheel) : PollerBase(settings::timeout_duration_ms),
+    EPoller::EPoller(utils::TimerWheel* wheel) : PollerBase(),
                                                  wheel(wheel)
     {
         this->poll_fd = epoll_create1(0);
@@ -17,10 +18,10 @@ namespace usub::uvent::core
         this->events.resize(1000);
     }
 
-    void EPoller::addEvent(net::SocketHeader* socket, OperationType initialState)
+    void EPoller::addEvent(net::SocketHeader* header, OperationType initialState)
     {
         struct epoll_event event{};
-        event.data.ptr = reinterpret_cast<void*>(socket);
+        event.data.ptr = reinterpret_cast<void*>(header);
         switch (initialState)
         {
         case READ:
@@ -36,32 +37,33 @@ namespace usub::uvent::core
 #if UVENT_DEBUG
         spdlog::info("Socket added: {}", socket->fd);
 #endif
-        epoll_ctl(this->poll_fd, EPOLL_CTL_ADD, socket->fd, &event);
-        if (!(socket->socket_info & static_cast<uint8_t>(net::Proto::TCP)))
+        epoll_ctl(this->poll_fd, EPOLL_CTL_ADD, header->fd, &event);
+        if ((header->socket_info & static_cast<uint8_t>(net::Proto::TCP)) && !(header->socket_info & static_cast<
+            uint8_t>(net::Role::PASSIVE)))
         {
-            uint64_t timerId = 0;
-            auto timer = new utils::Timer(this->timeoutDuration_ms, socket->fd, utils::TIMEOUT);
-            socket->timer_id = this->wheel->addTimer(timer);
-            auto coro = utils::timeout_coroutine([this, fd = socket->fd, timerId]
+            auto timer = new utils::Timer(settings::timeout_duration_ms, header->fd, utils::TIMEOUT);
+            auto coro = utils::timeout_coroutine([this, header]
             {
-                removeEvent(fd, timerId, ALL);
+                removeEvent(header, ALL);
+                if (!header->is_busy_now()) system::this_thread::detail::g_qsbr.retire(header, &net::delete_header);
             });
             timer->coro = coro.get_promise()->get_coroutine_handle();
+            header->timer_id = this->wheel->addTimer(timer);
         }
-        else if ((socket->socket_info & static_cast<uint8_t>(net::Proto::TCP) && (socket->socket_info & static_cast<
-            uint8_t>(net::Role::PASSIVE))))
+        else if ((header->socket_info & static_cast<uint8_t>(net::Proto::TCP)) && (header->socket_info & static_cast<
+            uint8_t>(net::Role::PASSIVE)))
         {
             utils::detail::thread::is_started.store(true, std::memory_order_relaxed);
         }
     }
 
-    void EPoller::updateEvent(net::SocketHeader* socket, OperationType initialState)
+    void EPoller::updateEvent(net::SocketHeader* header, OperationType initialState)
     {
         struct epoll_event event{};
-        event.data.ptr = reinterpret_cast<void*>(socket);
+        event.data.ptr = reinterpret_cast<void*>(header);
         event.events = 0;
-        if (socket->is_writing_now()) event.events |= (EPOLLOUT | EPOLLET);
-        if (socket->is_reading_now()) event.events |= (EPOLLIN | EPOLLET);
+        if (header->is_writing_now()) event.events |= (EPOLLOUT | EPOLLET);
+        if (header->is_reading_now()) event.events |= (EPOLLIN | EPOLLET);
 
         switch (initialState)
         {
@@ -87,7 +89,7 @@ namespace usub::uvent::core
                      socket->is_writing_now());
 #endif
 
-        int result = epoll_ctl(this->poll_fd, EPOLL_CTL_MOD, socket->fd, &event);
+        int result = epoll_ctl(this->poll_fd, EPOLL_CTL_MOD, header->fd, &event);
 #if UVENT_DEBUG
         if (result < 0)
         {
@@ -102,15 +104,15 @@ namespace usub::uvent::core
 #endif
     }
 
-    void EPoller::removeEvent(int fd, uint64_t timerId, OperationType op)
+    void EPoller::removeEvent(net::SocketHeader* header, OperationType op)
     {
 #if UVENT_DEBUG
         spdlog::info("Socket removed: {}", fd);
 #endif
-
-        epoll_ctl(this->poll_fd, EPOLL_CTL_DEL, fd, nullptr);
-        close(fd);
-        this->wheel->removeTimer(timerId);
+        epoll_ctl(this->poll_fd, EPOLL_CTL_DEL, header->fd, nullptr);
+        close(header->fd);
+        this->wheel->removeTimer(header->timer_id);
+        header->close_for_new_refs();
     }
 
     bool EPoller::poll(int timeout)
@@ -130,7 +132,7 @@ namespace usub::uvent::core
                     net::Role::PASSIVE))) &
                 (event.events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)))
             {
-                this->removeEvent(sock->fd, sock->timer_id, ALL);
+                this->removeEvent(sock, ALL);
                 continue;
             }
             sock->try_mark_busy();

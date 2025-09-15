@@ -48,6 +48,7 @@ task::Awaitable<void> clientCoro(net::TCPClientSocket socket) {
 #ifdef UVENT_DEBUG
     spdlog::warn("client_coro finished");
 #endif
+    std::cout << "finished client coro\n";
     co_return;
 }
 
@@ -84,7 +85,7 @@ task::Awaitable<void> sendingCoro() {
 }
 
 int main() {
-    settings::timeout_duration_ms = 5000;
+    settings::timeout_duration_ms = 20000;
 #ifdef UVENT_DEBUG
     spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [thread %t] [%l] %v%$");
     spdlog::set_level(spdlog::level::trace);
