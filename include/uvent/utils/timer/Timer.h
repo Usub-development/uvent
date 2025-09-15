@@ -26,7 +26,7 @@ namespace usub::uvent::utils
 
     task::Awaitable<void> timeout_coroutine(std::function<void()> f);
 
-    struct Timer
+    struct alignas(32) Timer
     {
         Timer(timer_duration_t duration, int fd, TimerType type = TIMEOUT);
 

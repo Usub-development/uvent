@@ -24,38 +24,56 @@ namespace usub::uvent::core
         event.data.ptr = reinterpret_cast<void*>(header);
         switch (initialState)
         {
-        case READ:
-            event.events = EPOLLIN | EPOLLET;
+        case READ: event.events = EPOLLIN | EPOLLET;
             break;
-        case WRITE:
-            event.events = EPOLLOUT | EPOLLET;
+        case WRITE: event.events = EPOLLOUT | EPOLLET;
             break;
-        default:
-            event.events = (EPOLLIN | EPOLLOUT | EPOLLET);
+        default: event.events = EPOLLIN | EPOLLOUT | EPOLLET;
             break;
         }
 #if UVENT_DEBUG
-        spdlog::info("Socket added: {}", socket->fd);
+    spdlog::info("Socket added: {}", header->fd);
 #endif
         epoll_ctl(this->poll_fd, EPOLL_CTL_ADD, header->fd, &event);
-        if ((header->socket_info & static_cast<uint8_t>(net::Proto::TCP)) && !(header->socket_info & static_cast<
-            uint8_t>(net::Role::PASSIVE)))
+
+        if ((header->socket_info & static_cast<uint8_t>(net::Proto::TCP)) &&
+            !(header->socket_info & static_cast<uint8_t>(net::Role::PASSIVE)))
         {
-            auto timer = new utils::Timer(settings::timeout_duration_ms, header->fd, utils::TIMEOUT);
+            auto& st = header->state;
+            {
+                uint64_t s = st.load(std::memory_order_relaxed);
+                for (;;)
+                {
+                    if ((s & usub::utils::sync::refc::COUNT_MASK) == usub::utils::sync::refc::COUNT_MASK) break;
+                    uint64_t ns = (s & ~usub::utils::sync::refc::COUNT_MASK) | ((s &
+                        usub::utils::sync::refc::COUNT_MASK) + 1);
+                    if (st.compare_exchange_weak(s, ns, std::memory_order_acquire, std::memory_order_relaxed)) break;
+                    cpu_relax();
+                }
+            }
+
+            auto* timer = new utils::Timer(settings::timeout_duration_ms, header->fd, utils::TIMEOUT);
+
             auto coro = utils::timeout_coroutine([this, header]
             {
-                removeEvent(header, ALL);
-                if (!header->is_busy_now()) system::this_thread::detail::g_qsbr.retire(header, &net::delete_header);
+                header->timeout_epoch_bump(header->state);
+
+                if (header->first) system::this_thread::detail::q->enqueue(header->first);
+                if (header->second) system::this_thread::detail::q->enqueue(header->second);
+
+                header->state.fetch_sub(1, std::memory_order_release);
             });
+
             timer->coro = coro.get_promise()->get_coroutine_handle();
             header->timer_id = this->wheel->addTimer(timer);
         }
-        else if ((header->socket_info & static_cast<uint8_t>(net::Proto::TCP)) && (header->socket_info & static_cast<
-            uint8_t>(net::Role::PASSIVE)))
+        else if ((header->socket_info & static_cast<uint8_t>(net::Proto::TCP)) &&
+            (header->socket_info & static_cast<uint8_t>(net::Role::PASSIVE)))
         {
             utils::detail::thread::is_started.store(true, std::memory_order_relaxed);
         }
     }
+
 
     void EPoller::updateEvent(net::SocketHeader* header, OperationType initialState)
     {
@@ -104,15 +122,26 @@ namespace usub::uvent::core
 #endif
     }
 
-    void EPoller::removeEvent(net::SocketHeader* header, OperationType op)
+    void EPoller::removeEvent(net::SocketHeader* header, OperationType)
     {
 #if UVENT_DEBUG
-        spdlog::info("Socket removed: {}", fd);
+        spdlog::info("Socket removed: {}", header->fd);
 #endif
+        using namespace usub::utils::sync::refc;
+        uint64_t s = header->state.load(std::memory_order_relaxed);
+        for (;;) {
+            if (s & CLOSED_MASK) break;
+            const uint64_t ns = s | DISCONNECTED_MASK | CLOSED_MASK;
+            if (header->state.compare_exchange_weak(s, ns, std::memory_order_release, std::memory_order_relaxed)) break;
+            cpu_relax();
+        }
         epoll_ctl(this->poll_fd, EPOLL_CTL_DEL, header->fd, nullptr);
-        close(header->fd);
         this->wheel->removeTimer(header->timer_id);
-        header->close_for_new_refs();
+        ::close(header->fd);
+        header->fd = -1;
+
+        if (header->first)  system::this_thread::detail::q->enqueue(header->first);
+        if (header->second) system::this_thread::detail::q->enqueue(header->second);
     }
 
     bool EPoller::poll(int timeout)
@@ -127,7 +156,7 @@ namespace usub::uvent::core
         {
             auto& event = this->events[i];
             auto* sock = static_cast<net::SocketHeader*>(event.data.ptr);
-            if (sock->is_busy_now()) continue;
+            if (sock->is_busy_now() || sock->is_disconnected_now()) continue;
             if (!(sock->socket_info & static_cast<uint8_t>(net::Proto::TCP) & (sock->socket_info & static_cast<uint8_t>(
                     net::Role::PASSIVE))) &
                 (event.events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)))

@@ -321,13 +321,20 @@ namespace usub::uvent::net
 #if UVENT_DEBUG
         spdlog::info("Entered into read coroutine");
 #endif
-        ssize_t total_read = 0;
+        if (this->is_disconnected_now()) co_return -3;
 
+        // state snapshot
+        const uint64_t snap = this->header_->timeout_epoch_load(this->header_->state);
         co_await detail::AwaiterRead{this->header_};
+
+        if (this->header_->timeout_epoch_changed(this->header_->state, snap)) co_return -110;
+        if (this->is_disconnected_now()) co_return -3;
+
 #if UVENT_DEBUG
         spdlog::info("Triggered by epoll");
 #endif
         int retries = 0;
+        ssize_t total_read = 0;
         while (true)
         {
             uint8_t temp[16384];
@@ -344,7 +351,7 @@ namespace usub::uvent::net
             else if (res == 0)
             {
                 this->remove();
-                co_return total_read > 0 ? total_read : 0;
+                co_return (this->is_disconnected_now()) ? -3 : (total_read > 0 ? total_read : 0);
             }
             else
             {
@@ -357,25 +364,23 @@ namespace usub::uvent::net
                     if (++retries >= settings::max_read_retries)
                     {
                         this->remove();
-                        co_return -1;
+                        co_return (this->is_disconnected_now()) ? -3 : -1;
                     }
                     continue;
                 }
                 else
                 {
                     this->remove();
-                    co_return -1;
+                    co_return (this->is_disconnected_now()) ? -3 : -1;
                 }
             }
 
             if (buffer.size() >= max_read_size)
             {
-                co_return -2;
+                co_return (this->is_disconnected_now()) ? -3 : -2;
             }
         }
-#if UVENT_DEBUG
-        spdlog::info("Function ended.");
-#endif
+        if (this->header_->timeout_epoch_changed(this->header_->state, snap)) co_return -110;
         co_return total_read;
     }
 
@@ -386,9 +391,15 @@ namespace usub::uvent::net
         auto buf_internal = std::unique_ptr<uint8_t[]>(new uint8_t[sz], std::default_delete<uint8_t[]>());
         std::copy_n(buf, sz, buf_internal.get());
 
+        if (this->is_disconnected_now()) co_return -3;
+        const uint64_t snap = this->header_->timeout_epoch_load(this->header_->state);
+
+        co_await detail::AwaiterWrite{this->header_};
+        if (this->header_->timeout_epoch_changed(this->header_->state, snap)) co_return -110;
+        if (this->is_disconnected_now()) co_return -3;
+
         ssize_t total_written = 0;
         int retries = 0;
-        co_await detail::AwaiterWrite{this->header_};
 
         while (total_written < sz)
         {
@@ -407,7 +418,7 @@ namespace usub::uvent::net
                     if (++retries >= settings::max_write_retries)
                     {
                         this->remove();
-                        co_return -1;
+                        co_return (this->is_disconnected_now()) ? -3 : -1;
                     }
                     continue;
                 }
@@ -418,10 +429,11 @@ namespace usub::uvent::net
                 else
                 {
                     this->remove();
-                    co_return -1;
+                    co_return (this->is_disconnected_now()) ? -3 : -1;
                 }
             }
         }
+        if (this->header_->timeout_epoch_changed(this->header_->state, snap)) co_return -110;
         co_return total_written;
     }
 
@@ -561,7 +573,7 @@ namespace usub::uvent::net
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
 
-        system::this_thread::detail::pl->addEvent(this, core::WRITE);
+        system::this_thread::detail::pl->addEvent(this->header_, core::WRITE);
         co_await detail::AwaiterWrite{this->header_};
         freeaddrinfo(res);
         if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
@@ -629,13 +641,23 @@ namespace usub::uvent::net
         uint8_t* buf, size_t sz,
         size_t chunkSize, size_t maxSize) requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP))
     {
+        const uint64_t snap = this->header_->timeout_epoch_load(this->header_->state);
+
         auto buf_internal = std::unique_ptr<uint8_t[]>(new uint8_t[sz], std::default_delete<uint8_t[]>());
         std::copy_n(buf, sz, buf_internal.get());
         co_await detail::AwaiterWrite{this->header_};
+
+        if (this->header_->timeout_epoch_changed(this->header_->state, snap) || this->is_disconnected_now())
+            co_return std::unexpected(usub::utils::errors::SendError::Timeout);
+
         auto sendRes = this->send_aux(buf_internal.get(), sz);
         if (sendRes != -1)
         {
             co_await detail::AwaiterRead{this->header_};
+
+            if (this->header_->timeout_epoch_changed(this->header_->state, snap) || this->is_disconnected_now())
+                co_return std::unexpected(usub::utils::errors::SendError::Timeout);
+
             co_return std::move(this->receive(chunkSize, maxSize));
         }
         co_return std::unexpected(usub::utils::errors::SendError::InvalidSocketFd);
@@ -647,7 +669,7 @@ namespace usub::uvent::net
     {
         auto buf_internal = std::unique_ptr<uint8_t[]>(new uint8_t[sz], std::default_delete<uint8_t[]>());
         std::copy_n(buf, sz, buf_internal.get());
-        auto sendRes = this->send_aux(this->header_->fd, buf_internal.get(), sz);
+        auto sendRes = this->send_aux(buf_internal.get(), sz);
         if (sendRes != -1) return std::move(this->receive(chunkSize, maxSize));
         return std::unexpected(usub::utils::errors::SendError::InvalidSocketFd);
     }
@@ -657,6 +679,7 @@ namespace usub::uvent::net
         off_t* offset, size_t count) requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP))
     {
         co_await detail::AwaiterWrite{this->header_};
+        if (this->is_disconnected_now()) co_return -3;
 
         ssize_t res = ::sendfile(this->header_->fd, in_fd, offset, count);
         if (res == -1)
