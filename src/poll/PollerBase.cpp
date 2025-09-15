@@ -5,5 +5,5 @@
 #include "include/uvent/poll/PollerBase.h"
 
 namespace usub::uvent::core {
-    PollerBase::PollerBase(uint64_t timeoutDuration_ms) : timeoutDuration_ms(timeoutDuration_ms) {}
+    PollerBase::PollerBase() {}
 }

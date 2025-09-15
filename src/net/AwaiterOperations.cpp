@@ -72,7 +72,7 @@ namespace usub::uvent::net::detail
     {
         auto c = std::coroutine_handle<uvent::detail::AwaitableFrameBase>::from_address(h.address());
         this->header_->first = c;
-        c.promise().unset_awaited();
+        c.promise().set_awaited();
         this->header_->clear_busy();
     }
 

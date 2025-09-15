@@ -3,3 +3,7 @@
 //
 
 #include "include/uvent/net/SocketMetadata.h"
+
+namespace usub::uvent::net
+{
+}
