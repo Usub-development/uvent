@@ -30,7 +30,13 @@ namespace usub::utils::errors {
         InvalidSocketFd,
         RecvFailed,
         RecvFromFailed,
-        InvalidAddressVariant
+        InvalidAddressVariant,
+        Timeout
+    };
+
+    enum class SocketError
+    {
+        Timeout
     };
 
     constexpr const char *toString(SendError err) noexcept {
@@ -43,6 +49,8 @@ namespace usub::utils::errors {
                 return "RecvFromFailed";
             case SendError::InvalidAddressVariant:
                 return "InvalidAddressVariant";
+            case SendError::Timeout:
+                return "Timeout";
             default:
                 return "UnknownSendError";
         }
@@ -74,6 +82,15 @@ namespace usub::utils::errors {
                 return "Unknown";
             default:
                 return "UnknownConnectError";
+        }
+    }
+
+    constexpr const char *toString(SocketError err) noexcept {
+        switch (err) {
+        case SocketError::Timeout:
+            return "Timeout";
+        default:
+            return "UnknownSendError";
         }
     }
 }

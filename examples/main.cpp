@@ -85,7 +85,7 @@ task::Awaitable<void> sendingCoro() {
 }
 
 int main() {
-    settings::timeout_duration_ms = 20000;
+    settings::timeout_duration_ms = 5000;
 #ifdef UVENT_DEBUG
     spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [thread %t] [%l] %v%$");
     spdlog::set_level(spdlog::level::trace);
