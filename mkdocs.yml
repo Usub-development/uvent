@@ -59,6 +59,7 @@ nav:
       - Awaitable Frame: awaitable_frame.md
   - Networking:
       - Socket: socket.md
+  - Contributing: contributing.md
 
 extra:
   social:
@@ -70,4 +71,4 @@ extra:
       name: Star on GitHub
 
 copyright: >
-  Copyright &copy; 2025 Usub-development
+  Copyright &copy; 2025 Usub-development, Kirill Zhukov (g2px1)
