@@ -15,6 +15,7 @@
 #include "include/uvent/system/Defines.h"
 #include "include/uvent/utils/net/net.h"
 #include "include/uvent/utils/net/socket.h"
+#include "include/uvent/base/Predefines.h"
 
 namespace usub::uvent::net
 {
@@ -23,6 +24,7 @@ namespace usub::uvent::net
     {
     public:
         friend class usub::utils::sync::refc::RefCounted<Socket<p, r>>;
+        friend class core::EPoller;
 
         /**
          * \brief Default constructor.
@@ -189,11 +191,6 @@ namespace usub::uvent::net
     protected:
         void destroy() noexcept override;
 
-        static void delete_header(void* ptr)
-        {
-            delete static_cast<SocketHeader*>(ptr);
-        }
-
         void remove();
 
     private:
@@ -255,27 +252,24 @@ namespace usub::uvent::net
     }
 
     template <Proto p, Role r>
-    Socket<p, r>& Socket<p, r>::operator=(const Socket& o) noexcept
-    {
+    Socket<p, r>& Socket<p, r>::operator=(const Socket& o) noexcept {
         if (this == &o) return *this;
         Socket tmp(o);
-        std::swap(this->header_, o.header);
+        std::swap(this->header_, tmp.header_);
         return *this;
     }
 
     template <Proto p, Role r>
-    Socket<p, r>& Socket<p, r>::operator=(Socket&& o) noexcept
-    {
+    Socket<p, r>& Socket<p, r>::operator=(Socket&& o) noexcept {
         if (this == &o) return *this;
         Socket tmp(std::move(o));
-        std::swap(this->header_, o.header);
+        std::swap(this->header_, tmp.header_);
         return *this;
     }
 
     template <Proto p, Role r>
     Socket<p, r> Socket<p, r>::from_existing(SocketHeader* header)
     {
-        header->state = usub::utils::sync::refc::RefCounted<Socket>::initial_state();
         return Socket(header);
     }
 
@@ -715,15 +709,15 @@ namespace usub::uvent::net
     void Socket<p, r>::destroy() noexcept
     {
         this->header_->close_for_new_refs();
-        system::this_thread::detail::pl->removeEvent(this->header_->fd, this->header_->timer_id,
+        system::this_thread::detail::pl->removeEvent(this->header_,
                                                      core::OperationType::ALL);
-        system::this_thread::detail::g_qsbr.retire(static_cast<void*>(this->header_), &Socket::delete_header);
+        system::this_thread::detail::g_qsbr.retire(static_cast<void*>(this->header_), &delete_header);
     }
 
     template <Proto p, Role r>
     void Socket<p, r>::remove()
     {
-        system::this_thread::detail::pl->removeEvent(this->header_->fd, this->header_->timer_id,
+        system::this_thread::detail::pl->removeEvent(this->header_,
                                                      core::OperationType::ALL);
         this->header_->close_for_new_refs();
     }
