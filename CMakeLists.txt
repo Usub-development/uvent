@@ -6,8 +6,6 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -rdynamic -fPIC" CACHE STRING "Debug flags" FORCE)
 set(CMAKE_C_FLAGS_DEBUG "-g -O0 -rdynamic -fPIC" CACHE STRING "Debug flags" FORCE)
 
-include_directories(${uvent_SOURCE_DIR})
-
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
@@ -19,18 +17,6 @@ foreach (header ${UVENT_HEADERS})
         list(REMOVE_ITEM UVENT_HEADERS ${header})
     endif ()
 endforeach ()
-
-if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-    message(STATUS "Debug mode enabled")
-    #    add_definitions(-DUVENT_DEBUG)
-    # include(FetchContent)
-    # FetchContent_Declare(
-    #         spdlog
-    #         GIT_REPOSITORY https://github.com/gabime/spdlog.git
-    #         GIT_TAG v1.14.1
-    # )
-    # FetchContent_MakeAvailable(spdlog)
-endif ()
 
 add_definitions(-DUVENT_PIN_THREDS)
 
@@ -56,7 +42,7 @@ target_include_directories(uvent
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/uvent>
 )
 
@@ -72,10 +58,30 @@ install(EXPORT uventTargets
         DESTINATION lib/cmake/uvent
 )
 
+option(BUILD_MAIN "Buld main executable for testing" OFF)
+
 if (BUILD_MAIN)
+    if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+        message(STATUS "Debug mode enabled")
+        include(FetchContent)
+        FetchContent_Declare(
+                spdlog
+                GIT_REPOSITORY https://github.com/gabime/spdlog.git
+                GIT_TAG v1.14.1
+        )
+        FetchContent_MakeAvailable(spdlog)
+    endif ()
+
     add_compile_options(-fsanitize=address)
     add_link_options(-fsanitize=address)
 
-    add_executable(uvent_exe examples/main.cpp)
-    target_link_libraries(uvent_exe PRIVATE usub::uvent)
+    add_executable(uvent_exe ${UVENT_SOURCES} examples/main.cpp)
+    target_compile_definitions(uvent_exe PRIVATE
+        $<$<CONFIG:Debug>:UVENT_DEBUG>
+    )
+    target_include_directories(uvent_exe
+        PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+     )
+    target_link_libraries(uvent_exe PRIVATE $<$<CONFIG:Debug>:spdlog::spdlog>) 
 endif ()

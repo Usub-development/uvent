@@ -2,7 +2,7 @@
 // Created by root on 9/11/25.
 //
 
-#include "include/uvent/utils/sync/QSBR.h"
+#include "uvent/utils/sync/QSBR.h"
 
 namespace usub::utils::sync
 {

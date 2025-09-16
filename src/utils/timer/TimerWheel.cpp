@@ -2,7 +2,7 @@
 // Created by kirill on 8/27/24.
 //
 
-#include "include/uvent/utils/timer/TimerWheel.h"
+#include "uvent/utils/timer/TimerWheel.h"
 
 namespace usub::uvent::utils
 {

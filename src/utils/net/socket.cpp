@@ -2,7 +2,7 @@
 // Created by kirill on 8/30/24.
 //
 
-#include "include/uvent/utils/net/socket.h"
+#include "uvent/utils/net/socket.h"
 
 namespace usub::uvent::utils::socket {
     int createSocket(int port, const std::string &ip_addr, int backlog, net::IPV ipv, net::SocketAddressType socType) {

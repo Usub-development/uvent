@@ -6,8 +6,8 @@
 #define UVENT_TIMER_H
 
 // USUB:
-#include "include/uvent/system/Defines.h"
-#include "include/uvent/tasks/AwaitableFrame.h"
+#include "uvent/system/Defines.h"
+#include "uvent/tasks/AwaitableFrame.h"
 #include "Timer.h"
 
 // STL:
@@ -23,8 +23,8 @@
 #include <cmath>
 #include <list>
 #include <map>
-#include "include/uvent/utils/datastructures/queue/ConcurrentQueues.h"
-#include "include/uvent/system/Settings.h"
+#include "uvent/utils/datastructures/queue/ConcurrentQueues.h"
+#include "uvent/system/Settings.h"
 
 typedef uint64_t timer_duration_t;
 typedef uint64_t timeout_t;

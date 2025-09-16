@@ -2,9 +2,9 @@
 // Created by Kirill Zhukov on 07.11.2024.
 //
 
-#include "include/uvent/system/Thread.h"
+#include "uvent/system/Thread.h"
 #include <utility>
-#include "include/uvent/net/Socket.h"
+#include "uvent/net/Socket.h"
 
 namespace usub::uvent::system
 {
