@@ -22,7 +22,7 @@ endforeach()
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
     message(STATUS "Debug mode enabled")
-    add_definitions(-DUVENT_DEBUG)
+    # add_definitions(-DUVENT_DEBUG)
 
     # include(FetchContent)
     # FetchContent_Declare(
