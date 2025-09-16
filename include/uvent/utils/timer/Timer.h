@@ -10,8 +10,8 @@
 #include <functional>
 #include <coroutine>
 
-#include "include/uvent/system/Defines.h"
-#include "include/uvent/tasks/AwaitableFrame.h"
+#include "uvent/system/Defines.h"
+#include "uvent/tasks/AwaitableFrame.h"
 
 typedef uint64_t timer_duration_t;
 typedef uint64_t timeout_t;

@@ -6,8 +6,8 @@
 #define UVENT_THREADPOOL_H
 
 #include <cmath>
-#include "include/uvent/system/Thread.h"
-#include "include/uvent/system/Defines.h"
+#include "uvent/system/Thread.h"
+#include "uvent/system/Defines.h"
 
 namespace usub::uvent
 {

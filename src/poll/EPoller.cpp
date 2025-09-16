@@ -2,10 +2,10 @@
 // Created by kirill on 11/15/24.
 //
 
-#include "include/uvent/poll/EPoller.h"
-#include "include/uvent/system/Settings.h"
-#include "include/uvent/utils/thread/ThreadStats.h"
-#include "include/uvent/system/SystemContext.h"
+#include "uvent/poll/EPoller.h"
+#include "uvent/system/Settings.h"
+#include "uvent/utils/thread/ThreadStats.h"
+#include "uvent/system/SystemContext.h"
 #include "uvent/net/Socket.h"
 
 namespace usub::uvent::core

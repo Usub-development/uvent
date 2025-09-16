@@ -10,11 +10,11 @@
 #include <chrono>
 #include <barrier>
 #include <functional>
-#include "include/uvent/system/Defines.h"
-#include "include/uvent/utils/thread/ThreadStats.h"
-#include "include/uvent/utils/timer/HighPerfomanceTimer.h"
-#include "include/uvent/system/SystemContext.h"
-#include "include/uvent/base/Predefines.h"
+#include "uvent/system/Defines.h"
+#include "uvent/utils/thread/ThreadStats.h"
+#include "uvent/utils/timer/HighPerfomanceTimer.h"
+#include "uvent/system/SystemContext.h"
+#include "uvent/base/Predefines.h"
 
 namespace usub::uvent::system
 {

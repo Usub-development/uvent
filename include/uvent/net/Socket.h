@@ -9,13 +9,13 @@
 #include <expected>
 #include "SocketMetadata.h"
 #include "AwaiterOperations.h"
-#include "include/uvent/system/SystemContext.h"
-#include "include/uvent/utils/buffer/DynamicBuffer.h"
-#include "include/uvent/utils/errors/IOErrors.h"
-#include "include/uvent/system/Defines.h"
-#include "include/uvent/utils/net/net.h"
-#include "include/uvent/utils/net/socket.h"
-#include "include/uvent/base/Predefines.h"
+#include "uvent/system/SystemContext.h"
+#include "uvent/utils/buffer/DynamicBuffer.h"
+#include "uvent/utils/errors/IOErrors.h"
+#include "uvent/system/Defines.h"
+#include "uvent/utils/net/net.h"
+#include "uvent/utils/net/socket.h"
+#include "uvent/base/Predefines.h"
 
 namespace usub::uvent::net
 {
