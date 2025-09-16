@@ -55,9 +55,9 @@ namespace usub::uvent::system
                                   : 0);
             }
             highPerfTimer.reset();
-            while (true)
+            while (!q->empty())
             {
-                if (q->empty() || highPerfTimer.elapsed_ms() >= 291) break;
+                if (highPerfTimer.elapsed_ms() >= 291) break;
 
                 const size_t n = system::this_thread::detail::q->dequeue_bulk(
                     this->tmp_tasks_.data(), this->tmp_tasks_.size());
