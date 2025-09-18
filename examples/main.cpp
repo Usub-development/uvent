@@ -1,7 +1,7 @@
-#include "include/uvent/Uvent.h"
-#include "include/uvent/tasks/AwaitableFrame.h"
-#include "include/uvent/system/SystemContext.h"
-#include "include/uvent/net/Socket.h"
+#include "uvent/Uvent.h"
+#include "uvent/tasks/AwaitableFrame.h"
+#include "uvent/system/SystemContext.h"
+#include "uvent/net/Socket.h"
 
 using namespace usub::uvent;
 
@@ -37,18 +37,17 @@ task::Awaitable<void> clientCoro(net::TCPClientSocket socket) {
                 const_cast<uint8_t *>(reinterpret_cast<const uint8_t *>(httpResponse.data())),
                 httpResponse.size()
         );
-        socket.update_timeout(20000);
+#ifdef UVENT_DEBUG
+        spdlog::warn("Write size: {}", wrsz);
+#endif
         if (wrsz <= 0) {
             break;
         }
-#ifdef UVENT_DEBUG
-        spdlog::info("Write size: {}", wrsz);
-#endif
+        socket.update_timeout(20000);
     }
 #ifdef UVENT_DEBUG
     spdlog::warn("client_coro finished");
 #endif
-    std::cout << "finished client coro\n";
     co_return;
 }
 

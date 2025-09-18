@@ -9,13 +9,13 @@
 #include <expected>
 #include "SocketMetadata.h"
 #include "AwaiterOperations.h"
-#include "include/uvent/system/SystemContext.h"
-#include "include/uvent/utils/buffer/DynamicBuffer.h"
-#include "include/uvent/utils/errors/IOErrors.h"
-#include "include/uvent/system/Defines.h"
-#include "include/uvent/utils/net/net.h"
-#include "include/uvent/utils/net/socket.h"
-#include "include/uvent/base/Predefines.h"
+#include "uvent/system/SystemContext.h"
+#include "uvent/utils/buffer/DynamicBuffer.h"
+#include "uvent/utils/errors/IOErrors.h"
+#include "uvent/system/Defines.h"
+#include "uvent/utils/net/net.h"
+#include "uvent/utils/net/socket.h"
+#include "uvent/base/Predefines.h"
 
 namespace usub::uvent::net
 {
@@ -236,7 +236,13 @@ namespace usub::uvent::net
     template <Proto p, Role r>
     Socket<p, r>::~Socket()
     {
-        if (this->header_) this->release();
+        if (this->header_)
+        {
+            this->release();
+#if UVENT_DEBUG
+            spdlog::warn("Socket counter: {}", (this->header_->state & usub::utils::sync::refc::COUNT_MASK));
+#endif
+        }
     }
 
     template <Proto p, Role r>
@@ -252,7 +258,8 @@ namespace usub::uvent::net
     }
 
     template <Proto p, Role r>
-    Socket<p, r>& Socket<p, r>::operator=(const Socket& o) noexcept {
+    Socket<p, r>& Socket<p, r>::operator=(const Socket& o) noexcept
+    {
         if (this == &o) return *this;
         Socket tmp(o);
         std::swap(this->header_, tmp.header_);
@@ -260,7 +267,8 @@ namespace usub::uvent::net
     }
 
     template <Proto p, Role r>
-    Socket<p, r>& Socket<p, r>::operator=(Socket&& o) noexcept {
+    Socket<p, r>& Socket<p, r>::operator=(Socket&& o) noexcept
+    {
         if (this == &o) return *this;
         Socket tmp(std::move(o));
         std::swap(this->header_, tmp.header_);
@@ -322,12 +330,7 @@ namespace usub::uvent::net
         spdlog::info("Entered into read coroutine");
 #endif
         if (this->is_disconnected_now()) co_return -3;
-
-        // state snapshot
-        const uint64_t snap = this->header_->timeout_epoch_load(this->header_->state);
         co_await detail::AwaiterRead{this->header_};
-
-        if (this->header_->timeout_epoch_changed(this->header_->state, snap)) co_return -110;
         if (this->is_disconnected_now()) co_return -3;
 
 #if UVENT_DEBUG
@@ -380,7 +383,8 @@ namespace usub::uvent::net
                 co_return (this->is_disconnected_now()) ? -3 : -2;
             }
         }
-        if (this->header_->timeout_epoch_changed(this->header_->state, snap)) co_return -110;
+
+        if (total_read > 0) this->header_->timeout_epoch_bump();
         co_return total_read;
     }
 
@@ -388,14 +392,21 @@ namespace usub::uvent::net
     task::Awaitable<ssize_t, uvent::detail::AwaitableIOFrame<ssize_t>> Socket<p, r>::
     async_write(uint8_t* buf, size_t sz) requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP))
     {
+#if UVENT_DEBUG
+        spdlog::info("Entered into write coroutine");
+#endif
         auto buf_internal = std::unique_ptr<uint8_t[]>(new uint8_t[sz], std::default_delete<uint8_t[]>());
         std::copy_n(buf, sz, buf_internal.get());
+#if UVENT_DEBUG
+        spdlog::info("Triggered by epoll");
+#endif
 
-        if (this->is_disconnected_now()) co_return -3;
-        const uint64_t snap = this->header_->timeout_epoch_load(this->header_->state);
 
+        if (this->is_disconnected_now())
+        {
+            co_return -3;
+        }
         co_await detail::AwaiterWrite{this->header_};
-        if (this->header_->timeout_epoch_changed(this->header_->state, snap)) co_return -110;
         if (this->is_disconnected_now()) co_return -3;
 
         ssize_t total_written = 0;
@@ -433,7 +444,8 @@ namespace usub::uvent::net
                 }
             }
         }
-        if (this->header_->timeout_epoch_changed(this->header_->state, snap)) co_return -110;
+
+        if (total_written > 0) this->header_->timeout_epoch_bump();
         co_return total_written;
     }
 
@@ -579,6 +591,8 @@ namespace usub::uvent::net
         if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
             co_return
                 usub::utils::errors::ConnectError::Unknown;
+
+        this->header_->timeout_epoch_bump();
         co_return std::nullopt;
 #endif
     }
@@ -631,6 +645,8 @@ namespace usub::uvent::net
         if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
             co_return
                 usub::utils::errors::ConnectError::Unknown;
+
+        this->header_->timeout_epoch_bump();
         co_return std::nullopt;
 #endif
     }
@@ -641,24 +657,25 @@ namespace usub::uvent::net
         uint8_t* buf, size_t sz,
         size_t chunkSize, size_t maxSize) requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP))
     {
-        const uint64_t snap = this->header_->timeout_epoch_load(this->header_->state);
-
         auto buf_internal = std::unique_ptr<uint8_t[]>(new uint8_t[sz], std::default_delete<uint8_t[]>());
         std::copy_n(buf, sz, buf_internal.get());
         co_await detail::AwaiterWrite{this->header_};
 
-        if (this->header_->timeout_epoch_changed(this->header_->state, snap) || this->is_disconnected_now())
+        if (this->is_disconnected_now())
             co_return std::unexpected(usub::utils::errors::SendError::Timeout);
 
         auto sendRes = this->send_aux(buf_internal.get(), sz);
         if (sendRes != -1)
         {
+            this->header_->timeout_epoch_bump();
             co_await detail::AwaiterRead{this->header_};
 
-            if (this->header_->timeout_epoch_changed(this->header_->state, snap) || this->is_disconnected_now())
+            if (this->is_disconnected_now())
                 co_return std::unexpected(usub::utils::errors::SendError::Timeout);
 
-            co_return std::move(this->receive(chunkSize, maxSize));
+            auto resp = this->receive(chunkSize, maxSize);
+            if (resp && !resp->empty()) this->header_->timeout_epoch_bump();
+            co_return std::move(resp);
         }
         co_return std::unexpected(usub::utils::errors::SendError::InvalidSocketFd);
     }
@@ -693,6 +710,7 @@ namespace usub::uvent::net
                 co_return -1;
             }
         }
+        if (res > 0) this->header_->timeout_epoch_bump();
         co_return res;
     }
 

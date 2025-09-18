@@ -2,7 +2,7 @@
 // Created by kirill on 1/29/25.
 //
 
-#include "include/uvent/utils/thread/ThreadStats.h"
+#include "uvent/utils/thread/ThreadStats.h"
 
 namespace usub::uvent::utils::detail::thread
 {

@@ -2,9 +2,9 @@
 // Created by Kirill Zhukov on 07.11.2024.
 //
 
-#include "include/uvent/system/Thread.h"
+#include "uvent/system/Thread.h"
 #include <utility>
-#include "include/uvent/net/Socket.h"
+#include "uvent/net/Socket.h"
 
 namespace usub::uvent::system
 {
@@ -44,6 +44,7 @@ namespace usub::uvent::system
                                    ? next_timeout
                                    : 5000
                              : 0);
+                pl->unlock();
             }
             else if (q->empty() && q_c->empty())
             {
@@ -86,9 +87,7 @@ namespace usub::uvent::system
             }
             if (wh->mtx.try_lock())
             {
-                auto tick_res = wh->tick();
-                for (auto& timer : tick_res)
-                    system::this_thread::detail::q->enqueue(timer);
+                wh->tick();
                 wh->mtx.unlock();
             }
             if (st->getSize() > 0)

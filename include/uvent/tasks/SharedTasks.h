@@ -8,7 +8,7 @@
 #include <mutex>
 #include <memory>
 #include "Awaitable.h"
-#include "include/uvent/utils/datastructures/queue/ConcurrentQueues.h"
+#include "uvent/utils/datastructures/queue/ConcurrentQueues.h"
 
 namespace usub::uvent::task {
     class SharedTasks {
