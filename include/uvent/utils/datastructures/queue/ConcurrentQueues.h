@@ -12,9 +12,9 @@
 #include <type_traits>
 #include <cassert>
 #include <cstring>
-#include "include/uvent/utils/intrinsincs/optimizations.h"
-#include "include/uvent/system/Settings.h"
-#include "include/uvent/utils/datastructures/DataStructuresMetadata.h"
+#include "uvent/utils/intrinsincs/optimizations.h"
+#include "uvent/system/Settings.h"
+#include "uvent/utils/datastructures/DataStructuresMetadata.h"
 
 // ======== helpers ========
 namespace usub::queue::concurrent

@@ -2,7 +2,7 @@
 // Created by kirill on 5/21/25.
 //
 
-#include "include/uvent/utils/buffer/DynamicBuffer.h"
+#include "uvent/utils/buffer/DynamicBuffer.h"
 
 namespace usub::uvent::utils {
     void DynamicBuffer::reserve(size_t n) {

@@ -2,8 +2,8 @@
 // Created by root on 9/13/25.
 //
 
-#include "include/uvent/net/AwaiterOperations.h"
-#include "include/uvent/system/SystemContext.h"
+#include "uvent/net/AwaiterOperations.h"
+#include "uvent/system/SystemContext.h"
 
 namespace usub::uvent::net::detail
 {
@@ -21,7 +21,7 @@ namespace usub::uvent::net::detail
         if (!this->header_->is_reading_now())
         {
             system::this_thread::detail::pl->updateEvent(this->header_, core::READ);
-            this->header_->is_reading_now();
+            this->header_->try_mark_reading();
         }
         auto c = std::coroutine_handle<uvent::detail::AwaitableFrameBase>::from_address(h.address());
         c.promise().set_awaited();
@@ -47,7 +47,7 @@ namespace usub::uvent::net::detail
         if (!this->header_->is_writing_now())
         {
             system::this_thread::detail::pl->updateEvent(this->header_, core::WRITE);
-            this->header_->is_writing_now();
+            this->header_->try_mark_writing();
         }
         auto c = std::coroutine_handle<uvent::detail::AwaitableFrameBase>::from_address(h.address());
         c.promise().set_awaited();

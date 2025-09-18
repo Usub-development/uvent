@@ -7,28 +7,29 @@
 
 #include <atomic>
 #include <concepts>
-#include "include/uvent/utils/intrinsincs/optimizations.h"
+#include "uvent/utils/intrinsincs/optimizations.h"
 
 namespace usub::utils::sync::refc
 {
-    inline constexpr uint64_t CLOSED_MASK = 1ull << 63;
-    inline constexpr uint64_t BUSY_MASK = 1ull << 62;
-    inline constexpr uint64_t READING_MASK = 1ull << 61;
-    inline constexpr uint64_t WRITING_MASK = 1ull << 60;
-    inline constexpr uint64_t DISCONNECTED_MASK = 1ull << 59;
+    inline constexpr uint64_t CLOSED_MASK        = 1ull << 63;
+    inline constexpr uint64_t BUSY_MASK          = 1ull << 62;
+    inline constexpr uint64_t READING_MASK       = 1ull << 61;
+    inline constexpr uint64_t WRITING_MASK       = 1ull << 60;
+    inline constexpr uint64_t DISCONNECTED_MASK  = 1ull << 59;
+    inline constexpr uint64_t FLAGS_MASK         = (CLOSED_MASK|BUSY_MASK|READING_MASK|WRITING_MASK|DISCONNECTED_MASK);
 
-    inline constexpr uint64_t FLAGS_MASK = (CLOSED_MASK | BUSY_MASK | READING_MASK | WRITING_MASK | DISCONNECTED_MASK);
+    inline constexpr uint64_t REFCOUNT_BITS  = 40;
+    inline constexpr uint64_t COUNT_MASK  = (1ull << REFCOUNT_BITS) - 1ull;
 
-    inline constexpr uint64_t REFCOUNT_BITS = 40;
-    inline constexpr uint64_t TIMEOUT_EPOCH_BITS = 19; // 40 + 19 = 59
-    static_assert(REFCOUNT_BITS + TIMEOUT_EPOCH_BITS == 59);
+    static constexpr unsigned  TIMEOUT_EPOCH_SHIFT = REFCOUNT_BITS;
+    static constexpr unsigned  TIMEOUT_EPOCH_BITS  = 16;
+    static constexpr uint64_t  TIMEOUT_EPOCH_STEP  = 1ull << TIMEOUT_EPOCH_SHIFT;
+    static constexpr uint64_t  TIMEOUT_EPOCH_MASK  =
+        (( (1ull << TIMEOUT_EPOCH_BITS) - 1ull) << TIMEOUT_EPOCH_SHIFT); // [55:40]
 
-    inline constexpr uint64_t REFCOUNT_MASK = (REFCOUNT_BITS == 64 ? ~0ull : ((1ull << REFCOUNT_BITS) - 1ull));
-    inline constexpr uint64_t TIMEOUT_EPOCH_SHIFT = REFCOUNT_BITS;
-    inline constexpr uint64_t TIMEOUT_EPOCH_MASK = ((1ull << TIMEOUT_EPOCH_BITS) - 1ull) << TIMEOUT_EPOCH_SHIFT;
-    inline constexpr uint64_t TIMEOUT_EPOCH_BUMP = 1ull << TIMEOUT_EPOCH_SHIFT;
-
-    inline constexpr uint64_t COUNT_MASK = REFCOUNT_MASK;
+    static_assert((TIMEOUT_EPOCH_MASK & DISCONNECTED_MASK) == 0, "epoch overlaps DISCONNECTED");
+    static_assert((TIMEOUT_EPOCH_MASK & BUSY_MASK) == 0, "epoch overlaps flags");
+    static_assert((TIMEOUT_EPOCH_MASK & COUNT_MASK) == 0, "epoch overlaps refcount");
 
     template <class Derived>
     class RefCounted

@@ -7,7 +7,7 @@
 
 #include <memory>
 #include <semaphore>
-#include "include/uvent/net/SocketMetadata.h"
+#include "uvent/net/SocketMetadata.h"
 
 namespace usub::uvent::core
 {

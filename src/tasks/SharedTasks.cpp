@@ -2,7 +2,7 @@
 // Created by kirill on 11/17/24.
 //
 
-#include "include/uvent/tasks/SharedTasks.h"
+#include "uvent/tasks/SharedTasks.h"
 
 namespace usub::uvent::task {
 

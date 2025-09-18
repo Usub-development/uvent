@@ -2,7 +2,7 @@
 // Created by kirill on 8/27/24.
 //
 
-#include "include/uvent/utils/timer/TimerWheel.h"
+#include "uvent/utils/timer/TimerWheel.h"
 
 namespace usub::uvent::utils
 {
@@ -151,7 +151,7 @@ namespace usub::uvent::utils
     }
 
 
-    std::vector<std::coroutine_handle<>> TimerWheel::tick()
+    void TimerWheel::tick()
     {
         while (true)
         {
@@ -210,19 +210,17 @@ namespace usub::uvent::utils
 
         const timeout_t newTime = getCurrentTime();
         const uint64_t elapsed = newTime - this->currentTime_;
-        if (elapsed == 0) return {};
+        if (elapsed == 0) return;
         this->currentTime_ = newTime;
 
         uint64_t ticks = elapsed / this->wheels_[0].interval_;
         if (ticks == 0) ticks = 1;
 
-        std::vector<std::coroutine_handle<>> ready;
-        for (uint64_t i = 0; i < ticks; ++i) advance(ready);
-        return ready;
+        for (uint64_t i = 0; i < ticks; ++i) advance();
     }
 
 
-    void TimerWheel::advance(std::vector<std::coroutine_handle<>>& timers)
+    void TimerWheel::advance()
     {
         for (auto& wheel : this->wheels_)
         {
@@ -239,7 +237,7 @@ namespace usub::uvent::utils
 
                 if (is_due(this->currentTime_, timer->expiryTime, wheel.interval_))
                 {
-                    if (timer->coro) timers.push_back(timer->coro);
+                    if (timer->coro) system::this_thread::detail::q->enqueue(timer->coro);
                     if (timer->type == INTERVAL)
                     {
                         timer->expiryTime += timer->duration_ms;
