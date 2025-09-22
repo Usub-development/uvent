@@ -10,8 +10,8 @@
 #include <ranges>
 
 #include "Awaitable.h"
-#include "include/uvent/utils/datastructures/queue/FastQueue.h"
-#include "include/uvent/base/Predefines.h"
+#include "uvent/utils/datastructures/queue/FastQueue.h"
+#include "uvent/base/Predefines.h"
 
 namespace usub::uvent {
     namespace detail {

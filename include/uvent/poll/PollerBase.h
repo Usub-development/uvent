@@ -7,7 +7,7 @@
 
 #include <memory>
 #include <semaphore>
-#include "include/uvent/net/SocketMetadata.h"
+#include "uvent/net/SocketMetadata.h"
 
 namespace usub::uvent::core
 {
@@ -27,7 +27,7 @@ namespace usub::uvent::core
     class PollerBase
     {
     public:
-        explicit PollerBase(uint64_t timeoutDuration_ms);
+        explicit PollerBase();
 
         virtual ~PollerBase() = default;
 
@@ -36,7 +36,7 @@ namespace usub::uvent::core
         virtual void updateEvent(net::SocketHeader* socket, OperationType initialState) = 0;
 
         virtual void
-        removeEvent(int fd, uint64_t timerId, OperationType op) = 0;
+        removeEvent(net::SocketHeader* header, OperationType op) = 0;
 
         virtual bool poll(int timeout) = 0;
 
@@ -45,6 +45,8 @@ namespace usub::uvent::core
         virtual void unlock() = 0;
 
         virtual void lock_poll(int timeout) = 0;
+
+        int get_poll_fd();
 
     public:
         std::binary_semaphore lock{1};

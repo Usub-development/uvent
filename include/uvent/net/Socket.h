@@ -9,20 +9,63 @@
 #include <expected>
 #include "SocketMetadata.h"
 #include "AwaiterOperations.h"
-#include "include/uvent/system/SystemContext.h"
-#include "include/uvent/utils/buffer/DynamicBuffer.h"
-#include "include/uvent/utils/errors/IOErrors.h"
-#include "include/uvent/system/Defines.h"
-#include "include/uvent/utils/net/net.h"
-#include "include/uvent/utils/net/socket.h"
+#include "uvent/system/SystemContext.h"
+#include "uvent/utils/buffer/DynamicBuffer.h"
+#include "uvent/utils/errors/IOErrors.h"
+#include "uvent/system/Defines.h"
+#include "uvent/utils/net/net.h"
+#include "uvent/utils/net/socket.h"
+#include "uvent/base/Predefines.h"
 
 namespace usub::uvent::net
 {
+    namespace detail
+    {
+        static inline void processSocketTimeout(void* ptr)
+        {
+            auto header = static_cast<SocketHeader*>(ptr);
+            const uint64_t expected = header->timeout_epoch_load();
+
+            if (!header->try_mark_busy())
+            {
+                system::this_thread::detail::wh->updateTimer(header->timer_id, settings::timeout_duration_ms);
+                header->state.fetch_sub(1, std::memory_order_acq_rel);
+                return;
+            }
+
+            if (header->timeout_epoch_changed(expected))
+            {
+                header->clear_busy();
+                system::this_thread::detail::wh->updateTimer(header->timer_id, settings::timeout_duration_ms);
+                header->state.fetch_sub(1, std::memory_order_acq_rel);
+                return;
+            }
+            header->mark_disconnected();
+
+            auto r = std::exchange(header->first, nullptr);
+            auto w = std::exchange(header->second, nullptr);
+            header->clear_reading();
+            header->clear_writing();
+            header->clear_busy();
+
+            epoll_ctl(system::this_thread::detail::pl->get_poll_fd(), EPOLL_CTL_DEL, header->fd, nullptr);
+            ::close(header->fd);
+#if UVENT_DEBUG
+            spdlog::warn("Socket counter in timeout: {}", header->get_counter());
+#endif
+            if (!header->is_done_client_coroutine_with_timeout() && r) system::this_thread::detail::q->enqueue(r);
+            if (!header->is_done_client_coroutine_with_timeout() && r) system::this_thread::detail::q->enqueue(w);
+
+            header->state.fetch_sub(1, std::memory_order_acq_rel);
+        }
+    }
+
     template <Proto p, Role r>
     class Socket : usub::utils::sync::refc::RefCounted<Socket<p, r>>
     {
     public:
         friend class usub::utils::sync::refc::RefCounted<Socket<p, r>>;
+        friend class core::EPoller;
 
         /**
          * \brief Default constructor.
@@ -186,13 +229,15 @@ namespace usub::uvent::net
          */
         void shutdown();
 
+        /**
+         * \brief Sets timeout to associated socket.
+         * \warning Method doesn't check if socket was initialized. Please use it only after socket initialisation.
+         */
+        void set_timeout_ms(timeout_t timeout = settings::timeout_duration_ms) const requires (p == Proto::TCP && r ==
+            Role::ACTIVE);
+
     protected:
         void destroy() noexcept override;
-
-        static void delete_header(void* ptr)
-        {
-            delete static_cast<SocketHeader*>(ptr);
-        }
 
         void remove();
 
@@ -239,7 +284,13 @@ namespace usub::uvent::net
     template <Proto p, Role r>
     Socket<p, r>::~Socket()
     {
-        if (this->header_) this->release();
+        if (this->header_)
+        {
+            this->release();
+#if UVENT_DEBUG
+            spdlog::warn("Socket counter: {}", (this->header_->state & usub::utils::sync::refc::COUNT_MASK));
+#endif
+        }
     }
 
     template <Proto p, Role r>
@@ -259,7 +310,7 @@ namespace usub::uvent::net
     {
         if (this == &o) return *this;
         Socket tmp(o);
-        std::swap(this->header_, o.header);
+        std::swap(this->header_, tmp.header_);
         return *this;
     }
 
@@ -268,14 +319,13 @@ namespace usub::uvent::net
     {
         if (this == &o) return *this;
         Socket tmp(std::move(o));
-        std::swap(this->header_, o.header);
+        std::swap(this->header_, tmp.header_);
         return *this;
     }
 
     template <Proto p, Role r>
     Socket<p, r> Socket<p, r>::from_existing(SocketHeader* header)
     {
-        header->state = usub::utils::sync::refc::RefCounted<Socket>::initial_state();
         return Socket(header);
     }
 
@@ -327,13 +377,15 @@ namespace usub::uvent::net
 #if UVENT_DEBUG
         spdlog::info("Entered into read coroutine");
 #endif
-        ssize_t total_read = 0;
-
+        if (this->is_disconnected_now()) co_return -3;
         co_await detail::AwaiterRead{this->header_};
+        if (this->is_disconnected_now()) co_return -3;
+
 #if UVENT_DEBUG
         spdlog::info("Triggered by epoll");
 #endif
         int retries = 0;
+        ssize_t total_read = 0;
         while (true)
         {
             uint8_t temp[16384];
@@ -350,7 +402,7 @@ namespace usub::uvent::net
             else if (res == 0)
             {
                 this->remove();
-                co_return total_read > 0 ? total_read : 0;
+                co_return (this->is_disconnected_now()) ? -3 : (total_read > 0 ? total_read : 0);
             }
             else
             {
@@ -363,25 +415,24 @@ namespace usub::uvent::net
                     if (++retries >= settings::max_read_retries)
                     {
                         this->remove();
-                        co_return -1;
+                        co_return (this->is_disconnected_now()) ? -3 : -1;
                     }
                     continue;
                 }
                 else
                 {
                     this->remove();
-                    co_return -1;
+                    co_return (this->is_disconnected_now()) ? -3 : -1;
                 }
             }
 
             if (buffer.size() >= max_read_size)
             {
-                co_return -2;
+                co_return (this->is_disconnected_now()) ? -3 : -2;
             }
         }
-#if UVENT_DEBUG
-        spdlog::info("Function ended.");
-#endif
+
+        if (total_read > 0) this->header_->timeout_epoch_bump();
         co_return total_read;
     }
 
@@ -389,12 +440,25 @@ namespace usub::uvent::net
     task::Awaitable<ssize_t, uvent::detail::AwaitableIOFrame<ssize_t>> Socket<p, r>::
     async_write(uint8_t* buf, size_t sz) requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP))
     {
+#if UVENT_DEBUG
+        spdlog::info("Entered into write coroutine");
+#endif
         auto buf_internal = std::unique_ptr<uint8_t[]>(new uint8_t[sz], std::default_delete<uint8_t[]>());
         std::copy_n(buf, sz, buf_internal.get());
+#if UVENT_DEBUG
+        spdlog::info("Triggered by epoll");
+#endif
+
+
+        if (this->is_disconnected_now())
+        {
+            co_return -3;
+        }
+        co_await detail::AwaiterWrite{this->header_};
+        if (this->is_disconnected_now()) co_return -3;
 
         ssize_t total_written = 0;
         int retries = 0;
-        co_await detail::AwaiterWrite{this->header_};
 
         while (total_written < sz)
         {
@@ -413,7 +477,7 @@ namespace usub::uvent::net
                     if (++retries >= settings::max_write_retries)
                     {
                         this->remove();
-                        co_return -1;
+                        co_return (this->is_disconnected_now()) ? -3 : -1;
                     }
                     continue;
                 }
@@ -424,10 +488,12 @@ namespace usub::uvent::net
                 else
                 {
                     this->remove();
-                    co_return -1;
+                    co_return (this->is_disconnected_now()) ? -3 : -1;
                 }
             }
         }
+
+        if (total_written > 0) this->header_->timeout_epoch_bump();
         co_return total_written;
     }
 
@@ -567,12 +633,14 @@ namespace usub::uvent::net
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
 
-        system::this_thread::detail::pl->addEvent(this, core::WRITE);
+        system::this_thread::detail::pl->addEvent(this->header_, core::WRITE);
         co_await detail::AwaiterWrite{this->header_};
         freeaddrinfo(res);
         if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
             co_return
                 usub::utils::errors::ConnectError::Unknown;
+
+        this->header_->timeout_epoch_bump();
         co_return std::nullopt;
 #endif
     }
@@ -625,6 +693,8 @@ namespace usub::uvent::net
         if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
             co_return
                 usub::utils::errors::ConnectError::Unknown;
+
+        this->header_->timeout_epoch_bump();
         co_return std::nullopt;
 #endif
     }
@@ -638,11 +708,22 @@ namespace usub::uvent::net
         auto buf_internal = std::unique_ptr<uint8_t[]>(new uint8_t[sz], std::default_delete<uint8_t[]>());
         std::copy_n(buf, sz, buf_internal.get());
         co_await detail::AwaiterWrite{this->header_};
+
+        if (this->is_disconnected_now())
+            co_return std::unexpected(usub::utils::errors::SendError::Timeout);
+
         auto sendRes = this->send_aux(buf_internal.get(), sz);
         if (sendRes != -1)
         {
+            this->header_->timeout_epoch_bump();
             co_await detail::AwaiterRead{this->header_};
-            co_return std::move(this->receive(chunkSize, maxSize));
+
+            if (this->is_disconnected_now())
+                co_return std::unexpected(usub::utils::errors::SendError::Timeout);
+
+            auto resp = this->receive(chunkSize, maxSize);
+            if (resp && !resp->empty()) this->header_->timeout_epoch_bump();
+            co_return std::move(resp);
         }
         co_return std::unexpected(usub::utils::errors::SendError::InvalidSocketFd);
     }
@@ -653,7 +734,7 @@ namespace usub::uvent::net
     {
         auto buf_internal = std::unique_ptr<uint8_t[]>(new uint8_t[sz], std::default_delete<uint8_t[]>());
         std::copy_n(buf, sz, buf_internal.get());
-        auto sendRes = this->send_aux(this->header_->fd, buf_internal.get(), sz);
+        auto sendRes = this->send_aux(buf_internal.get(), sz);
         if (sendRes != -1) return std::move(this->receive(chunkSize, maxSize));
         return std::unexpected(usub::utils::errors::SendError::InvalidSocketFd);
     }
@@ -663,6 +744,7 @@ namespace usub::uvent::net
         off_t* offset, size_t count) requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP))
     {
         co_await detail::AwaiterWrite{this->header_};
+        if (this->is_disconnected_now()) co_return -3;
 
         ssize_t res = ::sendfile(this->header_->fd, in_fd, offset, count);
         if (res == -1)
@@ -676,6 +758,7 @@ namespace usub::uvent::net
                 co_return -1;
             }
         }
+        if (res > 0) this->header_->timeout_epoch_bump();
         co_return res;
     }
 
@@ -712,18 +795,26 @@ namespace usub::uvent::net
     }
 
     template <Proto p, Role r>
+    void Socket<p, r>::set_timeout_ms(timeout_t timeout) const requires (p == Proto::TCP && r == Role::ACTIVE)
+    {
+        auto* timer = new utils::Timer(timeout,utils::TIMEOUT);
+        timer->addFunction(detail::processSocketTimeout, this->header_);
+        this->header_->timer_id = system::this_thread::detail::wh->addTimer(timer);
+    }
+
+    template <Proto p, Role r>
     void Socket<p, r>::destroy() noexcept
     {
         this->header_->close_for_new_refs();
-        system::this_thread::detail::pl->removeEvent(this->header_->fd, this->header_->timer_id,
+        system::this_thread::detail::pl->removeEvent(this->header_,
                                                      core::OperationType::ALL);
-        system::this_thread::detail::g_qsbr.retire(static_cast<void*>(this->header_), &Socket::delete_header);
+        system::this_thread::detail::g_qsbr.retire(static_cast<void*>(this->header_), &delete_header);
     }
 
     template <Proto p, Role r>
     void Socket<p, r>::remove()
     {
-        system::this_thread::detail::pl->removeEvent(this->header_->fd, this->header_->timer_id,
+        system::this_thread::detail::pl->removeEvent(this->header_,
                                                      core::OperationType::ALL);
         this->header_->close_for_new_refs();
     }

@@ -2,7 +2,7 @@
 // Created by Kirill Zhukov on 07.11.2024.
 //
 
-#include "include/uvent/pool/ThreadPool.h"
+#include "uvent/pool/ThreadPool.h"
 
 namespace usub::uvent {
     ThreadPool::ThreadPool(int size) {

@@ -7,19 +7,29 @@
 
 #include <atomic>
 #include <concepts>
-#include "include/uvent/utils/intrinsincs/optimizations.h"
+#include "uvent/utils/intrinsincs/optimizations.h"
 
 namespace usub::utils::sync::refc
 {
-    inline constexpr uint64_t CLOSED_MASK = 1ull << 63;
-    inline constexpr uint64_t BUSY_MASK = 1ull << 62;
-    inline constexpr uint64_t READING_MASK = 1ull << 61;
-    inline constexpr uint64_t WRITING_MASK = 1ull << 60;
+    inline constexpr uint64_t CLOSED_MASK        = 1ull << 63;
+    inline constexpr uint64_t BUSY_MASK          = 1ull << 62;
+    inline constexpr uint64_t READING_MASK       = 1ull << 61;
+    inline constexpr uint64_t WRITING_MASK       = 1ull << 60;
+    inline constexpr uint64_t DISCONNECTED_MASK  = 1ull << 59;
+    inline constexpr uint64_t FLAGS_MASK         = (CLOSED_MASK|BUSY_MASK|READING_MASK|WRITING_MASK|DISCONNECTED_MASK);
 
-    inline constexpr uint64_t FLAGS_MASK =
-        (CLOSED_MASK | BUSY_MASK | READING_MASK | WRITING_MASK);
+    inline constexpr uint64_t REFCOUNT_BITS  = 40;
+    inline constexpr uint64_t COUNT_MASK  = (1ull << REFCOUNT_BITS) - 1ull;
 
-    inline constexpr uint64_t COUNT_MASK = ~FLAGS_MASK;
+    static constexpr unsigned  TIMEOUT_EPOCH_SHIFT = REFCOUNT_BITS;
+    static constexpr unsigned  TIMEOUT_EPOCH_BITS  = 16;
+    static constexpr uint64_t  TIMEOUT_EPOCH_STEP  = 1ull << TIMEOUT_EPOCH_SHIFT;
+    static constexpr uint64_t  TIMEOUT_EPOCH_MASK  =
+        (( (1ull << TIMEOUT_EPOCH_BITS) - 1ull) << TIMEOUT_EPOCH_SHIFT); // [55:40]
+
+    static_assert((TIMEOUT_EPOCH_MASK & DISCONNECTED_MASK) == 0, "epoch overlaps DISCONNECTED");
+    static_assert((TIMEOUT_EPOCH_MASK & BUSY_MASK) == 0, "epoch overlaps flags");
+    static_assert((TIMEOUT_EPOCH_MASK & COUNT_MASK) == 0, "epoch overlaps refcount");
 
     template <class Derived>
     class RefCounted
@@ -28,16 +38,14 @@ namespace usub::utils::sync::refc
         RefCounted() noexcept = default;
         virtual ~RefCounted() = default;
 
-        bool try_add_ref() noexcept
-        {
+        bool try_add_ref() noexcept {
             auto& st = state();
             uint64_t s = st.load(std::memory_order_relaxed);
-            for (;;)
-            {
+            for (;;) {
                 if (is_closed(s)) return false;
                 if ((s & COUNT_MASK) == COUNT_MASK) return false;
-                if (st.compare_exchange_weak(
-                    s, s + 1, std::memory_order_acquire, std::memory_order_relaxed))
+                uint64_t ns = (s & ~COUNT_MASK) | ((s & COUNT_MASK) + 1);
+                if (st.compare_exchange_weak(s, ns, std::memory_order_acquire, std::memory_order_relaxed))
                     return true;
                 cpu_relax();
             }
@@ -65,6 +73,12 @@ namespace usub::utils::sync::refc
         __attribute__((always_inline)) void close_for_new_refs() noexcept
         {
             static_cast<Derived*>(this)->close_for_new_refs();
+        }
+
+        [[nodiscard]] __attribute__((always_inline)) bool is_disconnected_now() const noexcept
+        {
+            using namespace usub::utils::sync::refc;
+            return (this->state().load(std::memory_order_acquire) & DISCONNECTED_MASK) != 0;
         }
 
     protected:

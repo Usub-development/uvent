@@ -8,9 +8,9 @@
 #include <mutex>
 #include <csignal>
 #include <utility>
-#include "include/uvent/utils/timer/TimerWheel.h"
+#include "uvent/utils/timer/TimerWheel.h"
 #include "PollerBase.h"
-#include "include/uvent/tasks/AwaitableFrame.h"
+#include "uvent/tasks/AwaitableFrame.h"
 
 namespace usub::uvent::core {
     /**
@@ -22,11 +22,11 @@ namespace usub::uvent::core {
 
         ~EPoller() override = default;
 
-        void addEvent(net::SocketHeader *socket, OperationType initialState) override;
+        void addEvent(net::SocketHeader *header, OperationType initialState) override;
 
-        void updateEvent(net::SocketHeader *socket, OperationType initialState) override;
+        void updateEvent(net::SocketHeader *header, OperationType initialState) override;
 
-        void removeEvent(int fd, uint64_t timerId, OperationType op) override;
+        void removeEvent(net::SocketHeader* header, OperationType op) override;
 
         bool poll(int timeout) override;
 

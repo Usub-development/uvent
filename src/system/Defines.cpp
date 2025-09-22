@@ -2,7 +2,7 @@
 // Created by Kirill Zhukov on 09/28/2024.
 //
 
-#include "include/uvent/system/Defines.h"
+#include "uvent/system/Defines.h"
 
 #if UVENT_DEBUG
 

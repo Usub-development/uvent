@@ -10,8 +10,9 @@
 #include <functional>
 #include <coroutine>
 
-#include "include/uvent/system/Defines.h"
-#include "include/uvent/tasks/AwaitableFrame.h"
+#include "uvent/base/Predefines.h"
+#include "uvent/system/Defines.h"
+#include "uvent/tasks/AwaitableFrame.h"
 
 typedef uint64_t timer_duration_t;
 typedef uint64_t timeout_t;
@@ -24,11 +25,19 @@ namespace usub::uvent::utils
         INTERVAL
     };
 
-    task::Awaitable<void> timeout_coroutine(std::function<void()> f);
-
-    struct Timer
+    enum TimerTag
     {
-        Timer(timer_duration_t duration, int fd, TimerType type = TIMEOUT);
+        SOCKET_TIMEOUT,
+        OTHER
+    };
+
+    task::Awaitable<void> timeout_coroutine(std::function<void(void*)> f, void* arg);
+
+    class alignas(32) Timer
+    {
+    public:
+        friend class core::EPoller;
+        friend class TimerWheel;
 
         explicit Timer(timer_duration_t duration, TimerType type = TIMEOUT);
 
@@ -40,17 +49,21 @@ namespace usub::uvent::utils
 
         Timer& operator=(Timer&&) = delete;
 
+        void addFunction(std::function<void(void*)>& function, void* functionValue);
+
+        void addFunction(std::function<void(void*)>&& function, void* functionValue);
+
+    public:
         timeout_t expiryTime;
         timer_duration_t duration_ms;
         TimerType type;
+
+    private:
         std::coroutine_handle<> coro;
         bool active;
         uint64_t id;
         size_t slotIndex{0};
         size_t level{0};
-        int fd{-1};
-
-        timer_duration_t new_duration_ms{0};
     };
 
     enum class OpType : uint8_t { ADD, UPDATE, REMOVE };

@@ -2,7 +2,7 @@
 // Created by kirill on 8/27/24.
 //
 
-#include "include/uvent/utils/timer/TimerWheel.h"
+#include "uvent/utils/timer/TimerWheel.h"
 
 namespace usub::uvent::utils
 {
@@ -16,8 +16,8 @@ namespace usub::uvent::utils
          LEVEL 2: 256 slots, interval 65,536 ms\n
          LEVEL 3: 256 slots, interval 16,777,216 ms
         */
-        for (int i = 0; i < settings::tw_levels; i++) this->wheels_.emplace_back(256, std::pow(256, i));
-        this->ops_.reserve(settings::max_pre_allocated_timer_wheel_operations_items);
+        for (int i = 0; i < settings::tw_levels; i++) this->wheels_.emplace_back(256, (1ull << (8 * i)));
+        this->ops_.resize(settings::max_pre_allocated_timer_wheel_operations_items);
     }
 
 
@@ -31,7 +31,6 @@ namespace usub::uvent::utils
             .timer = timer
         };
         while (!this->timer_operations_queue.try_enqueue(op)) cpu_relax();
-
         return timer->id;
     }
 
@@ -140,18 +139,27 @@ namespace usub::uvent::utils
     {
         this->nextExpiryTime_ = 0;
         for (const auto& wheel : this->wheels_)
-            if (wheel.minExpiryTime_ != 0)
-                if (this->nextExpiryTime_ == 0 || wheel.minExpiryTime_ < this->nextExpiryTime_)
-                    this->nextExpiryTime_ = wheel.minExpiryTime_;
+        {
+            for (const auto& bucket : wheel.buckets_)
+            {
+                for (const auto* t : bucket)
+                {
+                    if (!t->active) continue;
+                    if (this->nextExpiryTime_ == 0 || t->expiryTime < this->nextExpiryTime_)
+                        this->nextExpiryTime_ = t->expiryTime;
+                }
+            }
+        }
     }
 
-    std::vector<std::coroutine_handle<>> TimerWheel::tick()
+
+    void TimerWheel::tick()
     {
         while (true)
         {
-            size_t n = this->timer_operations_queue.try_dequeue_bulk(this->ops_.data(), this->ops_.size());
-            if (n == 0)
-                break;
+            const size_t cap = this->ops_.size();
+            size_t n = this->timer_operations_queue.try_dequeue_bulk(this->ops_.data(), cap);
+            if (n == 0) break;
 
             for (size_t i = 0; i < n; ++i)
             {
@@ -160,9 +168,9 @@ namespace usub::uvent::utils
                 {
                 case OpType::ADD:
                     addTimerToWheel(op.timer, op.timer->expiryTime);
-                    timerMap_[op.timer->id] = op.timer;
                     ++this->activeTimerCount_;
                     break;
+
                 case OpType::UPDATE:
                     {
                         auto it = timerMap_.find(op.id);
@@ -176,9 +184,15 @@ namespace usub::uvent::utils
                                 t->expiryTime = getCurrentTime() + t->duration_ms;
                                 addTimerToWheel(t, t->expiryTime);
                             }
+                        } else
+                        {
+                            auto* t = new Timer(op.new_dur,TIMEOUT);
+                            addTimerToWheel(t, t->expiryTime);
+                            ++this->activeTimerCount_;
                         }
                         break;
                     }
+
                 case OpType::REMOVE:
                     {
                         auto it = timerMap_.find(op.id_only);
@@ -195,44 +209,42 @@ namespace usub::uvent::utils
                                 delete timer;
                             }
                         }
+                        break;
                     }
-                    break;
                 }
             }
         }
 
-        timeout_t newTime = getCurrentTime();
-        uint64_t elapsedTime = newTime - this->currentTime_;
+        const timeout_t newTime = getCurrentTime();
+        const uint64_t elapsed = newTime - this->currentTime_;
+        if (elapsed == 0) return;
         this->currentTime_ = newTime;
 
-        uint64_t ticks = elapsedTime / this->wheels_[0].interval_;
+        uint64_t ticks = elapsed / this->wheels_[0].interval_;
         if (ticks == 0) ticks = 1;
 
-        std::vector<std::coroutine_handle<>> timers;
-        for (uint64_t i = 0; i < ticks; ++i) advance(timers);
-        return std::move(timers);
+        for (uint64_t i = 0; i < ticks; ++i) advance();
     }
 
-    void TimerWheel::advance(std::vector<std::coroutine_handle<>>& timers)
+
+    void TimerWheel::advance()
     {
         for (auto& wheel : this->wheels_)
         {
             auto& bucket = wheel.buckets_[wheel.currentSlot_];
-            auto it = bucket.begin();
-
-            while (it != bucket.end())
+            for (auto it = bucket.begin(); it != bucket.end();)
             {
                 Timer* timer = *it;
+
                 if (!timer->active)
                 {
                     it = bucket.erase(it);
                     continue;
                 }
 
-                uint64_t diff = timer->expiryTime - currentTime_;
-                if (diff < wheel.interval_)
+                if (is_due(this->currentTime_, timer->expiryTime, wheel.interval_))
                 {
-                    timers.push_back(timer->coro);
+                    if (timer->coro) system::this_thread::detail::q->enqueue(timer->coro);
                     if (timer->type == INTERVAL)
                     {
                         timer->expiryTime += timer->duration_ms;
@@ -242,7 +254,7 @@ namespace usub::uvent::utils
                     {
                         timer->active = false;
                         this->timerMap_.erase(timer->id);
-                        this->activeTimerCount_--;
+                        --this->activeTimerCount_;
                         delete timer;
                     }
                     it = bucket.erase(it);
@@ -266,9 +278,9 @@ namespace usub::uvent::utils
         return this->activeTimerCount_ == 0;
     }
 
-    task::Awaitable<void> timeout_coroutine(std::function<void()> f)
+    task::Awaitable<void> timeout_coroutine(std::function<void(void*)> f, void* arg)
     {
-        f();
+        f(arg);
         co_return;
     }
 }

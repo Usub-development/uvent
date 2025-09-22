@@ -2,12 +2,12 @@
 // Created by kirill on 11/20/24.
 //
 
-#include "include/uvent/system/SystemContext.h"
-#include "include/uvent/tasks/AwaitableFrame.h"
+#include "uvent/system/SystemContext.h"
+#include "uvent/tasks/AwaitableFrame.h"
 
 #ifdef OS_LINUX
 
-#include "include/uvent/poll/EPoller.h"
+#include "uvent/poll/EPoller.h"
 
 #elif OS_BSD
 #include "poll/KPoller.h"
