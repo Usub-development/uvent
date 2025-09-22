@@ -5,23 +5,22 @@
 #ifndef UVENT_SLEEPER_H
 #define UVENT_SLEEPER_H
 
-#include <mutex>
 #include <atomic>
-#include <variant>
 #include <condition_variable>
+#include <mutex>
+#include <variant>
 
 #ifdef UVENT_DEBUG
 
-#include <spdlog/spdlog.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/spdlog.h>
 
 #endif
 
-namespace usub::uvent::utils::detail::thread
-{
-    extern int thread_count;
-    extern std::atomic<bool> is_started;
-}
+namespace usub::uvent::utils::detail::thread {
+extern int thread_count;
+extern std::atomic<bool> is_started;
+} // namespace usub::uvent::utils::detail::thread
 
-#endif //UVENT_SLEEPER_H
+#endif // UVENT_SLEEPER_H
