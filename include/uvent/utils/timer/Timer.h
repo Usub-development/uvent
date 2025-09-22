@@ -25,12 +25,6 @@ namespace usub::uvent::utils
         INTERVAL
     };
 
-    enum TimerTag
-    {
-        SOCKET_TIMEOUT,
-        OTHER
-    };
-
     task::Awaitable<void> timeout_coroutine(std::function<void(void*)> f, void* arg);
 
     class alignas(32) Timer

@@ -70,3 +70,31 @@ int main() {
 * From there the event loop picks it up and starts execution.
 
 This is the entry point for scheduling coroutines in **uvent** — any coroutine you want to run must be launched with `co_spawn`.
+
+# Timers
+
+Timers in **uvent** are managed by a hierarchical **TimerWheel** with minimal overhead.  
+You can either use high-level helpers like `sleep_for`, or schedule custom timers directly.
+
+---
+
+## spawn_timer
+
+```cpp
+/**
+ * @brief Schedules a timer in timer wheel.
+ *
+ * Adds the given timer instance into timer wheel handler,
+ * allowing it to be triggered after its configured expiry.
+ *
+ * @param timer Pointer to a valid timer object.
+ *
+ * @note If the timer type is set to TIMEOUT, it will fire once;
+ *       otherwise, it will repeat indefinitely.
+ *
+ * @warning This method does not check whether the timer is initialized
+ *          or already active. Use only with properly constructed and inactive timers.
+ */
+inline void spawn_timer(utils::Timer* timer);
+```
+Adds a raw Timer instance into the timer wheel.
