@@ -59,6 +59,8 @@ nav:
       - Awaitable Frame: awaitable_frame.md
   - Networking:
       - Socket: socket.md
+  - Delayed tasks:
+      - Timers: timers.md
   - Contributing: contributing.md
 
 extra:

@@ -158,7 +158,14 @@ requires((P==Proto::TCP && R==Role::ACTIVE) || (P==Proto::UDP));
 ```cpp
 void update_timeout(timer_duration_t new_duration) const; // refresh timer wheel entry
 void shutdown();                                          // ::shutdown(fd, SHUT_RDWR)
+void set_timeout_ms(timeout_t timeout = settings::timeout_duration_ms) const
+  requires(P == Proto::TCP && R == Role::ACTIVE);         // Sets timeout to associated socket.
 ```
+- update_timeout — refreshes the timer wheel entry with a new duration.
+- shutdown — closes both directions with SHUT_RDWR.
+- set_timeout_ms — overrides the timeout for this TCP client socket. 
+  - Default is `settings::timeout_duration_ms` (default 20000 milliseconds). 
+  - Must be called after socket initialization.
 
 Destruction path (internal):
 
