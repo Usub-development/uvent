@@ -2,7 +2,7 @@
 // Created by kirill on 11/17/24.
 //
 
-#include "include/uvent/Uvent.h"
+#include "uvent/Uvent.h"
 
 namespace usub {
     Uvent::Uvent(int threadCount) : pool(threadCount) {

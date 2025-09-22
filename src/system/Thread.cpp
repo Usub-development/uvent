@@ -2,9 +2,9 @@
 // Created by Kirill Zhukov on 07.11.2024.
 //
 
-#include "include/uvent/system/Thread.h"
+#include "uvent/system/Thread.h"
 #include <utility>
-#include "include/uvent/net/Socket.h"
+#include "uvent/net/Socket.h"
 
 namespace usub::uvent::system
 {
@@ -40,24 +40,25 @@ namespace usub::uvent::system
             {
                 auto next_timeout = wh->getNextTimeout();
                 pl->poll((q->empty() && utils::detail::thread::is_started.load(std::memory_order_relaxed))
-                             ? (next_timeout <= 0)
+                             ? (next_timeout > 0)
                                    ? next_timeout
                                    : 5000
                              : 0);
+                pl->unlock();
             }
             else if (q->empty() && q_c->empty())
             {
                 auto next_timeout = wh->getNextTimeout();
                 pl->lock_poll((q->empty() && utils::detail::thread::is_started.load(std::memory_order_relaxed))
-                                  ? (next_timeout <= 0)
+                                  ? (next_timeout > 0)
                                         ? next_timeout
                                         : 5000
                                   : 0);
             }
             highPerfTimer.reset();
-            while (true)
+            while (!q->empty())
             {
-                if (q->empty() || highPerfTimer.elapsed_ms() >= 291) break;
+                if (highPerfTimer.elapsed_ms() >= 291) break;
 
                 const size_t n = system::this_thread::detail::q->dequeue_bulk(
                     this->tmp_tasks_.data(), this->tmp_tasks_.size());
@@ -86,9 +87,7 @@ namespace usub::uvent::system
             }
             if (wh->mtx.try_lock())
             {
-                auto tick_res = wh->tick();
-                for (auto& timer : tick_res)
-                    system::this_thread::detail::q->enqueue(timer);
+                wh->tick();
                 wh->mtx.unlock();
             }
             if (st->getSize() > 0)

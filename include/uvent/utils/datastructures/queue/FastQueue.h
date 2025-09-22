@@ -11,7 +11,7 @@
 #include <cassert>
 #include <cstring>
 #include <utility>
-#include "include/uvent/utils/intrinsincs/optimizations.h"
+#include "uvent/utils/intrinsincs/optimizations.h"
 
 namespace usub::queue::single_thread
 {

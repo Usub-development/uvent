@@ -2,7 +2,7 @@
 // Created by kirill on 5/7/25.
 //
 
-#include "include/uvent/utils/timer/HighPerfomanceTimer.h"
+#include "uvent/utils/timer/HighPerfomanceTimer.h"
 
 namespace usub::utils {
     HighPerfTimer::HighPerfTimer() {

@@ -83,6 +83,68 @@ typedef int socklen_t;
 
 #endif
 
+// -------------------- SIGPIPE compatibility (cross-platform) --------------------
+#if defined(__unix__) || defined(__APPLE__) || defined(__MACH__) || defined(__linux__) || defined(__BSD__)
+#include <signal.h>
+#include <string.h>
+
+static inline void uvent_ignore_sigpipe_once() {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = SIG_IGN;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGPIPE, &sa, nullptr);
+}
+
+__attribute__((constructor))
+static void uvent_ignore_sigpipe_ctor() { uvent_ignore_sigpipe_once(); }
+
+#define UVENT_IGNORE_SIGPIPE() uvent_ignore_sigpipe_once()
+#else
+#define UVENT_IGNORE_SIGPIPE() ((void)0)
+#endif
+
+#if defined(__linux__)
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+#define UVENT_SEND_NOSIG_FLAGS MSG_NOSIGNAL
+static inline void uvent_sock_nosigpipe(int) {}
+
+#elif defined(__APPLE__) || defined(__BSD__) || defined(__MACH__)
+#ifndef SO_NOSIGPIPE
+#define SO_NOSIGPIPE 0x1022
+#endif
+#define UVENT_SEND_NOSIG_FLAGS 0
+static inline void uvent_sock_nosigpipe(int fd) {
+    int one = 1;
+    (void)setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+}
+#else
+#define UVENT_SEND_NOSIG_FLAGS 0
+static inline void uvent_sock_nosigpipe(int) {}
+#endif
+
+#include <stddef.h>
+#include <sys/types.h>
+
+static inline
+#if defined(_WIN32) || defined(_WIN64)
+int
+#else
+ssize_t
+#endif
+uvent_send_nosig(int fd, const void* buf, size_t len, int flags) {
+#if defined(_WIN32) || defined(_WIN64)
+    // На Windows SIGPIPE не возникает
+    return ::send((SOCKET)fd, (const char*)buf, (int)len, flags);
+#else
+    return ::send(fd, buf, len, flags | UVENT_SEND_NOSIG_FLAGS);
+#endif
+}
+// -------------------------------------------------------------------------------
+
 #if UVENT_DEBUG
 
 #include <string>

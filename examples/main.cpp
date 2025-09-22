@@ -1,7 +1,7 @@
-#include "include/uvent/Uvent.h"
-#include "include/uvent/tasks/AwaitableFrame.h"
-#include "include/uvent/system/SystemContext.h"
-#include "include/uvent/net/Socket.h"
+#include "uvent/Uvent.h"
+#include "uvent/tasks/AwaitableFrame.h"
+#include "uvent/system/SystemContext.h"
+#include "uvent/net/Socket.h"
 
 using namespace usub::uvent;
 
@@ -16,10 +16,12 @@ task::Awaitable<void> clientCoro(net::TCPClientSocket socket) {
             "Content-Length: 20\r\n"
             "\r\n"
             "{\"status\":\"success\"}";
+
+    socket.set_timeout_ms(5000);
     while (true) {
         buffer.clear();
         ssize_t rdsz = co_await socket.async_read(buffer, max_read_size);
-        socket.update_timeout(20000);
+        socket.update_timeout(5000);
 #ifdef UVENT_DEBUG
         spdlog::info("Read size: {}", rdsz);
         std::string s(buffer.data(), buffer.data() + buffer.size());
@@ -37,13 +39,13 @@ task::Awaitable<void> clientCoro(net::TCPClientSocket socket) {
                 const_cast<uint8_t *>(reinterpret_cast<const uint8_t *>(httpResponse.data())),
                 httpResponse.size()
         );
-        socket.update_timeout(20000);
+#ifdef UVENT_DEBUG
+        spdlog::warn("Write size: {}", wrsz);
+#endif
         if (wrsz <= 0) {
             break;
         }
-#ifdef UVENT_DEBUG
-        spdlog::info("Write size: {}", wrsz);
-#endif
+        socket.update_timeout(5000);
     }
 #ifdef UVENT_DEBUG
     spdlog::warn("client_coro finished");
