@@ -59,11 +59,42 @@ namespace usub::uvent::system
         }
     }
 
+    /**
+     * @brief Spawns a coroutine for execution in the global thread context.
+     *
+     * Retrieves the coroutine promise from the given function object and, if valid,
+     * enqueues its coroutine handle into the global task queue.
+     *
+     * @tparam F Coroutine function type providing `get_promise()`.
+     * @param f Coroutine function to be spawned.
+     *
+     * @warning Method doesn't check if the coroutine is valid beyond `get_promise()`.
+     *          Ensure the coroutine object remains valid until scheduled.
+     */
     template <typename F>
     void co_spawn(F&& f)
     {
         auto promise = f.get_promise();
-        if (promise) system::this_thread::detail::st->enqueue(promise->get_coroutine_handle());
+        if (promise) this_thread::detail::st->enqueue(promise->get_coroutine_handle());
+    }
+
+    /**
+     * @brief Schedules a timer in timer wheel.
+     *
+     * Adds the given timer instance into timer wheel handler,
+     * allowing it to be triggered after its configured expiry.
+     *
+     * @param timer Pointer to a valid timer object.
+     *
+     * @note If the timer type is set to TIMEOUT, it will fire once;
+     *       otherwise, it will repeat indefinitely.
+     *
+     * @warning This method does not check whether the timer is initialized
+     *          or already active. Use only with properly constructed and inactive timers.
+     */
+    inline void spawn_timer(utils::Timer* timer)
+    {
+        this_thread::detail::wh->addTimer(timer);
     }
 }
 

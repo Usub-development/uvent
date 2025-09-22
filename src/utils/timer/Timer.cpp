@@ -6,11 +6,21 @@
 
 namespace usub::uvent::utils
 {
-    Timer::Timer(timer_duration_t duration, int fd, TimerType type) : duration_ms(duration), fd(fd), type(type),
-                                                                      expiryTime(0),
-                                                                      active(true), id(0) {}
-
-    Timer::Timer(timer_duration_t duration, TimerType type) : duration_ms(duration), fd(-1), type(type),
+    Timer::Timer(timer_duration_t duration, TimerType type) : duration_ms(duration), type(type),
                                                               expiryTime(0),
-                                                              active(true), id(0) {}
+                                                              active(true), id(0)
+    {
+    }
+
+    void Timer::addFunction(std::function<void(void*)>& function, void* functionValue)
+    {
+        auto aw = timeout_coroutine(std::move(function), functionValue);
+        this->coro = aw.get_promise()->get_coroutine_handle();
+    }
+
+    void Timer::addFunction(std::function<void(void*)>&& function, void* functionValue)
+    {
+        auto aw = timeout_coroutine(std::move(function), functionValue);
+        this->coro = aw.get_promise()->get_coroutine_handle();
+    }
 }

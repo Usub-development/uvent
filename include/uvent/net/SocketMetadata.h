@@ -8,7 +8,11 @@
 #include <coroutine>
 #include <atomic>
 
+#if UVENT_DEBUG
 #include "spdlog/spdlog.h"
+#endif
+
+#include "uvent/base/Predefines.h"
 #include "uvent/utils/sync/RefCountedSession.h"
 #include "uvent/utils/intrinsincs/optimizations.h"
 
@@ -168,6 +172,18 @@ namespace usub::uvent::net
         {
             using namespace usub::utils::sync::refc;
             return (this->state.load(std::memory_order_acquire) & TIMEOUT_EPOCH_MASK) != snap;
+        }
+
+        [[nodiscard]] __attribute__((always_inline)) bool is_done_client_coroutine_with_timeout() const
+        {
+            using namespace usub::utils::sync::refc;
+            return (this->state.load(std::memory_order_acquire) & COUNT_MASK) == 1;
+        }
+
+        [[nodiscard]] __attribute__((always_inline)) uint64_t get_counter() const
+        {
+            using namespace usub::utils::sync::refc;
+            return (this->state.load(std::memory_order_acquire) & COUNT_MASK);
         }
 
         [[nodiscard]] __attribute__((always_inline)) bool is_tcp() const

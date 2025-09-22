@@ -41,6 +41,10 @@ namespace usub
             template <typename>
             class AwaitableIOFrame;
         }
+        namespace utils
+        {
+            class TimerWheel;
+        }
     }
 }
 

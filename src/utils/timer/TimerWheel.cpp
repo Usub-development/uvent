@@ -23,7 +23,6 @@ namespace usub::uvent::utils
 
     uint64_t TimerWheel::addTimer(Timer* timer)
     {
-
         timer->expiryTime = getCurrentTime() + timer->duration_ms;
         timer->id = timerIdCounter_.fetch_add(1, std::memory_order_relaxed) + 1;
 
@@ -139,9 +138,12 @@ namespace usub::uvent::utils
     void TimerWheel::updateNextExpiryTime()
     {
         this->nextExpiryTime_ = 0;
-        for (const auto& wheel : this->wheels_) {
-            for (const auto& bucket : wheel.buckets_) {
-                for (const auto* t : bucket) {
+        for (const auto& wheel : this->wheels_)
+        {
+            for (const auto& bucket : wheel.buckets_)
+            {
+                for (const auto* t : bucket)
+                {
                     if (!t->active) continue;
                     if (this->nextExpiryTime_ == 0 || t->expiryTime < this->nextExpiryTime_)
                         this->nextExpiryTime_ = t->expiryTime;
@@ -182,6 +184,11 @@ namespace usub::uvent::utils
                                 t->expiryTime = getCurrentTime() + t->duration_ms;
                                 addTimerToWheel(t, t->expiryTime);
                             }
+                        } else
+                        {
+                            auto* t = new Timer(op.new_dur,TIMEOUT);
+                            addTimerToWheel(t, t->expiryTime);
+                            ++this->activeTimerCount_;
                         }
                         break;
                     }
@@ -271,9 +278,9 @@ namespace usub::uvent::utils
         return this->activeTimerCount_ == 0;
     }
 
-    task::Awaitable<void> timeout_coroutine(std::function<void()> f)
+    task::Awaitable<void> timeout_coroutine(std::function<void(void*)> f, void* arg)
     {
-        f();
+        f(arg);
         co_return;
     }
 }
