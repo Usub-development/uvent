@@ -46,6 +46,8 @@ namespace usub::uvent::core
 
         virtual void lock_poll(int timeout) = 0;
 
+        int get_poll_fd();
+
     public:
         std::binary_semaphore lock{1};
 

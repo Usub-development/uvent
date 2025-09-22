@@ -59,6 +59,7 @@ install(EXPORT uventTargets
 )
 
 option(BUILD_MAIN "Buld main executable for testing" OFF)
+option(ENABLE_SANITIZERS "Buld main executable for testing" OFF)
 
 if (BUILD_MAIN)
     if (CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -72,16 +73,70 @@ if (BUILD_MAIN)
         FetchContent_MakeAvailable(spdlog)
     endif ()
 
-    add_compile_options(-fsanitize=address)
-    add_link_options(-fsanitize=address)
+    if (ENABLE_SANITIZERS)
+        add_executable(uvent_asan_ubsan ${UVENT_SOURCES} examples/main.cpp)
+        target_compile_definitions(uvent_asan_ubsan PRIVATE
+                $<$<CONFIG:Debug>:UVENT_DEBUG>
+        )
+        target_include_directories(uvent_asan_ubsan
+                PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/include
+        )
+        target_link_libraries(uvent_asan_ubsan PRIVATE $<$<CONFIG:Debug>:spdlog::spdlog>)
+        target_compile_options(uvent_asan_ubsan PRIVATE
+                -fsanitize=address,undefined
+                -fno-sanitize-recover=all
+                -fno-omit-frame-pointer
+                -g
+        )
+        target_link_options(uvent_asan_ubsan PRIVATE
+                -fsanitize=address,undefined
+        )
+
+        add_executable(uvent_tsan ${UVENT_SOURCES} examples/main.cpp)
+        target_compile_definitions(uvent_tsan PRIVATE
+                $<$<CONFIG:Debug>:UVENT_DEBUG>
+        )
+        target_include_directories(uvent_tsan
+                PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/include
+        )
+        target_link_libraries(uvent_tsan PRIVATE $<$<CONFIG:Debug>:spdlog::spdlog>)
+        target_compile_options(uvent_tsan PRIVATE -fsanitize=thread -g)
+        target_link_options(uvent_tsan PRIVATE -fsanitize=thread)
+
+
+        if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            add_executable(uvent_msan_ubsan ${UVENT_SOURCES} examples/main.cpp)
+            target_compile_definitions(uvent_msan_ubsan PRIVATE
+                    $<$<CONFIG:Debug>:UVENT_DEBUG>
+            )
+            target_include_directories(uvent_msan_ubsan
+                    PRIVATE
+                    ${CMAKE_CURRENT_SOURCE_DIR}/include
+            )
+            target_link_libraries(uvent_msan_ubsan PRIVATE $<$<CONFIG:Debug>:spdlog::spdlog>)
+            target_compile_options(uvent_msan_ubsan PRIVATE
+                    -fsanitize=memory,undefined
+                    -fsanitize-memory-track-origins=2
+                    -fno-sanitize-recover=all
+                    -fno-omit-frame-pointer
+                    -g
+            )
+            target_link_options(uvent_msan_ubsan PRIVATE
+                    -fsanitize=memory,undefined
+            )
+        endif()
+    endif()
 
     add_executable(uvent_exe ${UVENT_SOURCES} examples/main.cpp)
     target_compile_definitions(uvent_exe PRIVATE
-        $<$<CONFIG:Debug>:UVENT_DEBUG>
+            $<$<CONFIG:Debug>:UVENT_DEBUG>
     )
     target_include_directories(uvent_exe
-        PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-     )
-    target_link_libraries(uvent_exe PRIVATE $<$<CONFIG:Debug>:spdlog::spdlog>) 
+            PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(uvent_exe PRIVATE $<$<CONFIG:Debug>:spdlog::spdlog>)
+
 endif ()

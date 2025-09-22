@@ -64,51 +64,12 @@ namespace usub::uvent::core
                     cpu_relax();
                 }
             }
-
-            auto* timer = new utils::Timer(settings::timeout_duration_ms, header->fd, utils::TIMEOUT);
-
-            auto coro = utils::timeout_coroutine([this, header]
-            {
-                const uint64_t expected = header->timeout_epoch_load();
-
-                if (!header->try_mark_busy())
-                {
-                    this->wheel->updateTimer(header->timer_id, settings::timeout_duration_ms);
-                    header->state.fetch_sub(1, std::memory_order_acq_rel);
-                    return;
-                }
-
-                if (header->timeout_epoch_changed(expected))
-                {
-                    header->clear_busy();
-                    this->wheel->updateTimer(header->timer_id, settings::timeout_duration_ms);
-                    header->state.fetch_sub(1, std::memory_order_acq_rel);
-                    return;
-                }
-
-                auto r = std::exchange(header->first, nullptr);
-                auto w = std::exchange(header->second, nullptr);
-                header->clear_reading();
-                header->clear_writing();
-                header->clear_busy();
-
-                epoll_ctl(this->poll_fd, EPOLL_CTL_DEL, header->fd, nullptr);
-                ::close(header->fd);
-                if (r) system::this_thread::detail::q->enqueue(r);
-                if (w) system::this_thread::detail::q->enqueue(w);
-
-                header->state.fetch_sub(1, std::memory_order_acq_rel);
-            });
-
-            timer->coro = coro.get_promise()->get_coroutine_handle();
-            header->timer_id = this->wheel->addTimer(timer);
         }
         else if (header->is_tcp() && header->is_passive())
         {
             utils::detail::thread::is_started.store(true, std::memory_order_relaxed);
         }
     }
-
 
     void EPoller::updateEvent(net::SocketHeader* header, OperationType initialState)
     {
@@ -165,11 +126,7 @@ namespace usub::uvent::core
         using namespace usub::utils::sync::refc;
 
         epoll_ctl(this->poll_fd, EPOLL_CTL_DEL, header->fd, nullptr);
-        this->wheel->removeTimer(header->timer_id);
         ::close(header->fd);
-
-        if (header->first) system::this_thread::detail::q->enqueue(header->first);
-        if (header->second) system::this_thread::detail::q->enqueue(header->second);
     }
 
     bool EPoller::poll(int timeout)

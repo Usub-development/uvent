@@ -19,6 +19,47 @@
 
 namespace usub::uvent::net
 {
+    namespace detail
+    {
+        static inline void processSocketTimeout(void* ptr)
+        {
+            auto header = static_cast<SocketHeader*>(ptr);
+            const uint64_t expected = header->timeout_epoch_load();
+
+            if (!header->try_mark_busy())
+            {
+                system::this_thread::detail::wh->updateTimer(header->timer_id, settings::timeout_duration_ms);
+                header->state.fetch_sub(1, std::memory_order_acq_rel);
+                return;
+            }
+
+            if (header->timeout_epoch_changed(expected))
+            {
+                header->clear_busy();
+                system::this_thread::detail::wh->updateTimer(header->timer_id, settings::timeout_duration_ms);
+                header->state.fetch_sub(1, std::memory_order_acq_rel);
+                return;
+            }
+            header->mark_disconnected();
+
+            auto r = std::exchange(header->first, nullptr);
+            auto w = std::exchange(header->second, nullptr);
+            header->clear_reading();
+            header->clear_writing();
+            header->clear_busy();
+
+            epoll_ctl(system::this_thread::detail::pl->get_poll_fd(), EPOLL_CTL_DEL, header->fd, nullptr);
+            ::close(header->fd);
+#if UVENT_DEBUG
+            spdlog::warn("Socket counter in timeout: {}", header->get_counter());
+#endif
+            if (!header->is_done_client_coroutine_with_timeout() && r) system::this_thread::detail::q->enqueue(r);
+            if (!header->is_done_client_coroutine_with_timeout() && r) system::this_thread::detail::q->enqueue(w);
+
+            header->state.fetch_sub(1, std::memory_order_acq_rel);
+        }
+    }
+
     template <Proto p, Role r>
     class Socket : usub::utils::sync::refc::RefCounted<Socket<p, r>>
     {
@@ -187,6 +228,13 @@ namespace usub::uvent::net
          * Calls shutdown() on underlying FD.
          */
         void shutdown();
+
+        /**
+         * \brief Sets timeout to associated socket.
+         * \warning Method doesn't check if socket was initialized. Please use it only after socket initialisation.
+         */
+        void set_timeout_ms(timeout_t timeout = settings::timeout_duration_ms) const requires (p == Proto::TCP && r ==
+            Role::ACTIVE);
 
     protected:
         void destroy() noexcept override;
@@ -744,6 +792,14 @@ namespace usub::uvent::net
     void Socket<p, r>::shutdown()
     {
         ::shutdown(this->header_->fd, SHUT_RDWR);
+    }
+
+    template <Proto p, Role r>
+    void Socket<p, r>::set_timeout_ms(timeout_t timeout) const requires (p == Proto::TCP && r == Role::ACTIVE)
+    {
+        auto* timer = new utils::Timer(timeout,utils::TIMEOUT);
+        timer->addFunction(detail::processSocketTimeout, this->header_);
+        this->header_->timer_id = system::this_thread::detail::wh->addTimer(timer);
     }
 
     template <Proto p, Role r>

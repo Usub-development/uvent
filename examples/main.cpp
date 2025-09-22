@@ -16,10 +16,12 @@ task::Awaitable<void> clientCoro(net::TCPClientSocket socket) {
             "Content-Length: 20\r\n"
             "\r\n"
             "{\"status\":\"success\"}";
+
+    socket.set_timeout_ms(5000);
     while (true) {
         buffer.clear();
         ssize_t rdsz = co_await socket.async_read(buffer, max_read_size);
-        socket.update_timeout(20000);
+        socket.update_timeout(5000);
 #ifdef UVENT_DEBUG
         spdlog::info("Read size: {}", rdsz);
         std::string s(buffer.data(), buffer.data() + buffer.size());
@@ -43,7 +45,7 @@ task::Awaitable<void> clientCoro(net::TCPClientSocket socket) {
         if (wrsz <= 0) {
             break;
         }
-        socket.update_timeout(20000);
+        socket.update_timeout(5000);
     }
 #ifdef UVENT_DEBUG
     spdlog::warn("client_coro finished");
