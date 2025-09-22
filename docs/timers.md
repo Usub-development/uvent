@@ -41,7 +41,7 @@ private:
 - `type` — whether it fires once (TIMEOUT) or repeatedly (INTERVAL).
 - `addFunction` — binds a callback function (takes void* argument).
 - Timers cannot be copied or moved.
-- Internally scheduled into the thread-local TimerWheel.
+- Internally scheduled into TimerWheel.
 
 ## Scheduling
 ```cpp
