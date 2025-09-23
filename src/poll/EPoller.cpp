@@ -46,29 +46,8 @@ namespace usub::uvent::core
 
         epoll_ctl(this->poll_fd, EPOLL_CTL_ADD, header->fd, &event);
 
-        if (header->is_tcp() && !header->is_passive())
-        {
-            {
-                uint64_t s = header->state.load(std::memory_order_relaxed);
-                for (;;)
-                {
-                    if (s & usub::utils::sync::refc::CLOSED_MASK) break;
-
-                    const uint64_t cnt = (s & usub::utils::sync::refc::COUNT_MASK);
-                    if (cnt == usub::utils::sync::refc::COUNT_MASK) break;
-                    const uint64_t ns = (s & ~usub::utils::sync::refc::COUNT_MASK) | (cnt + 1);
-
-                    if (header->state.compare_exchange_weak(
-                        s, ns, std::memory_order_acq_rel, std::memory_order_relaxed))
-                        break;
-                    cpu_relax();
-                }
-            }
-        }
-        else if (header->is_tcp() && header->is_passive())
-        {
-            utils::detail::thread::is_started.store(true, std::memory_order_relaxed);
-        }
+        if (header->is_tcp() && header->is_passive()) utils::detail::thread::is_started.store(
+            true, std::memory_order_relaxed);
     }
 
     void EPoller::updateEvent(net::SocketHeader* header, OperationType initialState)
