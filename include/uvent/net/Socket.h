@@ -21,43 +21,7 @@ namespace usub::uvent::net
 {
     namespace detail
     {
-        static inline void processSocketTimeout(void* ptr)
-        {
-            auto header = static_cast<SocketHeader*>(ptr);
-            const uint64_t expected = header->timeout_epoch_load();
-
-            if (!header->try_mark_busy())
-            {
-                system::this_thread::detail::wh->updateTimer(header->timer_id, settings::timeout_duration_ms);
-                header->state.fetch_sub(1, std::memory_order_acq_rel);
-                return;
-            }
-
-            if (header->timeout_epoch_changed(expected))
-            {
-                header->clear_busy();
-                system::this_thread::detail::wh->updateTimer(header->timer_id, settings::timeout_duration_ms);
-                header->state.fetch_sub(1, std::memory_order_acq_rel);
-                return;
-            }
-            header->mark_disconnected();
-
-            auto r = std::exchange(header->first, nullptr);
-            auto w = std::exchange(header->second, nullptr);
-            header->clear_reading();
-            header->clear_writing();
-            header->clear_busy();
-
-            epoll_ctl(system::this_thread::detail::pl->get_poll_fd(), EPOLL_CTL_DEL, header->fd, nullptr);
-            ::close(header->fd);
-#if UVENT_DEBUG
-            spdlog::warn("Socket counter in timeout: {}", header->get_counter());
-#endif
-            if (!header->is_done_client_coroutine_with_timeout() && r) system::this_thread::detail::q->enqueue(r);
-            if (!header->is_done_client_coroutine_with_timeout() && r) system::this_thread::detail::q->enqueue(w);
-
-            header->state.fetch_sub(1, std::memory_order_acq_rel);
-        }
+        extern void processSocketTimeout(void* ptr);
     }
 
     template <Proto p, Role r>
@@ -66,6 +30,7 @@ namespace usub::uvent::net
     public:
         friend class usub::utils::sync::refc::RefCounted<Socket<p, r>>;
         friend class core::EPoller;
+        friend void detail::processSocketTimeout(void* ptr);
 
         /**
          * \brief Default constructor.
@@ -797,7 +762,23 @@ namespace usub::uvent::net
     template <Proto p, Role r>
     void Socket<p, r>::set_timeout_ms(timeout_t timeout) const requires (p == Proto::TCP && r == Role::ACTIVE)
     {
-        auto* timer = new utils::Timer(timeout,utils::TIMEOUT);
+        {
+            uint64_t s = this->header_->state.load(std::memory_order_relaxed);
+            for (;;)
+            {
+                if (s & usub::utils::sync::refc::CLOSED_MASK) break;
+
+                const uint64_t cnt = (s & usub::utils::sync::refc::COUNT_MASK);
+                if (cnt == usub::utils::sync::refc::COUNT_MASK) break;
+                const uint64_t ns = (s & ~usub::utils::sync::refc::COUNT_MASK) | (cnt + 1);
+
+                if (this->header_->state.compare_exchange_weak(
+                    s, ns, std::memory_order_acq_rel, std::memory_order_relaxed))
+                    break;
+                cpu_relax();
+            }
+        }
+        auto* timer = new utils::Timer(timeout, utils::TIMEOUT);
         timer->addFunction(detail::processSocketTimeout, this->header_);
         this->header_->timer_id = system::this_thread::detail::wh->addTimer(timer);
     }
