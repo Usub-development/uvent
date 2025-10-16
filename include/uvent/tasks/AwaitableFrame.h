@@ -107,7 +107,12 @@ namespace usub::uvent {
 
             ~AwaitableFrame() override;
 
-            task::Awaitable<void> get_return_object();
+            auto get_return_object() {
+                using self_t = std::remove_reference_t<decltype(*this)>;
+
+                this->coro_ = std::coroutine_handle<AwaitableFrame>::from_promise(*this);
+                return task::Awaitable<void, self_t>{this};
+            }
 
             void return_void() {}
 
@@ -162,6 +167,10 @@ namespace usub::uvent {
             alignas(T) unsigned char result_[sizeof(T)]{};
         };
 
+        template<class> struct is_io_frame : std::false_type {};
+        template<class T> struct is_io_frame<AwaitableIOFrame<T>> : std::true_type {};
+        template<class F> inline constexpr bool is_io_frame_v = is_io_frame<F>::value;
+
         template<typename T>
         std::suspend_always AwaitableIOFrame<T>::final_suspend() noexcept {
 #if UVENT_DEBUG
@@ -171,9 +180,7 @@ namespace usub::uvent {
                 auto c_temp = std::coroutine_handle<::usub::uvent::detail::AwaitableFrameBase>::from_address(
                         std::exchange(this->prev_, nullptr).address());
                 c_temp.promise().unset_awaited();
-#if !defined(UVENT_NEW_STACK)
                 AwaitableFrame<T>::push_frame_into_task_queue(static_cast<std::coroutine_handle<>>(c_temp));
-#endif
                 std::exchange(this->prev_, nullptr);
             }
             this->push_frame_to_be_destroyed();
@@ -199,9 +206,7 @@ namespace usub::uvent {
                 auto c_temp = std::coroutine_handle<::usub::uvent::detail::AwaitableFrameBase>::from_address(
                         std::exchange(this->prev_, nullptr).address());
                 c_temp.promise().unset_awaited();
-#if !defined(UVENT_NEW_STACK)
-                AwaitableFrame<T>::push_frame_into_task_queue(static_cast<std::coroutine_handle<>>(c_temp));
-#endif
+                push_frame_into_task_queue(static_cast<std::coroutine_handle<>>(c_temp));
             }
             this->push_frame_to_be_destroyed();
             return {};
@@ -243,24 +248,39 @@ namespace usub::uvent {
         template<class FrameType>
         template<class U>
         void Awaitable<void, FrameType>::await_suspend(std::coroutine_handle<U> h) {
-            auto c = std::coroutine_handle<detail::AwaitableFrameBase>::from_address(h.address());
-            c.promise().set_awaited();
+            auto ph = std::coroutine_handle<detail::AwaitableFrameBase>::from_address(h.address());
+            auto& p = ph.promise();
+            p.set_awaited();
+
+            auto child = this->frame_->get_coroutine_handle();
+            p.set_next_coroutine(child);
             this->frame_->set_calling_coroutine(h);
+
+            if constexpr (!detail::is_io_frame_v<FrameType>) {
+                if (child && !child.done())
+                    detail::AwaitableFrameBase::push_frame_into_task_queue(static_cast<std::coroutine_handle<>>(child));
+            }
         }
 
         template<class Value, class FrameType>
         template<class U>
         void Awaitable<Value, FrameType>::await_suspend(std::coroutine_handle<U> h) {
-            auto c = std::coroutine_handle<detail::AwaitableFrameBase>::from_address(
-                    h.address()).promise();
-            c.set_awaited();
-            c.set_next_coroutine(std::coroutine_handle<>::from_address(this));
+            auto& p = std::coroutine_handle<detail::AwaitableFrameBase>::from_address(h.address()).promise();
+            p.set_awaited();
+
+            auto child = this->frame_->get_coroutine_handle();
+            p.set_next_coroutine(child);
             this->frame_->set_calling_coroutine(h);
+
+            if constexpr (!detail::is_io_frame_v<FrameType>) {
+                if (child && !child.done())
+                    detail::AwaitableFrameBase::push_frame_into_task_queue(static_cast<std::coroutine_handle<>>(child));
+            }
         }
 
         template<class FrameType>
         void Awaitable<void, FrameType>::await_resume() {
-            this->frame_->resume();
+            this->frame_->get();
         }
 
         template<class FrameType>

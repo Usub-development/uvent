@@ -44,15 +44,9 @@ namespace usub::uvent::task
 
         virtual Value await_resume();
 
-#if !defined(UVENT_NEW_STACK)
-
         template <class U>
         void await_suspend(std::coroutine_handle<U> h);
 
-#else
-            template<class U>
-            std::coroutine_handle<> await_suspend(std::coroutine_handle<U> h);
-#endif
         promise_type* get_promise();
 
         /// @brief Should be used carefully! Only for `get_return_object` in promise type.
@@ -86,15 +80,9 @@ namespace usub::uvent::task
 
         promise_type* get_promise();
 
-#if !defined(UVENT_NEW_STACK)
-
         template <class U>
         void await_suspend(std::coroutine_handle<U> h);
 
-#else
-            template<class U>
-            std::coroutine_handle<> await_suspend(std::coroutine_handle<U> h);
-#endif
         /// @brief Should be used carefully! Only for `get_return_object` in promise type.
         explicit Awaitable(promise_type* af);
 
