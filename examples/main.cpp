@@ -53,10 +53,18 @@ task::Awaitable<void> clientCoro(net::TCPClientSocket socket) {
     co_return;
 }
 
+task::Awaitable<void> test_coro()
+{
+    std::cout << "test_coro" << std::endl;
+    co_return;
+}
+
 task::Awaitable<void> listeningCoro() {
     auto acceptor = new net::TCPServerSocket{"0.0.0.0", 45900};
     for (;;) {
         auto soc = co_await acceptor->async_accept();
+        spdlog::warn("before test_coro()");
+        co_await test_coro();
         if (soc) system::co_spawn(clientCoro(std::move(soc.value())));
     }
 }

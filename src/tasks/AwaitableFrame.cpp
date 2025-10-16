@@ -78,12 +78,6 @@ namespace usub::uvent::detail {
 #endif
     }
 
-    task::Awaitable<void>
-    AwaitableFrame<void>::get_return_object() {
-        this->coro_ = std::coroutine_handle<AwaitableFrameBase>::from_promise(*this);
-        return task::Awaitable<void>{this};
-    }
-
     std::suspend_always AwaitableFrame<void>::initial_suspend() noexcept {
         return {};
     }
