@@ -6,7 +6,7 @@
 
 namespace usub::uvent::net::detail
 {
-    void processSocketTimeout(std::any& arg)
+    void processSocketTimeout(std::any arg)
     {
         auto header = std::any_cast<SocketHeader*>(arg);
         auto socket = Socket<Proto::TCP, Role::ACTIVE>::from_existing(header);

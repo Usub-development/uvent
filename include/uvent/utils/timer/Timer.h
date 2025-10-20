@@ -26,7 +26,7 @@ namespace usub::uvent::utils
         INTERVAL
     };
 
-    task::Awaitable<void> timeout_coroutine(std::function<void(std::any&)> f, std::any& arg);
+    task::Awaitable<void> timeout_coroutine(std::function<void(std::any&)> f, std::any arg);
 
     class alignas(32) Timer
     {
@@ -44,9 +44,9 @@ namespace usub::uvent::utils
 
         Timer& operator=(Timer&&) = delete;
 
-        void addFunction(std::function<void(std::any&)> f, std::any& arg);
+        void addFunction(std::function<void(std::any&)> f, std::any arg);
 
-        void addFunction(std::function<void(std::any&)> f, std::any&& arg);
+        void addFunction(std::function<void(std::any&)> f, std::any& arg);
 
     public:
         timeout_t expiryTime;

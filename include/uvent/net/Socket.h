@@ -21,7 +21,7 @@ namespace usub::uvent::net
 {
     namespace detail
     {
-        extern void processSocketTimeout(std::any& arg);
+        extern void processSocketTimeout(std::any arg);
     }
 
     template <Proto p, Role r>
@@ -30,7 +30,7 @@ namespace usub::uvent::net
     public:
         friend class usub::utils::sync::refc::RefCounted<Socket<p, r>>;
         friend class core::EPoller;
-        friend void detail::processSocketTimeout(std::any& arg);
+        friend void detail::processSocketTimeout(std::any arg);
 
         /**
          * \brief Default constructor.
