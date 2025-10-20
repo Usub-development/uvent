@@ -53,6 +53,7 @@ namespace usub::uvent::system
         std::stop_token stop_token{};
         ThreadLaunchMode tlm{NEW};
         std::vector<std::coroutine_handle<>> tmp_tasks_;
+        std::vector<net::SocketHeader*> tmp_sockets_;
     };
 }
 

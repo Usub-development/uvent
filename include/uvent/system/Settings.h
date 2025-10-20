@@ -38,6 +38,8 @@ namespace usub::uvent::settings {
     extern int max_pre_allocated_timer_wheel_operations_items;
 
     extern int max_pre_allocated_tasks_items;
+
+    extern int max_pre_allocated_tmp_sockets_items;
 }
 
 #endif //UVENT_SETTINGS_H

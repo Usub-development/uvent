@@ -17,6 +17,7 @@ namespace usub::uvent::system
 #endif
         this_thread::detail::t_id = this->index_;
         this->tmp_tasks_.resize(settings::max_pre_allocated_tasks_items);
+        this->tmp_sockets_.resize(settings::max_pre_allocated_tmp_sockets_items);
         if (tlm == NEW)
             this->thread_ = std::jthread(
                 [this](std::stop_token token) { this->threadFunction(token); });
@@ -124,16 +125,10 @@ namespace usub::uvent::system
 #ifndef UVENT_ENABLE_REUSEADDR
             usub::uvent::system::this_thread::detail::g_qsbr.quiesce_tick();
 #else
-            highPerfTimer.reset();
-            net::SocketHeader* header;
-            while (q_sh->dequeue(header))
-            {
-                if (highPerfTimer.elapsed_ms() >= 100) break;
-#ifdef UVENT_DEBUG
-                spdlog::info("Coroutine destroyed in auxiliary loop: {}", c.address());
-#endif
-                delete header;
-            }
+            const size_t n_sockets = system::this_thread::detail::q_sh->dequeue_bulk(
+                    this->tmp_sockets_.data(), this->tmp_sockets_.size());
+            for (size_t i = 0; i < n_sockets; ++i)
+                delete this->tmp_sockets_[i];
 #endif
         }
 #ifndef UVENT_ENABLE_REUSEADDR
