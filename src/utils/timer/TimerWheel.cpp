@@ -24,13 +24,21 @@ namespace usub::uvent::utils
     uint64_t TimerWheel::addTimer(Timer* timer)
     {
         timer->expiryTime = getCurrentTime() + timer->duration_ms;
+#ifndef UVENT_ENABLE_REUSEADDR
         timer->id = timerIdCounter_.fetch_add(1, std::memory_order_relaxed) + 1;
+#else
+        timer->id = ++this->timerIdCounter_;
+#endif
 
         Op op{
             .op = OpType::ADD,
             .timer = timer
         };
+#ifndef UVENT_ENABLE_REUSEADDR
         while (!this->timer_operations_queue.try_enqueue(op)) cpu_relax();
+#else
+        this->timer_operations_queue.enqueue(op);
+#endif
         return timer->id;
     }
 
@@ -41,7 +49,11 @@ namespace usub::uvent::utils
             .id = timerId,
             .new_dur = new_duration
         };
+#ifndef UVENT_ENABLE_REUSEADDR
         while (!this->timer_operations_queue.try_enqueue(op)) cpu_relax();
+#else
+        this->timer_operations_queue.enqueue(op);
+#endif
 
         return true;
     }
@@ -52,7 +64,11 @@ namespace usub::uvent::utils
             .op = OpType::REMOVE,
             .id_only = timerId
         };
+#ifndef UVENT_ENABLE_REUSEADDR
         while (!this->timer_operations_queue.try_enqueue(op)) cpu_relax();
+#else
+        this->timer_operations_queue.enqueue(op);
+#endif
         return true;
     }
 
@@ -158,7 +174,12 @@ namespace usub::uvent::utils
         while (true)
         {
             const size_t cap = this->ops_.size();
+#ifndef UVENT_ENABLE_REUSEADDR
             size_t n = this->timer_operations_queue.try_dequeue_bulk(this->ops_.data(), cap);
+#else
+            const size_t n = this->timer_operations_queue.dequeue_bulk(
+                this->ops_.data(), cap);
+#endif
             if (n == 0) break;
 
             for (size_t i = 0; i < n; ++i)
@@ -184,9 +205,10 @@ namespace usub::uvent::utils
                                 t->expiryTime = getCurrentTime() + t->duration_ms;
                                 addTimerToWheel(t, t->expiryTime);
                             }
-                        } else
+                        }
+                        else
                         {
-                            auto* t = new Timer(op.new_dur,TIMEOUT);
+                            auto* t = new Timer(op.new_dur, TIMEOUT);
                             addTimerToWheel(t, t->expiryTime);
                             ++this->activeTimerCount_;
                         }

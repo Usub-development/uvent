@@ -11,4 +11,5 @@ namespace usub::uvent::settings {
     int max_write_retries = 100;
     int max_pre_allocated_timer_wheel_operations_items = 256;
     int max_pre_allocated_tasks_items = 256;
+    int max_pre_allocated_tmp_sockets_items = 256;
 }
