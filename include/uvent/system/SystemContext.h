@@ -22,10 +22,17 @@ namespace usub::uvent::system
     /// \attention **Do not attempt to modify variables inside directly** unless explicitly instructed in the documentation.
     namespace this_thread::detail
     {
+#ifndef UVENT_ENABLE_REUSEADDR
         /// \brief Wrapper over I/O notification mechanism provided by OS.
         extern std::unique_ptr<core::PollerBase> pl;
         /// \brief Timer wheel used to handle multiple timers efficiently.
         extern std::unique_ptr<utils::TimerWheel> wh;
+#else
+        /// \brief Wrapper over I/O notification mechanism provided by OS.
+        thread_local extern std::unique_ptr<core::PollerBase> pl;
+        /// \brief Timer wheel used to handle multiple timers efficiently.
+        thread_local extern std::unique_ptr<utils::TimerWheel> wh;
+#endif
         /// \brief Task queue available to all threads in the thread pool.
         /// Or available to a single thread if there is only one thread in the thread pool
         extern std::unique_ptr<task::SharedTasks> st;
@@ -35,7 +42,12 @@ namespace usub::uvent::system
         thread_local extern int t_id;
         /// \brief Coroutines to be destroyed
         thread_local extern std::unique_ptr<queue::single_thread::Queue<std::coroutine_handle<>>> q_c;
+#ifndef UVENT_ENABLE_REUSEADDR
         extern usub::utils::sync::QSBR g_qsbr;
+#else
+        /// \brief Sockets to be destroyed
+        thread_local extern std::unique_ptr<queue::single_thread::Queue<net::SocketHeader*>> q_sh;
+#endif
     }
 
     namespace this_coroutine

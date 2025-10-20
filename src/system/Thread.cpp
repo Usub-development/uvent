@@ -33,9 +33,12 @@ namespace usub::uvent::system
         usub::utils::HighPerfTimer highPerfTimer;
         this->barrier->arrive_and_wait();
         using namespace system::this_thread::detail;
+#ifndef UVENT_ENABLE_REUSEADDR
         usub::uvent::system::this_thread::detail::g_qsbr.attach_current_thread();
+#endif
         while (!token.stop_requested())
         {
+#ifndef UVENT_ENABLE_REUSEADDR
             if (pl->try_lock())
             {
                 auto next_timeout = wh->getNextTimeout();
@@ -55,6 +58,14 @@ namespace usub::uvent::system
                                         : 5000
                                   : 0);
             }
+#else
+            auto next_timeout = wh->getNextTimeout();
+            pl->poll((q->empty() && utils::detail::thread::is_started.load(std::memory_order_relaxed))
+                         ? (next_timeout > 0)
+                               ? next_timeout
+                               : 5000
+                         : 0);
+#endif
             highPerfTimer.reset();
             while (!q->empty())
             {
@@ -85,11 +96,14 @@ namespace usub::uvent::system
                     }
                 }
             }
+#ifndef UVENT_ENABLE_REUSEADDR
             if (wh->mtx.try_lock())
             {
                 wh->tick();
                 wh->mtx.unlock();
             }
+#endif
+            wh->tick();
             if (st->getSize() > 0)
             {
                 std::coroutine_handle<> task;
@@ -107,9 +121,24 @@ namespace usub::uvent::system
 #endif
                 c_temp.destroy();
             }
+#ifndef UVENT_ENABLE_REUSEADDR
             usub::uvent::system::this_thread::detail::g_qsbr.quiesce_tick();
+#else
+            highPerfTimer.reset();
+            net::SocketHeader* header;
+            while (q_sh->dequeue(header))
+            {
+                if (highPerfTimer.elapsed_ms() >= 100) break;
+#ifdef UVENT_DEBUG
+                spdlog::info("Coroutine destroyed in auxiliary loop: {}", c.address());
+#endif
+                delete header;
+            }
+#endif
         }
+#ifndef UVENT_ENABLE_REUSEADDR
         usub::uvent::system::this_thread::detail::g_qsbr.detach_current_thread();
+#endif
     }
 
     bool Thread::stop()

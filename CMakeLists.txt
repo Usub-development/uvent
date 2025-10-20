@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -rdynamic -fPIC" CACHE STRING "Debug flags" FORCE)
 set(CMAKE_C_FLAGS_DEBUG "-g -O0 -rdynamic -fPIC" CACHE STRING "Debug flags" FORCE)
 
+option(UVENT_ENABLE_REUSEADDR "Use SO_REUSEADDR (portable)" ON)
+
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
@@ -126,12 +128,15 @@ if (BUILD_MAIN)
             target_link_options(uvent_msan_ubsan PRIVATE
                     -fsanitize=memory,undefined
             )
-        endif()
-    endif()
+        endif ()
+    endif ()
 
     add_executable(uvent_exe ${UVENT_SOURCES} examples/main.cpp)
     target_compile_definitions(uvent_exe PRIVATE
             $<$<CONFIG:Debug>:UVENT_DEBUG>
+    )
+    target_compile_definitions(uvent_exe PUBLIC
+            UVENT_ENABLE_REUSEADDR
     )
     target_include_directories(uvent_exe
             PRIVATE

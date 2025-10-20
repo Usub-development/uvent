@@ -112,7 +112,9 @@ namespace usub::uvent::core
     {
         int n = epoll_pwait(this->poll_fd, this->events.data(), static_cast<int>(this->events.size()),
                             timeout, &this->sigmask);
+#ifndef UVENT_ENABLE_REUSEADDR
         system::this_thread::detail::g_qsbr.enter();
+#endif
 #if UVENT_DEBUG
         if (n < 0 && errno != EINTR) throw std::system_error(errno, std::generic_category(), "epoll_pwait");
 #endif
@@ -120,14 +122,20 @@ namespace usub::uvent::core
         {
             auto& event = this->events[i];
             auto* sock = static_cast<net::SocketHeader*>(event.data.ptr);
+#ifndef UVENT_ENABLE_REUSEADDR
             if (sock->is_busy_now() || sock->is_disconnected_now()) continue;
+#else
+            if (sock->is_busy_now()) continue;
+#endif
             constexpr uint32_t errmask = EPOLLHUP | EPOLLRDHUP | EPOLLERR;
             if ((event.events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)))
             {
                 this->removeEvent(sock, ALL);
                 continue;
             }
+#ifndef UVENT_ENABLE_REUSEADDR
             sock->try_mark_busy();
+#endif
             if (event.events & EPOLLIN && sock->first)
             {
 #if UVENT_DEBUG
@@ -164,7 +172,9 @@ namespace usub::uvent::core
             }
         }
         if (n == this->events.size()) this->events.resize(this->events.size() << 1);
+#ifndef UVENT_ENABLE_REUSEADDR
         system::this_thread::detail::g_qsbr.leave();
+#endif
         return n > 0;
     }
 
