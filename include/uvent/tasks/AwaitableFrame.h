@@ -23,14 +23,14 @@ namespace usub::uvent
             FORCED
         };
 
-        struct instant_task_tag
+        struct deferred_task_tag
         {
         };
 
         template <class T>
         using no_cvr_t = std::remove_cv_t<std::remove_reference_t<T>>;
         template <class F>
-        concept InstantFrame = std::derived_from<no_cvr_t<F>, instant_task_tag>;
+        concept DeferredFrame = std::derived_from<no_cvr_t<F>, deferred_task_tag>;
 
         class AwaitableFrameBase
         {
@@ -156,7 +156,7 @@ namespace usub::uvent
         };
 
         template <typename T>
-        class AwaitableIOFrame : public AwaitableFrameBase, public instant_task_tag
+        class AwaitableIOFrame : public AwaitableFrameBase, public deferred_task_tag
         {
         public:
             AwaitableIOFrame() noexcept = default;
@@ -195,19 +195,6 @@ namespace usub::uvent
             bool has_result_ = false;
             alignas(T) unsigned char result_[sizeof(T)]{};
         };
-
-        template <class>
-        struct is_io_frame : std::false_type
-        {
-        };
-
-        template <class T>
-        struct is_io_frame<AwaitableIOFrame<T>> : std::true_type
-        {
-        };
-
-        template <class F>
-        inline constexpr bool is_io_frame_v = is_io_frame<F>::value;
 
         template <typename T>
         std::suspend_always AwaitableIOFrame<T>::final_suspend() noexcept
@@ -306,7 +293,7 @@ namespace usub::uvent
             p.set_next_coroutine(child);
             this->frame_->set_calling_coroutine(h);
 
-            if constexpr (detail::InstantFrame<FrameType>)
+            if constexpr (!detail::DeferredFrame<FrameType>)
             {
                 if (child && !child.done())
                     detail::AwaitableFrameBase::push_frame_into_task_queue(static_cast<std::coroutine_handle<>>(child));
@@ -324,7 +311,7 @@ namespace usub::uvent
             p.set_next_coroutine(child);
             this->frame_->set_calling_coroutine(h);
 
-            if constexpr (detail::InstantFrame<FrameType>)
+            if constexpr (!detail::DeferredFrame<FrameType>)
             {
                 if (child && !child.done())
                     detail::AwaitableFrameBase::push_frame_into_task_queue(static_cast<std::coroutine_handle<>>(child));
