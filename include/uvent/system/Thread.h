@@ -54,6 +54,7 @@ namespace usub::uvent::system
         ThreadLaunchMode tlm{NEW};
         std::vector<std::coroutine_handle<>> tmp_tasks_;
         std::vector<net::SocketHeader*> tmp_sockets_;
+        std::vector<std::coroutine_handle<>> tmp_coroutines_;
     };
 }
 

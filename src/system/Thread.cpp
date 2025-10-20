@@ -18,6 +18,7 @@ namespace usub::uvent::system
         this_thread::detail::t_id = this->index_;
         this->tmp_tasks_.resize(settings::max_pre_allocated_tasks_items);
         this->tmp_sockets_.resize(settings::max_pre_allocated_tmp_sockets_items);
+        this->tmp_coroutines_.resize(settings::max_pre_allocated_tmp_coroutines_items);
         if (tlm == NEW)
             this->thread_ = std::jthread(
                 [this](std::stop_token token) { this->threadFunction(token); });
@@ -77,11 +78,11 @@ namespace usub::uvent::system
                          : 0);
 #endif
             highPerfTimer.reset();
-            while (!q->empty())
+            while (!local_q->empty())
             {
                 if (highPerfTimer.elapsed_ms() >= 291) break;
 
-                const size_t n = q->dequeue_bulk(
+                const size_t n = local_q->dequeue_bulk(
                     this->tmp_tasks_.data(), this->tmp_tasks_.size());
                 if (n == 0) break;
                 for (size_t i = 0; i < n; ++i)
@@ -119,15 +120,13 @@ namespace usub::uvent::system
                 std::coroutine_handle<> task;
                 if (st->dequeue(task)) local_q->enqueue(task);
             }
-            highPerfTimer.reset();
-            std::coroutine_handle<> c;
-            while (local_q_c->dequeue(c))
+            const size_t n_coroutines = local_q_c->dequeue_bulk(this->tmp_coroutines_.data(), this->tmp_coroutines_.size());
+            for (size_t i = 0; i < n_coroutines; i++)
             {
-                if (highPerfTimer.elapsed_ms() >= 100) break;
                 auto c_temp = std::coroutine_handle<detail::AwaitableFrameBase>::from_address(
-                    c.address());
+                    this->tmp_coroutines_[i].address());
 #ifdef UVENT_DEBUG
-                spdlog::info("Coroutine destroyed in auxiliary loop: {}", c.address());
+                spdlog::info("Coroutine destroyed in auxiliary loop: {}", this->tmp_coroutines_[i].address());
 #endif
                 c_temp.destroy();
             }
