@@ -77,11 +77,11 @@ namespace usub::uvent::system
                          : 0);
 #endif
             highPerfTimer.reset();
-            while (!local_q->empty())
+            while (!q->empty())
             {
                 if (highPerfTimer.elapsed_ms() >= 291) break;
 
-                const size_t n = local_q->dequeue_bulk(
+                const size_t n = q->dequeue_bulk(
                     this->tmp_tasks_.data(), this->tmp_tasks_.size());
                 if (n == 0) break;
                 for (size_t i = 0; i < n; ++i)
