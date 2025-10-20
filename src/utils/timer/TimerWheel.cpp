@@ -278,7 +278,7 @@ namespace usub::uvent::utils
         return this->activeTimerCount_ == 0;
     }
 
-    task::Awaitable<void> timeout_coroutine(std::function<void(std::any&)> f, std::any& arg)
+    task::Awaitable<void> timeout_coroutine(std::function<void(std::any&)> f, std::any arg)
     {
         f(arg);
         co_return;
