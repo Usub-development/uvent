@@ -20,7 +20,7 @@ foreach (header ${UVENT_HEADERS})
     endif ()
 endforeach ()
 
-add_definitions(-DUVENT_PIN_THREDS)
+add_definitions(-DUVENT_PIN_THREADS)
 
 add_library(uvent ${UVENT_SOURCES})
 add_library(usub::uvent ALIAS uvent)
