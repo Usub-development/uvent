@@ -6,8 +6,9 @@
 #define UVENT_THREADPOOL_H
 
 #include <cmath>
-#include "uvent/system/Thread.h"
-#include "uvent/system/Defines.h"
+#include <uvent/system/Thread.h>
+#include <uvent/system/Defines.h>
+#include <uvent/system/SystemContext.h>
 
 namespace usub::uvent
 {
@@ -24,7 +25,10 @@ namespace usub::uvent
 
         void addThread(system::ThreadLaunchMode tlm);
 
+        const thread::TLSRegistry* getTLSRegistry();
+
     private:
+        int size_;
         std::barrier<>* barrier;
         std::vector<system::Thread*> threads;
     };

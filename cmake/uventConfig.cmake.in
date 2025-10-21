@@ -2,4 +2,7 @@
 
 include("${CMAKE_CURRENT_LIST_DIR}/uventTargets.cmake")
 
+set(UVENT_ENABLE_REUSEADDR "@UVENT_ENABLE_REUSEADDR@")
+set(UVENT_PIN_THREADS     "@UVENT_PIN_THREADS@")
+
 check_required_components(uvent)

@@ -6,6 +6,9 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -rdynamic -fPIC" CACHE STRING "Debug flags" FORCE)
 set(CMAKE_C_FLAGS_DEBUG "-g -O0 -rdynamic -fPIC" CACHE STRING "Debug flags" FORCE)
 
+option(UVENT_ENABLE_REUSEADDR "Use SO_REUSEADDR (portable)" ON)
+option(UVENT_PIN_THREADS "Use thread PINNING" ON)
+
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
@@ -18,9 +21,13 @@ foreach (header ${UVENT_HEADERS})
     endif ()
 endforeach ()
 
-add_definitions(-DUVENT_PIN_THREDS)
-
-add_library(uvent ${UVENT_SOURCES})
+add_library(uvent ${UVENT_SOURCES}
+        include/uvent/pool/TLS.h
+        src/pool/TLS.cpp
+        include/uvent/pool/TLSRegistry.h
+        src/pool/TLSRegistry.cpp
+        include/uvent/utils/datastructures/array/ConcurrentVector.h
+        include/uvent/utils/datastructures/array/ShardedConcurrentVector.h)
 add_library(usub::uvent ALIAS uvent)
 
 configure_package_config_file(
@@ -44,6 +51,11 @@ target_include_directories(uvent
         PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/uvent>
+)
+
+target_compile_definitions(uvent PUBLIC
+        $<$<BOOL:${UVENT_PIN_THREADS}>:UVENT_PIN_THREADS>
+        $<$<BOOL:${UVENT_ENABLE_REUSEADDR}>:UVENT_ENABLE_REUSEADDR>
 )
 
 foreach (header ${UVENT_HEADERS})
@@ -77,6 +89,8 @@ if (BUILD_MAIN)
         add_executable(uvent_asan_ubsan ${UVENT_SOURCES} examples/main.cpp)
         target_compile_definitions(uvent_asan_ubsan PRIVATE
                 $<$<CONFIG:Debug>:UVENT_DEBUG>
+                $<$<BOOL:${UVENT_PIN_THREADS}>:UVENT_PIN_THREADS>
+                $<$<BOOL:${UVENT_ENABLE_REUSEADDR}>:UVENT_ENABLE_REUSEADDR>
         )
         target_include_directories(uvent_asan_ubsan
                 PRIVATE
@@ -96,6 +110,8 @@ if (BUILD_MAIN)
         add_executable(uvent_tsan ${UVENT_SOURCES} examples/main.cpp)
         target_compile_definitions(uvent_tsan PRIVATE
                 $<$<CONFIG:Debug>:UVENT_DEBUG>
+                $<$<BOOL:${UVENT_PIN_THREADS}>:UVENT_PIN_THREADS>
+                $<$<BOOL:${UVENT_ENABLE_REUSEADDR}>:UVENT_ENABLE_REUSEADDR>
         )
         target_include_directories(uvent_tsan
                 PRIVATE
@@ -110,6 +126,8 @@ if (BUILD_MAIN)
             add_executable(uvent_msan_ubsan ${UVENT_SOURCES} examples/main.cpp)
             target_compile_definitions(uvent_msan_ubsan PRIVATE
                     $<$<CONFIG:Debug>:UVENT_DEBUG>
+                    $<$<BOOL:${UVENT_PIN_THREADS}>:UVENT_PIN_THREADS>
+                    $<$<BOOL:${UVENT_ENABLE_REUSEADDR}>:UVENT_ENABLE_REUSEADDR>
             )
             target_include_directories(uvent_msan_ubsan
                     PRIVATE
@@ -126,12 +144,16 @@ if (BUILD_MAIN)
             target_link_options(uvent_msan_ubsan PRIVATE
                     -fsanitize=memory,undefined
             )
-        endif()
-    endif()
+        endif ()
+    endif ()
 
     add_executable(uvent_exe ${UVENT_SOURCES} examples/main.cpp)
     target_compile_definitions(uvent_exe PRIVATE
             $<$<CONFIG:Debug>:UVENT_DEBUG>
+    )
+    target_compile_definitions(uvent_exe PUBLIC
+            $<$<BOOL:${UVENT_PIN_THREADS}>:UVENT_PIN_THREADS>
+            $<$<BOOL:${UVENT_ENABLE_REUSEADDR}>:UVENT_ENABLE_REUSEADDR>
     )
     target_include_directories(uvent_exe
             PRIVATE

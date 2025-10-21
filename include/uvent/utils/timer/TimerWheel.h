@@ -49,11 +49,13 @@ namespace usub::uvent::utils
         bool empty() const;
 
     public:
+#ifndef UVENT_ENABLE_REUSEADDR
         /**
          * \brief should be locked using lock-free method (e.g try_lock).
          * If it's locked then some thread checks timers.
          * */
         std::mutex mtx;
+#endif
 
     private:
         static timeout_t getCurrentTime();
@@ -92,10 +94,18 @@ namespace usub::uvent::utils
         std::vector<Wheel> wheels_;
         timeout_t currentTime_;
         std::unordered_map<uint64_t, Timer*> timerMap_;
+#ifndef UVENT_ENABLE_REUSEADDR
         std::atomic<uint64_t> timerIdCounter_{0};
+#else
+        uint64_t timerIdCounter_{0};
+#endif
         timeout_t nextExpiryTime_;
         size_t activeTimerCount_;
+#ifndef UVENT_ENABLE_REUSEADDR
         queue::concurrent::MPMCQueue<Op> timer_operations_queue;
+#else
+        queue::single_thread::Queue<Op> timer_operations_queue;
+#endif
         std::vector<Op> ops_;
     };
 }
