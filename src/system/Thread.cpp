@@ -114,8 +114,9 @@ namespace usub::uvent::system
                 local_wh->tick();
                 local_wh->mtx.unlock();
             }
-#endif
+#else
             local_wh->tick();
+#endif
             if (st->getSize() > 0)
             {
                 std::coroutine_handle<> task;
