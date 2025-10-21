@@ -13,10 +13,11 @@ Namespace: `usub::uvent::system::this_coroutine`
 ```cpp
 template <typename Rep, typename Period>
 task::Awaitable<void> sleep_for(const std::chrono::duration<Rep, Period>& duration);
-````
+```
 
 Suspends the current coroutine for the given duration using the internal `TimerWheel`.
-Unlike `std::this_thread::sleep_for`, it doesn’t block a thread — it simply parks the coroutine and resumes it once the timer expires.
+Unlike `std::this_thread::sleep_for`, it doesn’t block a thread — it simply parks the coroutine and resumes it once the
+timer expires.
 
 ### Example
 
@@ -164,10 +165,11 @@ system::spawn_timer(t);
 ## Summary
 
 | Function                          | Purpose                                              | Context          |
-| --------------------------------- | ---------------------------------------------------- | ---------------- |
+|-----------------------------------|------------------------------------------------------|------------------|
 | `sleep_for(duration)`             | Suspend coroutine for the specified time             | Coroutine        |
 | `co_spawn(f)`                     | Schedule coroutine in global task queue              | Runtime running  |
 | `co_spawn_static(f, threadIndex)` | Queue coroutine for a specific thread before startup | Pre-runtime      |
 | `spawn_timer(timer)`              | Register custom timer for execution                  | Timer management |
 
-These primitives form the low-level foundation of **uvent’s coroutine runtime**, allowing safe, event-driven execution and timed suspension within the thread pool.
+These primitives form the low-level foundation of **uvent’s coroutine runtime**, allowing safe, event-driven execution
+and timed suspension within the thread pool.

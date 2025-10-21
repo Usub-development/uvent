@@ -70,7 +70,7 @@ struct deferred_task_tag {}; // marks deferred-start frames
 template<class F>
 concept DeferredFrame =
     std::derived_from<std::remove_cvref_t<F>, deferred_task_tag>;
-````
+```
 
 Frames **that inherit** from `deferred_task_tag` are **deferred coroutines** —
 they **do not start immediately** and instead wait for an **external trigger** (like `epoll`, `TimerWheel`, or another

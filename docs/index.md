@@ -8,12 +8,13 @@ High-performance asynchronous I/O library for C++23.
 
 ## Features
 
-- **C++23**: modern standard with coroutines and atomic primitives.  
-- **Event loop**: non-blocking, scalable, based on `epoll/kqueue`.  
-- **Sockets**: TCP/UDP (client and server).  
-- **Timers**: custom `TimerWheel` with minimal overhead.  
-- **Queues & synchronization**: lock-free data structures, QSBR, and reference counting.  
-- **Custom frames**: ability to override coroutine promise frames (`AwaitableFrameBase`), enabling custom scheduling and integration.  
+- **C++23**: modern standard with coroutines and atomic primitives.
+- **Event loop**: non-blocking, scalable, based on `epoll/kqueue`.
+- **Sockets**: TCP/UDP (client and server).
+- **Timers**: custom `TimerWheel` with minimal overhead.
+- **Queues & synchronization**: lock-free data structures, QSBR, and reference counting.
+- **Custom frames**: ability to override coroutine promise frames (`AwaitableFrameBase`), enabling custom scheduling and
+  integration.
 - **SO_REUSEPORT support**: enables truly parallel TCP servers by binding separate listeners in each worker thread.
 
 ---
@@ -26,7 +27,7 @@ cd uvent
 mkdir build && cd build
 cmake ..
 make -j
-````
+```
 
 ---
 
@@ -152,6 +153,7 @@ int main()
   each thread can bind its own listener socket via `for_each_thread`, providing optimal load balancing across cores.
   This pattern is preferred for high-connection-rate servers.
 
-* Without `SO_REUSEPORT`, a single global listener is used — still asynchronous and non-blocking, but accepts connections sequentially.
+* Without `SO_REUSEPORT`, a single global listener is used — still asynchronous and non-blocking, but accepts
+  connections sequentially.
 
 * Both modes are fully coroutine-driven and compatible with the same I/O APIs.
