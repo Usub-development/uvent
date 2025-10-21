@@ -8,15 +8,17 @@
 
 namespace usub::uvent::system
 {
-    Thread::Thread(std::barrier<>* barrier, int index, ThreadLaunchMode tlm)
+    Thread::Thread(std::barrier<>* barrier, int index, thread::ThreadLocalStorage* thread_local_storage, ThreadLaunchMode tlm)
         : barrier(barrier), index_(
-              index), tlm(tlm)
+              index), thread_local_storage_(thread_local_storage), tlm(tlm)
     {
 #if UVENT_DEBUG
         spdlog::info("Thread #{} started", index);
 #endif
         this_thread::detail::t_id = this->index_;
         this->tmp_tasks_.resize(settings::max_pre_allocated_tasks_items);
+        this->tmp_sockets_.resize(settings::max_pre_allocated_tmp_sockets_items);
+        this->tmp_coroutines_.resize(settings::max_pre_allocated_tmp_coroutines_items);
         if (tlm == NEW)
             this->thread_ = std::jthread(
                 [this](std::stop_token token) { this->threadFunction(token); });
@@ -25,6 +27,16 @@ namespace usub::uvent::system
 
     void Thread::threadFunction(std::stop_token& token)
     {
+        this->processInboxQueue();
+        auto& local_pl = system::this_thread::detail::pl;
+        auto& local_wh = system::this_thread::detail::wh;
+        auto& local_q = system::this_thread::detail::q;
+        auto& local_q_c = system::this_thread::detail::q_c;
+#ifndef UVENT_ENABLE_REUSEADDR
+        auto& local_g_qsbr = system::this_thread::detail::g_qsbr;
+#else
+        auto& local_q_sh = system::this_thread::detail::q_sh;
+#endif
 #if defined(OS_LINUX) && defined(UVENT_PIN_THREADS)
         pthread_t self = pthread_self();
         pin_thread_to_core(this->index_);
@@ -33,34 +45,45 @@ namespace usub::uvent::system
         usub::utils::HighPerfTimer highPerfTimer;
         this->barrier->arrive_and_wait();
         using namespace system::this_thread::detail;
-        usub::uvent::system::this_thread::detail::g_qsbr.attach_current_thread();
+#ifndef UVENT_ENABLE_REUSEADDR
+        local_g_qsbr.attach_current_thread();
+#endif
         while (!token.stop_requested())
         {
-            if (pl->try_lock())
+#ifndef UVENT_ENABLE_REUSEADDR
+            if (local_pl->try_lock())
             {
-                auto next_timeout = wh->getNextTimeout();
-                pl->poll((q->empty() && utils::detail::thread::is_started.load(std::memory_order_relaxed))
+                auto next_timeout = local_wh->getNextTimeout();
+                local_pl->poll((local_q->empty() && system::this_thread::detail::is_started.load(std::memory_order_relaxed))
                              ? (next_timeout > 0)
                                    ? next_timeout
                                    : 5000
                              : 0);
-                pl->unlock();
+                local_pl->unlock();
             }
-            else if (q->empty() && q_c->empty())
+            else if (local_q->empty() && local_q_c->empty())
             {
-                auto next_timeout = wh->getNextTimeout();
-                pl->lock_poll((q->empty() && utils::detail::thread::is_started.load(std::memory_order_relaxed))
+                auto next_timeout = local_wh->getNextTimeout();
+                local_pl->lock_poll((local_q->empty() && system::this_thread::detail::is_started.load(std::memory_order_relaxed))
                                   ? (next_timeout > 0)
                                         ? next_timeout
                                         : 5000
                                   : 0);
             }
+#else
+            auto next_timeout = local_wh->getNextTimeout();
+            local_pl->poll((local_q->empty() && system::this_thread::detail::is_started)
+                               ? (next_timeout > 0)
+                                     ? next_timeout
+                                     : 5000
+                               : 0);
+#endif
             highPerfTimer.reset();
-            while (!q->empty())
+            while (!local_q->empty())
             {
                 if (highPerfTimer.elapsed_ms() >= 291) break;
 
-                const size_t n = system::this_thread::detail::q->dequeue_bulk(
+                const size_t n = local_q->dequeue_bulk(
                     this->tmp_tasks_.data(), this->tmp_tasks_.size());
                 if (n == 0) break;
                 for (size_t i = 0; i < n; ++i)
@@ -85,31 +108,52 @@ namespace usub::uvent::system
                     }
                 }
             }
-            if (wh->mtx.try_lock())
+#ifndef UVENT_ENABLE_REUSEADDR
+            if (local_wh->mtx.try_lock())
             {
-                wh->tick();
-                wh->mtx.unlock();
+                local_wh->tick();
+                local_wh->mtx.unlock();
             }
+#endif
+            local_wh->tick();
             if (st->getSize() > 0)
             {
                 std::coroutine_handle<> task;
-                if (st->dequeue(task)) q->enqueue(task);
+                if (st->dequeue(task)) local_q->enqueue(task);
             }
-            highPerfTimer.reset();
-            std::coroutine_handle<> c;
-            while (q_c->dequeue(c))
+            const size_t n_coroutines = local_q_c->dequeue_bulk(this->tmp_coroutines_.data(),
+                                                                this->tmp_coroutines_.size());
+            for (size_t i = 0; i < n_coroutines; i++)
             {
-                if (highPerfTimer.elapsed_ms() >= 100) break;
                 auto c_temp = std::coroutine_handle<detail::AwaitableFrameBase>::from_address(
-                    c.address());
+                    this->tmp_coroutines_[i].address());
 #ifdef UVENT_DEBUG
-                spdlog::info("Coroutine destroyed in auxiliary loop: {}", c.address());
+                spdlog::info("Coroutine destroyed in auxiliary loop: {}", this->tmp_coroutines_[i].address());
 #endif
                 c_temp.destroy();
             }
-            usub::uvent::system::this_thread::detail::g_qsbr.quiesce_tick();
+#ifndef UVENT_ENABLE_REUSEADDR
+            local_g_qsbr.quiesce_tick();
+#else
+            const size_t n_sockets = local_q_sh->dequeue_bulk(
+                this->tmp_sockets_.data(), this->tmp_sockets_.size());
+            for (size_t i = 0; i < n_sockets; ++i)
+                delete this->tmp_sockets_[i];
+#endif
         }
-        usub::uvent::system::this_thread::detail::g_qsbr.detach_current_thread();
+#ifndef UVENT_ENABLE_REUSEADDR
+        local_g_qsbr.detach_current_thread();
+#endif
+    }
+
+    void Thread::processInboxQueue()
+    {
+        if (this->thread_local_storage_->is_added_new_.load(std::memory_order_acquire))
+        {
+            std::coroutine_handle<> tmp_coroutine;
+            while (this->thread_local_storage_->inbox_q_.try_dequeue(tmp_coroutine)) system::this_thread::detail::q->enqueue(tmp_coroutine);
+        }
+        this->thread_local_storage_->is_added_new_.store(false, std::memory_order_seq_cst);
     }
 
     bool Thread::stop()

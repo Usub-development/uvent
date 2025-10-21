@@ -11,11 +11,11 @@ namespace usub::uvent::utils::socket {
                               (socType == net::SocketAddressType::TCP) ? SOCK_STREAM : SOCK_DGRAM, 0);
         if (soc_fd < 0) throw std::system_error(errno, std::generic_category(), "socket()");
 
+#ifdef UVENT_ENABLE_REUSEADDR
         int reuse = 1;
         if (setsockopt(soc_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
             throw std::system_error(errno, std::generic_category(), "setsockopt(SO_REUSEADDR)");
 
-#ifdef SO_REUSEPORT
         if (setsockopt(soc_fd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse)) < 0)
             throw std::system_error(errno, std::generic_category(), "setsockopt(SO_REUSEPORT)");
 #endif

@@ -12,15 +12,21 @@ namespace usub::uvent::utils
     {
     }
 
-    void Timer::addFunction(std::function<void(void*)>& function, void* functionValue)
+    void Timer::addFunction(std::function<void(std::any&)> f, std::any arg)
     {
-        auto aw = timeout_coroutine(std::move(function), functionValue);
+        auto aw = timeout_coroutine(std::move(f), arg);
         this->coro = aw.get_promise()->get_coroutine_handle();
     }
 
-    void Timer::addFunction(std::function<void(void*)>&& function, void* functionValue)
+    void Timer::addFunction(std::function<void(std::any&)> f, std::any& arg)
     {
-        auto aw = timeout_coroutine(std::move(function), functionValue);
+        auto aw = timeout_coroutine(std::move(f), arg);
         this->coro = aw.get_promise()->get_coroutine_handle();
+    }
+
+    void Timer::bind(std::coroutine_handle<> h) noexcept
+    {
+        this->coro = h;
+        this->active = true;
     }
 }

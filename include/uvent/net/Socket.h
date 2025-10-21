@@ -21,7 +21,7 @@ namespace usub::uvent::net
 {
     namespace detail
     {
-        extern void processSocketTimeout(void* ptr);
+        extern void processSocketTimeout(std::any arg);
     }
 
     template <Proto p, Role r>
@@ -30,7 +30,7 @@ namespace usub::uvent::net
     public:
         friend class usub::utils::sync::refc::RefCounted<Socket<p, r>>;
         friend class core::EPoller;
-        friend void detail::processSocketTimeout(void* ptr);
+        friend void detail::processSocketTimeout(std::any arg);
 
         /**
          * \brief Default constructor.
@@ -396,8 +396,9 @@ namespace usub::uvent::net
                 co_return (this->is_disconnected_now()) ? -3 : -2;
             }
         }
-
+#ifndef UVENT_ENABLE_REUSEADDR
         if (total_read > 0) this->header_->timeout_epoch_bump();
+#endif
         co_return total_read;
     }
 
@@ -458,7 +459,9 @@ namespace usub::uvent::net
             }
         }
 
+#ifndef UVENT_ENABLE_REUSEADDR
         if (total_written > 0) this->header_->timeout_epoch_bump();
+#endif
         co_return total_written;
     }
 
@@ -762,6 +765,7 @@ namespace usub::uvent::net
     template <Proto p, Role r>
     void Socket<p, r>::set_timeout_ms(timeout_t timeout) const requires (p == Proto::TCP && r == Role::ACTIVE)
     {
+#ifndef UVENT_ENABLE_REUSEADDR
         {
             uint64_t s = this->header_->state.load(std::memory_order_relaxed);
             for (;;)
@@ -778,6 +782,24 @@ namespace usub::uvent::net
                 cpu_relax();
             }
         }
+#else
+        {
+            uint64_t& st = this->header_->state;
+
+            if ((st & usub::utils::sync::refc::CLOSED_MASK) == 0)
+            {
+                const uint64_t cnt = st & usub::utils::sync::refc::COUNT_MASK;
+                if (cnt != usub::utils::sync::refc::COUNT_MASK)
+                {
+                    st = (st & ~usub::utils::sync::refc::COUNT_MASK)
+                        | ((cnt + 1) & usub::utils::sync::refc::COUNT_MASK);
+                }
+            }
+        }
+#endif
+#if UVENT_DEBUG
+        spdlog::debug("set_timeout_ms: {}", this->header_->get_counter());
+#endif
         auto* timer = new utils::Timer(timeout, utils::TIMEOUT);
         timer->addFunction(detail::processSocketTimeout, this->header_);
         this->header_->timer_id = system::this_thread::detail::wh->addTimer(timer);
@@ -789,7 +811,11 @@ namespace usub::uvent::net
         this->header_->close_for_new_refs();
         system::this_thread::detail::pl->removeEvent(this->header_,
                                                      core::OperationType::ALL);
+#ifndef UVENT_ENABLE_REUSEADDR
         system::this_thread::detail::g_qsbr.retire(static_cast<void*>(this->header_), &delete_header);
+#else
+        system::this_thread::detail::q_sh->enqueue(this->header_);
+#endif
     }
 
     template <Proto p, Role r>
