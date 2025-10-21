@@ -21,8 +21,6 @@ foreach (header ${UVENT_HEADERS})
     endif ()
 endforeach ()
 
-add_definitions(-DUVENT_PIN_THREADS)
-
 add_library(uvent ${UVENT_SOURCES}
         include/uvent/pool/TLS.h
         src/pool/TLS.cpp
@@ -91,7 +89,7 @@ if (BUILD_MAIN)
         add_executable(uvent_asan_ubsan ${UVENT_SOURCES} examples/main.cpp)
         target_compile_definitions(uvent_asan_ubsan PRIVATE
                 $<$<CONFIG:Debug>:UVENT_DEBUG>
-                $<$<BOOL:${UVENT_PIN_THREADS}>:UVENT_PIN_THREADS
+                $<$<BOOL:${UVENT_PIN_THREADS}>:UVENT_PIN_THREADS>
                 $<$<BOOL:${UVENT_ENABLE_REUSEADDR}>:UVENT_ENABLE_REUSEADDR>
         )
         target_include_directories(uvent_asan_ubsan
@@ -112,7 +110,7 @@ if (BUILD_MAIN)
         add_executable(uvent_tsan ${UVENT_SOURCES} examples/main.cpp)
         target_compile_definitions(uvent_tsan PRIVATE
                 $<$<CONFIG:Debug>:UVENT_DEBUG>
-                $<$<BOOL:${UVENT_PIN_THREADS}>:UVENT_PIN_THREADS
+                $<$<BOOL:${UVENT_PIN_THREADS}>:UVENT_PIN_THREADS>
                 $<$<BOOL:${UVENT_ENABLE_REUSEADDR}>:UVENT_ENABLE_REUSEADDR>
         )
         target_include_directories(uvent_tsan
@@ -128,7 +126,7 @@ if (BUILD_MAIN)
             add_executable(uvent_msan_ubsan ${UVENT_SOURCES} examples/main.cpp)
             target_compile_definitions(uvent_msan_ubsan PRIVATE
                     $<$<CONFIG:Debug>:UVENT_DEBUG>
-                    $<$<BOOL:${UVENT_PIN_THREADS}>:UVENT_PIN_THREADS
+                    $<$<BOOL:${UVENT_PIN_THREADS}>:UVENT_PIN_THREADS>
                     $<$<BOOL:${UVENT_ENABLE_REUSEADDR}>:UVENT_ENABLE_REUSEADDR>
             )
             target_include_directories(uvent_msan_ubsan
@@ -154,7 +152,7 @@ if (BUILD_MAIN)
             $<$<CONFIG:Debug>:UVENT_DEBUG>
     )
     target_compile_definitions(uvent_exe PUBLIC
-            $<$<BOOL:${UVENT_PIN_THREADS}>:UVENT_PIN_THREADS
+            $<$<BOOL:${UVENT_PIN_THREADS}>:UVENT_PIN_THREADS>
             $<$<BOOL:${UVENT_ENABLE_REUSEADDR}>:UVENT_ENABLE_REUSEADDR>
     )
     target_include_directories(uvent_exe
