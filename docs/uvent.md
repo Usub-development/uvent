@@ -13,6 +13,10 @@ namespace usub {
   public:
       explicit Uvent(int threadCount);
 
+      // Iterate over all worker threads before run()
+      template <class F>
+      void for_each_thread(F&& fn);
+
       void run();
       void stop();
 
@@ -22,46 +26,67 @@ namespace usub {
 }
 ```
 
-* **Constructor**
+### Constructor
 
-  ```cpp
-  explicit Uvent(int threadCount);
-  ```
+```cpp
+explicit Uvent(int threadCount);
+```
 
-  Creates a runtime with the given number of worker threads.
-  Each thread runs the poller, timer wheel, and shared task queue.
+Creates a runtime with the given number of worker threads.
 
-* **run()**
+### for_each_thread
 
-  ```cpp
-  void run();
-  ```
+```cpp
+template <class F>
+void for_each_thread(F&& fn);
+```
 
-  Starts the runtime: worker threads are launched, the event loop is entered, and scheduled coroutines begin executing.
-  This call blocks until `stop()` is invoked.
+Invokes `fn(threadIndex, thread::ThreadLocalStorage* tls)` for every worker **before** the event loop starts.
+Use it to pre-register per-thread work (e.g., inbox tasks via `co_spawn_static`), initialize TLS, pin resources, etc.
 
-* **stop()**
+### run
 
-  ```cpp
-  void stop();
-  ```
+```cpp
+void run();
+```
 
-  Signals the runtime to shut down gracefully.
-  Worker threads exit the event loop, the thread pool joins, and resources are released.
+Starts the runtime; blocks until `stop()`.
+
+### stop
+
+```cpp
+void stop();
+```
+
+Signals a graceful shutdown.
 
 ---
 
-## Usage Example
+## Usage Examples
+
+### Global scheduling (simple)
 
 ```cpp
 int main() {
-    // create runtime with 4 threads
+    usub::Uvent uvent(4);
+    system::co_spawn(my_server());   // global queue
+    uvent.run();
+}
+```
+
+### Per-thread scheduling (pre-start)
+
+```cpp
+task::Awaitable<void> listeningCoro();
+
+int main() {
     usub::Uvent uvent(4);
 
-    // schedule some coroutine(s)
-    system::co_spawn(my_server());
+    uvent.for_each_thread([&](int threadIndex, thread::ThreadLocalStorage* tls) {
+        // enqueue to a specific thread inbox before the loop starts
+        system::co_spawn_static(listeningCoro(), threadIndex);
+    });
 
-    // start event loop (blocks until stop() is called)
     uvent.run();
 }
 ```
@@ -70,6 +95,6 @@ int main() {
 
 ## Notes
 
-* `Uvent` must exist for the lifetime of scheduled coroutines.
-* Always use `co_spawn` to enqueue work into the runtime before calling `run()`.
-* `stop()` can be called from inside a coroutine or from external control logic to terminate the loop.
+* Call `for_each_thread` **only before** `run()`.
+* Use `co_spawn_static` inside `for_each_thread` to target a specific thread; use `co_spawn` for global scheduling after startup.
+* `Uvent` must outlive all scheduled coroutines.

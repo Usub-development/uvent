@@ -32,7 +32,7 @@ It manages coroutine lifecycle and linking logic:
 
 ---
 
-## AwaitableFrame\<T\>
+## AwaitableFrame<T>
 
 Default coroutine frame for value-returning coroutines.
 
@@ -51,7 +51,7 @@ This is the default frame used by `task::Awaitable<T>`.
 
 ---
 
-## AwaitableFrame\<void\>
+## AwaitableFrame<void>
 
 Specialization for coroutines returning `void`.  
 Same semantics, but without value storage.
