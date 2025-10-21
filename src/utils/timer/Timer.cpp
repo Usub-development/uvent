@@ -23,4 +23,10 @@ namespace usub::uvent::utils
         auto aw = timeout_coroutine(std::move(f), arg);
         this->coro = aw.get_promise()->get_coroutine_handle();
     }
+
+    void Timer::bind(std::coroutine_handle<> h) noexcept
+    {
+        this->coro = h;
+        this->active = true;
+    }
 }

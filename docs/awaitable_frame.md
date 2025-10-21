@@ -1,140 +1,196 @@
 # Awaitable Frame
 
-Coroutines in **uvent** are built on top of a small set of frame types that act as the *promise object* for each coroutine. They store state, results, and connect coroutines together inside the event loop.
+Coroutines in **uvent** are structured around a hierarchy of **frames** — the internal “promise” objects that manage
+coroutine state, suspension, and chaining in the event loop.
+
+---
+
+## Overview
+
+Each coroutine in `uvent` consists of:
+
+- A **frame** (`AwaitableFrame<T>`, `AwaitableIOFrame<T>`, etc.) — manages execution state, results, exceptions, and
+  links to other coroutines.
+- An **Awaitable handle** (`task::Awaitable<T, FrameType>`) — the user-facing object returned from coroutine functions.
+
+This split allows **precise control** over coroutine start behavior — whether it begins immediately or waits for an
+external trigger.
 
 ---
 
 ## AwaitableFrameBase
 
-`AwaitableFrameBase` is the common base for all coroutine frames.
+`AwaitableFrameBase` is the foundation for all coroutine frames.  
+It manages coroutine lifecycle and linking logic:
 
-It is responsible for:
-
-- Storing the coroutine handle (`coro_`) and links to previous/next coroutines in a chain.
-- Managing exceptions (`exception_`) thrown inside the coroutine.
-- Tracking whether the coroutine is currently awaited (`is_awaited`, `set_awaited`, `unset_awaited`).
-- Resuming execution (`resume()`) and scheduling destruction (`push_frame_to_be_destroyed`).
-- Linking calling and next coroutines (`set_calling_coroutine`, `set_next_coroutine`).
-
-In short: this base type is the glue that lets coroutines suspend/resume properly in the runtime.
+- Holds coroutine handles (`coro_`, `prev_`, `next_`).
+- Manages exception propagation (`exception_`).
+- Tracks whether coroutine is awaited (`is_awaited`, `set_awaited`, `unset_awaited`).
+- Provides resumption (`resume()`).
+- Handles destruction scheduling (`push_frame_to_be_destroyed`).
+- Connects caller and callee coroutines (`set_calling_coroutine`, `set_next_coroutine`).
 
 ---
 
 ## AwaitableFrame\<T\>
 
-`AwaitableFrame<T>` extends the base with storage for a **return value of type T**.  
-It provides:
+Default coroutine frame for value-returning coroutines.
 
-- `return_value(T value)` — store the final result.
-- `yield_value(T value)` — yield intermediate values.
-- `get()` — extract the result (or rethrow exception).
-- `get_return_object()` — builds an `Awaitable<T>` handle bound to this frame.
+- Stores return value (`T`).
+- Extracts result via `get()`.
+- Uses `std::suspend_always` in `initial_suspend()` — **starts immediately**, queued into runtime task system.
+- Exception-safe via `unhandled_exception()` and `get()`.
 
-Lifecycle hooks:
+Lifecycle:
 
-- `initial_suspend()` — coroutine always suspends at start.
-- `final_suspend()` — suspends at the end, ensures awaiting coroutine is resumed and the frame is cleaned up.
-- `unhandled_exception()` — stores exception into the frame.
+- `initial_suspend()` → coroutine suspends once, then the runtime queues it for execution.
+- `final_suspend()` → resumes awaiting coroutine and schedules destruction.
+- `yield_value()` → allows mid-coroutine value emission.
 
-This is the standard frame type used for user-level coroutines returning a value.
+This is the default frame used by `task::Awaitable<T>`.
 
 ---
 
 ## AwaitableFrame\<void\>
 
-Specialization for coroutines that return `void`.  
-Same as `AwaitableFrame<T>`, but with `return_void()` instead of `return_value()`.
+Specialization for coroutines returning `void`.  
+Same semantics, but without value storage.
 
 ---
 
-## Why do we need frames?
+## Deferred vs Instant Execution
 
-C++ coroutines require a **promise type** that manages the coroutine’s lifecycle and results.  
-In uvent:
+`uvent` introduces **execution policy at type level**, using a simple tag system.
 
-- `AwaitableFrameBase` defines the common mechanics.
-- `AwaitableFrame<T>` and `AwaitableFrame<void>` implement concrete promise types.
-- `task::Awaitable` is the handle that user code sees, which internally wraps the frame.
+### Tag mechanism
 
-This separation allows:
+```cpp
+struct deferred_task_tag {}; // marks deferred-start frames
 
-- Consistent scheduling (every coroutine frame can push itself into the task queue).
-- Reference-counted lifetime management.
-- Exception-safe propagation.
-- Interoperability: frames can be resumed, chained, and destroyed by the runtime without leaking resources.
+template<class F>
+concept DeferredFrame =
+    std::derived_from<std::remove_cvref_t<F>, deferred_task_tag>;
+````
+
+Frames **that inherit** from `deferred_task_tag` are **deferred coroutines** —
+they **do not start immediately** and instead wait for an **external trigger** (like `epoll`, `TimerWheel`, or another
+subsystem).
+
+Frames **that don’t inherit** start automatically once awaited — they are **instant coroutines**.
+
+| Frame type            | Trait               | Behavior                                       |
+|-----------------------|---------------------|------------------------------------------------|
+| `AwaitableFrame<T>`   | —                   | Starts immediately (queued to run)             |
+| `AwaitableIOFrame<T>` | `deferred_task_tag` | Deferred — runs only when externally triggered |
 
 ---
 
-## Custom frames
+## AwaitableIOFrame<T>
+
+Special coroutine frame for **I/O-bound or event-driven** operations.
+It inherits from `deferred_task_tag`, making it **lazy-start** — it doesn’t run until the poller or timer activates it.
+
+Key points:
+
+* `initial_suspend()` → `std::suspend_never`, coroutine body is prepared but execution waits for an external event.
+* Typically used for `async_read`, `async_write`, `async_connect`, etc.
+* Execution resumes only when triggered by the runtime (poller, timer, or another coroutine).
+
+This design ensures that I/O coroutines aren’t executed prematurely and stay synchronized with system-level events.
+
+---
+
+## Scheduling Behavior
+
+During `co_await some_task()`:
+
+* If the awaited frame **is not deferred** — coroutine is queued right away (`push_frame_into_task_queue`).
+* If it **inherits `deferred_task_tag`** — coroutine **is parked**, and will only resume when triggered externally.
+
+Thus, **deferred frames = passive tasks**, **non-deferred = active tasks**.
+
+---
 
 ## Custom Frames
 
-You can plug your own promise/frame type into `task::Awaitable` — just **inherit from `AwaitableFrameBase`** and keep the minimal contract. This lets you tailor scheduling (e.g., start immediately vs. park first), result storage, or cleanup policy.
+You can define your own coroutine frame and choose how it behaves — instant or deferred — simply by inheriting (or not)
+from `deferred_task_tag`.
 
-### Minimal contract
-Your frame must:
-- derive from `AwaitableFrameBase`;
-- define `initial_suspend()` and `final_suspend()` (decide when to run and how to resume caller);
-- implement `get_return_object()` that returns `task::Awaitable<T, YourFrame>` and stores `coro_`;
-- provide `return_value(T)` / `return_void()`;
-- provide `get()` (and rethrow `exception_` if set);
-- implement `unhandled_exception()` (store to `exception_`);
-- at the end of `final_suspend()` call `push_frame_to_be_destroyed()` and **unset** the caller’s `awaited` flag (via `prev_`), optionally re-enqueue the caller using `push_frame_into_task_queue`.
+### Example: instant-start frame
 
-### Skeleton (value-returning)
 ```cpp
-struct MyIntFrame : usub::uvent::detail::AwaitableFrameBase {
-    bool has_ = false;
-    alignas(int) unsigned char storage_[sizeof(int)]{};
+struct MyInstantFrame : usub::uvent::detail::AwaitableFrameBase {
+  std::suspend_always initial_suspend() noexcept { return {}; } // queued immediately
+  std::suspend_always final_suspend() noexcept { push_frame_to_be_destroyed(); return {}; }
+  void unhandled_exception() { exception_ = std::current_exception(); }
+  void return_void() {}
 
-    // start parked (change to suspend_never for "fire-and-run")
-    std::suspend_always initial_suspend() noexcept { return {}; }
-
-    // resume caller, then schedule destruction
-    std::suspend_always final_suspend() noexcept {
-        if (prev_) {
-            auto caller = std::coroutine_handle<AwaitableFrameBase>::from_address(prev_.address());
-            caller.promise().unset_awaited();
-            // Optionally requeue caller on current thread’s task queue:
-            // push_frame_into_task_queue(static_cast<std::coroutine_handle<>>(caller));
-            prev_ = nullptr;
-        }
-        push_frame_to_be_destroyed();
-        return {};
-    }
-
-    void unhandled_exception() { exception_ = std::current_exception(); }
-
-    void return_value(int v) {
-        new (&storage_) int(std::move(v));
-        has_ = true;
-    }
-
-    int get() {
-        if (exception_) std::rethrow_exception(exception_);
-        return std::move(*std::launder(reinterpret_cast<int*>(&storage_)));
-    }
-
-    auto get_return_object() {
-        coro_ = std::coroutine_handle<MyIntFrame>::from_promise(*this);
-        // Bind this frame type to Awaitable<int, MyIntFrame>
-        return task::Awaitable<int, MyIntFrame>{this};
-    }
-
-    ~MyIntFrame() {
-        if (has_) std::launder(reinterpret_cast<int*>(&storage_))->~int();
-    }
+  auto get_return_object() {
+    coro_ = std::coroutine_handle<MyInstantFrame>::from_promise(*this);
+    return task::Awaitable<void, MyInstantFrame>{this};
+  }
 };
 ```
 
-## Using it
+### Example: deferred frame
+
 ```cpp
-task::Awaitable<int, MyIntFrame> compute() {
-    co_return 7;
+struct MyDeferredFrame : usub::uvent::detail::AwaitableFrameBase,
+                         usub::uvent::detail::deferred_task_tag {
+  std::suspend_never initial_suspend() noexcept { return {}; } // deferred: no auto-run
+  std::suspend_always final_suspend() noexcept { push_frame_to_be_destroyed(); return {}; }
+  void unhandled_exception() { exception_ = std::current_exception(); }
+  void return_void() {}
+
+  auto get_return_object() {
+    coro_ = std::coroutine_handle<MyDeferredFrame>::from_promise(*this);
+    return task::Awaitable<void, MyDeferredFrame>{this};
+  }
+};
+```
+
+### Example usage
+
+```cpp
+task::Awaitable<void, MyInstantFrame> active_task() {
+    std::cout << "Runs immediately" << std::endl;
+    co_return;
 }
 
-task::Awaitable<void> use_it() {
-int v = co_await compute(); // works with custom frame
-    // ...
+task::Awaitable<void, MyDeferredFrame> passive_task() {
+    std::cout << "Will only run after external trigger" << std::endl;
+    co_return;
 }
+
+task::Awaitable<void> main_coro() {
+    co_await active_task();   // executes now
+    co_await passive_task();  // waits for runtime signal
+}
+```
+
+---
+
+## Typical Use Cases
+
+| Frame Type                   | Start Policy | Common Usage                                     | Description                                                                                                |
+|------------------------------|--------------|--------------------------------------------------|------------------------------------------------------------------------------------------------------------|
+| `AwaitableFrame<T>`          | **Instant**  | Compute tasks, coroutine pipelines, async chains | Default frame — starts as soon as awaited and queued in thread’s task system.                              |
+| `AwaitableIOFrame<T>`        | **Deferred** | Sockets, timers, poll-based waits                | Used by all system-level async operations (`async_read`, `async_write`, etc.) that rely on `epoll/kqueue`. |
+| Custom + `deferred_task_tag` | **Deferred** | Custom I/O or event subsystems                   | Extendable for domain-specific triggers (GPU jobs, message queues, RPC dispatchers).                       |
+| Custom (no tag)              | **Instant**  | Background compute, scheduler workers            | For immediate task launch within runtime queues.                                                           |
+
+---
+
+## Summary
+
+* **AwaitableFrameBase** — core coroutine control block.
+* **AwaitableFrame<T>** — standard, instant coroutine frame.
+* **AwaitableIOFrame<T>** — deferred, externally triggered coroutine frame.
+* **deferred_task_tag** — compile-time marker that enables lazy-start behavior.
+* **DeferredFrame** concept — used internally to detect frame behavior at compile time.
+
+This makes **uvent’s coroutine system both type-safe and policy-driven**:
+you can decide whether a coroutine should **start instantly or wait for an external trigger**, without any runtime
+checks or extra branching.
+
 ```
