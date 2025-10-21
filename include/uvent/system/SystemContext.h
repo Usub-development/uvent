@@ -15,9 +15,14 @@
 #include "uvent/utils/sync/QSBR.h"
 #include "uvent/poll/PollerBase.h"
 #include "uvent/base/Predefines.h"
+#include <uvent/pool/TLSRegistry.h>
 
 namespace usub::uvent::system
 {
+    namespace global::detail
+    {
+        inline std::unique_ptr<thread::TLSRegistry> tls_registry{nullptr};
+    }
     /// \brief Variables used internally within the system.
     /// \attention **Do not attempt to modify variables inside directly** unless explicitly instructed in the documentation.
     namespace this_thread::detail
@@ -47,6 +52,12 @@ namespace usub::uvent::system
 #else
         /// \brief Sockets to be destroyed
         thread_local extern std::unique_ptr<queue::single_thread::Queue<net::SocketHeader*>> q_sh;
+#endif
+
+#ifndef UVENT_ENABLE_REUSEADDR
+        extern std::atomic<bool> is_started;
+#else
+        extern bool is_started;
 #endif
     }
 
@@ -88,6 +99,31 @@ namespace usub::uvent::system
     {
         auto promise = f.get_promise();
         if (promise) this_thread::detail::st->enqueue(promise->get_coroutine_handle());
+    }
+
+    /**
+     * @brief Spawns a coroutine for execution in the global thread context.
+     *
+     * Retrieves the coroutine promise from the given function object and, if valid,
+     * enqueues its coroutine handle into the global task queue.
+     *
+     * @tparam F Coroutine function type providing `get_promise()`.
+     * @param f Coroutine function to be spawned.
+     *
+     * @warning Method doesn't check if the coroutine is valid beyond `get_promise()`.
+     *          Ensure the coroutine object remains valid until scheduled.
+     */
+    template <typename F>
+    void co_spawn_static(F&& f, int threadIndex)
+    {
+        if (!system::this_thread::detail::is_started)
+        {
+            auto promise = f.get_promise();
+            if (promise) global::detail::tls_registry->getStorage(threadIndex)->push_task_inbox(promise->get_coroutine_handle());
+        } else
+        {
+            throw std::runtime_error("co_spawn_static: uvent already started. use co_spawn instead.");
+        }
     }
 
     /**

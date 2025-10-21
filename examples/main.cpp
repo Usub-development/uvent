@@ -6,7 +6,6 @@
 using namespace usub::uvent;
 
 task::Awaitable<void> clientCoro(net::TCPClientSocket socket) {
-    spdlog::debug("socket counter in coroutine #1: {}", socket.get_raw_header()->get_counter());
     static constexpr size_t max_read_size = 64 * 1024;
     utils::DynamicBuffer buffer;
     buffer.reserve(max_read_size);
@@ -18,14 +17,10 @@ task::Awaitable<void> clientCoro(net::TCPClientSocket socket) {
             "\r\n"
             "{\"status\":\"success\"}";
 
-    spdlog::debug("socket counter in coroutine #2: {}", socket.get_raw_header()->get_counter());
     socket.set_timeout_ms(5000);
-    spdlog::debug("socket counter in coroutine #3: {}", socket.get_raw_header()->get_counter());
     while (true) {
         buffer.clear();
-        spdlog::debug("socket counter in coroutine #4: {}", socket.get_raw_header()->get_counter());
         ssize_t rdsz = co_await socket.async_read(buffer, max_read_size);
-        spdlog::debug("socket counter in coroutine #5: {}", socket.get_raw_header()->get_counter());
         socket.update_timeout(5000);
 #ifdef UVENT_DEBUG
         spdlog::info("Read size: {}", rdsz);
@@ -37,16 +32,13 @@ task::Awaitable<void> clientCoro(net::TCPClientSocket socket) {
             spdlog::info("Client disconnected");
 #endif
             socket.shutdown();
-            spdlog::debug("socket counter in coroutine #6: {}", socket.get_raw_header()->get_counter());
             break;
         }
-        spdlog::debug("socket counter in coroutine #7: {}", socket.get_raw_header()->get_counter());
         auto buf = std::make_unique<uint8_t[]>(1024);
         size_t wrsz = co_await socket.async_write(
                 const_cast<uint8_t *>(reinterpret_cast<const uint8_t *>(httpResponse.data())),
                 httpResponse.size()
         );
-        spdlog::debug("socket counter in coroutine #8: {}", socket.get_raw_header()->get_counter());
 #ifdef UVENT_DEBUG
         spdlog::warn("Write size: {}", wrsz);
 #endif
@@ -63,7 +55,7 @@ task::Awaitable<void> clientCoro(net::TCPClientSocket socket) {
 
 task::Awaitable<void> test_coro()
 {
-    std::cout << "test_coro" << std::endl;
+    std::cout << "test_coro()" << std::endl;
     co_return;
 }
 
@@ -71,7 +63,6 @@ task::Awaitable<void> listeningCoro() {
     auto acceptor = new net::TCPServerSocket{"0.0.0.0", 45900};
     for (;;) {
         auto soc = co_await acceptor->async_accept();
-        spdlog::warn("before test_coro()");
         co_await test_coro();
         if (soc) system::co_spawn(clientCoro(std::move(soc.value())));
     }
@@ -109,6 +100,10 @@ int main() {
 #endif
     system::co_spawn(std::move(listeningCoro()));
     usub::Uvent uvent(4);
+    uvent.for_each_thread([&](int threadIndex, thread::ThreadLocalStorage* tls)
+    {
+        system::co_spawn_static(listeningCoro(), threadIndex);
+    });
     uvent.run();
     return 0;
 }

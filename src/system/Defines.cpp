@@ -35,6 +35,7 @@ std::string get_caller_function_name(int depth) {
 void print_caller_function() {
     std::cout << "Caller: " << get_caller_function_name(4) << std::endl;
 }
+#endif
 
 #ifdef OS_LINUX
 
@@ -61,6 +62,4 @@ void pin_thread_to_core(int core_id) {
 void set_thread_name(const std::string& name) {
     pthread_setname_np(name.c_str()); // only for current thread
 }
-#endif
-
 #endif
