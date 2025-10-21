@@ -5,9 +5,7 @@
 #include "uvent/Uvent.h"
 
 namespace usub {
-    Uvent::Uvent(int threadCount) : pool(threadCount) {
-        uvent::utils::detail::thread::thread_count = threadCount;
-    }
+    Uvent::Uvent(int threadCount) : pool(threadCount), thread_count_(threadCount) {}
 
     void Uvent::stop() {
         this->pool.stop();
@@ -15,5 +13,11 @@ namespace usub {
 
     void Uvent::run() {
         this->pool.addThread(uvent::system::CURRENT);
+    }
+
+    void Uvent::for_each_thread(std::function<void(int, uvent::thread::ThreadLocalStorage*)> f)
+    {
+        for (int i = 0; i < this->thread_count_; i++)
+            f(i, uvent::system::global::detail::tls_registry->getStorage(i));
     }
 }

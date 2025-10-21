@@ -8,9 +8,9 @@
 
 namespace usub::uvent::system
 {
-    Thread::Thread(std::barrier<>* barrier, int index, ThreadLaunchMode tlm)
+    Thread::Thread(std::barrier<>* barrier, int index, thread::ThreadLocalStorage* thread_local_storage, ThreadLaunchMode tlm)
         : barrier(barrier), index_(
-              index), tlm(tlm)
+              index), thread_local_storage_(thread_local_storage), tlm(tlm)
     {
 #if UVENT_DEBUG
         spdlog::info("Thread #{} started", index);
@@ -27,6 +27,7 @@ namespace usub::uvent::system
 
     void Thread::threadFunction(std::stop_token& token)
     {
+        this->processInboxQueue();
         auto& local_pl = system::this_thread::detail::pl;
         auto& local_wh = system::this_thread::detail::wh;
         auto& local_q = system::this_thread::detail::q;
@@ -53,7 +54,7 @@ namespace usub::uvent::system
             if (local_pl->try_lock())
             {
                 auto next_timeout = local_wh->getNextTimeout();
-                local_pl->poll((local_q->empty() && utils::detail::thread::is_started.load(std::memory_order_relaxed))
+                local_pl->poll((local_q->empty() && system::this_thread::detail::is_started.load(std::memory_order_relaxed))
                              ? (next_timeout > 0)
                                    ? next_timeout
                                    : 5000
@@ -63,7 +64,7 @@ namespace usub::uvent::system
             else if (local_q->empty() && local_q_c->empty())
             {
                 auto next_timeout = local_wh->getNextTimeout();
-                local_pl->lock_poll((local_q->empty() && utils::detail::thread::is_started.load(std::memory_order_relaxed))
+                local_pl->lock_poll((local_q->empty() && system::this_thread::detail::is_started.load(std::memory_order_relaxed))
                                   ? (next_timeout > 0)
                                         ? next_timeout
                                         : 5000
@@ -71,11 +72,11 @@ namespace usub::uvent::system
             }
 #else
             auto next_timeout = local_wh->getNextTimeout();
-            local_pl->poll((local_q->empty() && utils::detail::thread::is_started.load(std::memory_order_relaxed))
-                         ? (next_timeout > 0)
-                               ? next_timeout
-                               : 5000
-                         : 0);
+            local_pl->poll((local_q->empty() && system::this_thread::detail::is_started)
+                               ? (next_timeout > 0)
+                                     ? next_timeout
+                                     : 5000
+                               : 0);
 #endif
             highPerfTimer.reset();
             while (!local_q->empty())
@@ -120,7 +121,8 @@ namespace usub::uvent::system
                 std::coroutine_handle<> task;
                 if (st->dequeue(task)) local_q->enqueue(task);
             }
-            const size_t n_coroutines = local_q_c->dequeue_bulk(this->tmp_coroutines_.data(), this->tmp_coroutines_.size());
+            const size_t n_coroutines = local_q_c->dequeue_bulk(this->tmp_coroutines_.data(),
+                                                                this->tmp_coroutines_.size());
             for (size_t i = 0; i < n_coroutines; i++)
             {
                 auto c_temp = std::coroutine_handle<detail::AwaitableFrameBase>::from_address(
@@ -134,7 +136,7 @@ namespace usub::uvent::system
             local_g_qsbr.quiesce_tick();
 #else
             const size_t n_sockets = local_q_sh->dequeue_bulk(
-                    this->tmp_sockets_.data(), this->tmp_sockets_.size());
+                this->tmp_sockets_.data(), this->tmp_sockets_.size());
             for (size_t i = 0; i < n_sockets; ++i)
                 delete this->tmp_sockets_[i];
 #endif
@@ -142,6 +144,16 @@ namespace usub::uvent::system
 #ifndef UVENT_ENABLE_REUSEADDR
         local_g_qsbr.detach_current_thread();
 #endif
+    }
+
+    void Thread::processInboxQueue()
+    {
+        if (this->thread_local_storage_->is_added_new_.load(std::memory_order_acquire))
+        {
+            std::coroutine_handle<> tmp_coroutine;
+            while (this->thread_local_storage_->inbox_q_.try_dequeue(tmp_coroutine)) system::this_thread::detail::q->enqueue(tmp_coroutine);
+        }
+        this->thread_local_storage_->is_added_new_.store(false, std::memory_order_seq_cst);
     }
 
     bool Thread::stop()

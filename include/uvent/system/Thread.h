@@ -11,10 +11,10 @@
 #include <barrier>
 #include <functional>
 #include "uvent/system/Defines.h"
-#include "uvent/utils/thread/ThreadStats.h"
-#include "uvent/utils/timer/HighPerfomanceTimer.h"
 #include "uvent/system/SystemContext.h"
 #include "uvent/base/Predefines.h"
+#include <uvent/pool/TLSRegistry.h>
+#include <uvent/utils/timer/HighPerfomanceTimer.h>
 
 namespace usub::uvent::system
 {
@@ -29,7 +29,7 @@ namespace usub::uvent::system
     public:
         friend class ThreadPool;
 
-        Thread(std::barrier<>* barrier, int index, ThreadLaunchMode tlm);
+        Thread(std::barrier<>* barrier, int index, thread::ThreadLocalStorage* thread_local_storage,  ThreadLaunchMode tlm);
 
         Thread(Thread&&) noexcept = default;
 
@@ -46,6 +46,8 @@ namespace usub::uvent::system
     private:
         void threadFunction(std::stop_token& token);
 
+        void processInboxQueue();
+
     private:
         int index_;
         std::jthread thread_;
@@ -55,6 +57,7 @@ namespace usub::uvent::system
         std::vector<std::coroutine_handle<>> tmp_tasks_;
         std::vector<net::SocketHeader*> tmp_sockets_;
         std::vector<std::coroutine_handle<>> tmp_coroutines_;
+        thread::ThreadLocalStorage* thread_local_storage_;
     };
 }
 

@@ -4,7 +4,6 @@
 
 #include "uvent/poll/EPoller.h"
 #include "uvent/system/Settings.h"
-#include "uvent/utils/thread/ThreadStats.h"
 #include "uvent/system/SystemContext.h"
 #include "uvent/net/Socket.h"
 
@@ -46,8 +45,12 @@ namespace usub::uvent::core
 
         epoll_ctl(this->poll_fd, EPOLL_CTL_ADD, header->fd, &event);
 
-        if (header->is_tcp() && header->is_passive()) utils::detail::thread::is_started.store(
+#ifndef UVENT_ENABLE_REUSEADDR
+        if (header->is_tcp() && header->is_passive()) system::this_thread::detail::is_started.store(
             true, std::memory_order_relaxed);
+#else
+        if (header->is_tcp() && header->is_passive()) system::this_thread::detail::is_started = true;
+#endif
     }
 
     void EPoller::updateEvent(net::SocketHeader* header, OperationType initialState)
