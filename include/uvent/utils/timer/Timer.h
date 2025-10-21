@@ -48,6 +48,8 @@ namespace usub::uvent::utils
 
         void addFunction(std::function<void(std::any&)> f, std::any& arg);
 
+        void bind(std::coroutine_handle<> h) noexcept;
+
     public:
         timeout_t expiryTime;
         timer_duration_t duration_ms;
