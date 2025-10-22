@@ -110,18 +110,11 @@ int main()
     spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [thread %t] [%l] %v%$");
     spdlog::set_level(spdlog::level::trace);
 #endif
-    if constexpr (!system::is_reuseaddr_enabled)
-    {
-        system::co_spawn(std::move(listeningCoro()));
-    }
     usub::Uvent uvent(4);
-    if constexpr (system::is_reuseaddr_enabled)
+    uvent.for_each_thread([&](int threadIndex, thread::ThreadLocalStorage* tls)
     {
-        uvent.for_each_thread([&](int threadIndex, thread::ThreadLocalStorage* tls)
-        {
-            system::co_spawn_static(listeningCoro(), threadIndex);
-        });
-    }
+        system::co_spawn_static(listeningCoro(), threadIndex);
+    });
     uvent.run();
     return 0;
 }

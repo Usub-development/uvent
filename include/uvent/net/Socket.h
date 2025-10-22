@@ -227,7 +227,12 @@ namespace usub::uvent::net
     {
         this->header_ = new SocketHeader{
             .fd = utils::socket::createSocket(port, ip_addr, backlog, ipv, socketAddressType),
-            .socket_info = (static_cast<uint8_t>(p) | static_cast<uint8_t>(r)),
+            .socket_info = (uint8_t(p) | uint8_t(r)),
+#ifndef UVENT_ENABLE_REUSEADDR
+            .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))
+#else
+            .state = (1ull & COUNT_MASK)
+#endif),
         };
         utils::socket::makeSocketNonBlocking(this->header_->fd);
         system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::READ);
@@ -241,6 +246,11 @@ namespace usub::uvent::net
         this->header_ = new SocketHeader{
             .fd = utils::socket::createSocket(port, ip_addr, backlog, ipv, socketAddressType),
             .socket_info = (static_cast<uint8_t>(p) | static_cast<uint8_t>(r)),
+#ifndef UVENT_ENABLE_REUSEADDR
+            .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))
+#else
+            .state = (1ull & COUNT_MASK)
+#endif
         };
         utils::socket::makeSocketNonBlocking(this->header_->fd);
         system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::READ);
@@ -253,7 +263,7 @@ namespace usub::uvent::net
         {
             this->release();
 #if UVENT_DEBUG
-            spdlog::warn("Socket counter: {}", (this->header_->state & usub::utils::sync::refc::COUNT_MASK));
+            spdlog::warn("Socket counter: {}, fd: {}", (this->header_->state & usub::utils::sync::refc::COUNT_MASK), this->header_->fd);
 #endif
         }
     }
