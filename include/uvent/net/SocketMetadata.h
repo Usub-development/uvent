@@ -218,7 +218,7 @@ namespace usub::uvent::net
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR
-            return (this->state & TIMEOUT_EPOCH_MASK);
+            return this->state.load(std::memory_order_acquire) & TIMEOUT_EPOCH_MASK;
 #else
             return this->state & TIMEOUT_EPOCH_MASK;
 #endif
@@ -240,7 +240,7 @@ namespace usub::uvent::net
 #ifndef UVENT_ENABLE_REUSEADDR
             this->state.fetch_add(TIMEOUT_EPOCH_STEP, std::memory_order_acq_rel);
 #else
-            this->state &= TIMEOUT_EPOCH_STEP;
+            this->state += TIMEOUT_EPOCH_STEP;
 #endif
         }
 
@@ -250,7 +250,7 @@ namespace usub::uvent::net
 #ifndef UVENT_ENABLE_REUSEADDR
             return (this->state.load(std::memory_order_acquire) & TIMEOUT_EPOCH_MASK) != snap;
 #else
-            return (this->state & TIMEOUT_EPOCH_MASK != snap);
+            return (((this->state) & TIMEOUT_EPOCH_MASK) != snap);
 #endif
         }
 
@@ -260,7 +260,7 @@ namespace usub::uvent::net
 #ifndef UVENT_ENABLE_REUSEADDR
             return (this->state.load(std::memory_order_acquire) & COUNT_MASK) == 1;
 #else
-            return (this->state & COUNT_MASK == 1);
+            return ((this->state & COUNT_MASK) == 1);
 #endif
         }
 
