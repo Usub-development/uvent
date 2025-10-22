@@ -231,7 +231,7 @@ namespace usub::uvent::net
 #ifndef UVENT_ENABLE_REUSEADDR
             .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))
 #else
-            .state = (1ull & COUNT_MASK)
+            .state = (1ull & usub::utils::sync::refc::COUNT_MASK)
 #endif),
         };
         utils::socket::makeSocketNonBlocking(this->header_->fd);
@@ -249,7 +249,7 @@ namespace usub::uvent::net
 #ifndef UVENT_ENABLE_REUSEADDR
             .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))
 #else
-            .state = (1ull & COUNT_MASK)
+            .state = (1ull & usub::utils::sync::refc::COUNT_MASK)
 #endif
         };
         utils::socket::makeSocketNonBlocking(this->header_->fd);
