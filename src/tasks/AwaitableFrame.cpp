@@ -48,10 +48,6 @@ namespace usub::uvent::detail {
         return false;
     }
 
-    bool AwaitableFrameBase::is_awaited() const {
-        return this->flag->load();
-    }
-
     void AwaitableFrameBase::set_awaited() {
         this->flag->store(true);
     }

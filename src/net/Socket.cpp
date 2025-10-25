@@ -30,7 +30,6 @@ namespace usub::uvent::net::detail
         }
         header->mark_disconnected();
 #endif
-
         auto r = std::exchange(header->first, nullptr);
         auto w = std::exchange(header->second, nullptr);
         header->clear_reading();

@@ -127,11 +127,9 @@ namespace usub::uvent::core
             auto* sock = static_cast<net::SocketHeader*>(event.data.ptr);
 #ifndef UVENT_ENABLE_REUSEADDR
             if (sock->is_busy_now() || sock->is_disconnected_now()) continue;
-#else
-            if (sock->is_busy_now()) continue;
 #endif
-            constexpr uint32_t errmask = EPOLLHUP | EPOLLRDHUP | EPOLLERR;
-            if ((event.events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR)))
+            if (const bool is_listener = sock->is_tcp() && sock->is_passive(); !is_listener && (event.events & (EPOLLHUP
+                | EPOLLRDHUP | EPOLLERR)))
             {
                 this->removeEvent(sock, ALL);
                 continue;

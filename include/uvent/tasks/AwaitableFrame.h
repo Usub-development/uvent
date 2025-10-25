@@ -61,8 +61,6 @@ namespace usub::uvent
 
             void push_frame_to_be_destroyed();
 
-            [[nodiscard]] virtual bool is_awaited() const;
-
             virtual void set_awaited();
 
             virtual void unset_awaited();
@@ -287,7 +285,7 @@ namespace usub::uvent
         {
             auto ph = std::coroutine_handle<detail::AwaitableFrameBase>::from_address(h.address());
             auto& p = ph.promise();
-            p.set_awaited();
+            // p.set_awaited();
 
             auto child = this->frame_->get_coroutine_handle();
             p.set_next_coroutine(child);
@@ -305,7 +303,7 @@ namespace usub::uvent
         void Awaitable<Value, FrameType>::await_suspend(std::coroutine_handle<U> h)
         {
             auto& p = std::coroutine_handle<detail::AwaitableFrameBase>::from_address(h.address()).promise();
-            p.set_awaited();
+            // p.set_awaited();
 
             auto child = this->frame_->get_coroutine_handle();
             p.set_next_coroutine(child);

@@ -69,7 +69,7 @@ task::Awaitable<void> listeningCoro()
     for (;;)
     {
         auto soc = co_await acceptor->async_accept();
-        co_await test_coro();
+        // co_await test_coro();
         if (soc) system::co_spawn(clientCoro(std::move(soc.value())));
     }
 }
@@ -113,6 +113,7 @@ int main()
     usub::Uvent uvent(4);
     uvent.for_each_thread([&](int threadIndex, thread::ThreadLocalStorage* tls)
     {
+        system::co_spawn_static(listeningCoro(), threadIndex);
         system::co_spawn_static(listeningCoro(), threadIndex);
     });
     uvent.run();

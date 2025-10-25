@@ -67,7 +67,7 @@ namespace usub::uvent::system
                 local_pl->lock_poll((local_q->empty() && system::this_thread::detail::is_started.load(std::memory_order_relaxed))
                                   ? (next_timeout > 0)
                                         ? next_timeout
-                                        : 5000
+                                        : settings::idle_fallback_ms
                                   : 0);
             }
 #else
@@ -75,7 +75,7 @@ namespace usub::uvent::system
             local_pl->poll((local_q->empty() && system::this_thread::detail::is_started)
                                ? (next_timeout > 0)
                                      ? next_timeout
-                                     : 5000
+                                     : settings::idle_fallback_ms
                                : 0);
 #endif
             highPerfTimer.reset();

@@ -76,19 +76,13 @@ namespace usub::uvent::utils
     {
         const timeout_t now = getCurrentTime();
         const timeout_t next = this->nextExpiryTime_;
-        if (next == 0)
-        {
-            return -1;
-        }
-        if (next <= now)
-        {
-            return 0;
-        }
+
+        if (next == 0) return -1;
+        if (next <= now) return 0;
+
         uint64_t diff = next - now;
-        if (diff > static_cast<uint64_t>(std::numeric_limits<int>::max()))
-        {
-            return std::numeric_limits<int>::max();
-        }
+        if (diff > static_cast<uint64_t>(std::numeric_limits<int>::max())) return std::numeric_limits<int>::max();
+
         return static_cast<int>(diff);
     }
 
@@ -171,16 +165,19 @@ namespace usub::uvent::utils
 
     void TimerWheel::tick()
     {
-        while (true)
+        for (;;)
         {
-            const size_t cap = this->ops_.size();
+            const size_t cap =
+                this->ops_.size();
 #ifndef UVENT_ENABLE_REUSEADDR
-            size_t n = this->timer_operations_queue.try_dequeue_bulk(this->ops_.data(), cap);
+            size_t n = this->timer_operations_queue.try_dequeue_bulk(
+                this->ops_.data(), cap);
 #else
             const size_t n = this->timer_operations_queue.dequeue_bulk(
                 this->ops_.data(), cap);
 #endif
-            if (n == 0) break;
+            if (n == 0)
+                break;
 
             for (size_t i = 0; i < n; ++i)
             {
@@ -188,9 +185,15 @@ namespace usub::uvent::utils
                 switch (op.op)
                 {
                 case OpType::ADD:
-                    addTimerToWheel(op.timer, op.timer->expiryTime);
-                    ++this->activeTimerCount_;
-                    break;
+                    {
+                        Timer* t = op.timer;
+                        addTimerToWheel(t, t->expiryTime);
+
+                        this->timerMap_[t->id] = t;
+
+                        ++this->activeTimerCount_;
+                        break;
+                    }
 
                 case OpType::UPDATE:
                     {
@@ -208,8 +211,14 @@ namespace usub::uvent::utils
                         }
                         else
                         {
+                            // таймера нет -> создать новый одноразовый
                             auto* t = new Timer(op.new_dur, TIMEOUT);
+                            t->active = true;
+                            t->id = op.id;
+                            t->expiryTime = getCurrentTime() + t->duration_ms;
+
                             addTimerToWheel(t, t->expiryTime);
+                            this->timerMap_[t->id] = t;
                             ++this->activeTimerCount_;
                         }
                         break;
@@ -220,15 +229,15 @@ namespace usub::uvent::utils
                         auto it = timerMap_.find(op.id_only);
                         if (it != this->timerMap_.end())
                         {
-                            Timer* timer = it->second;
-                            if (timer->active)
+                            Timer* t = it->second;
+                            if (t->active)
                             {
-                                timer->active = false;
-                                removeTimerFromWheel(timer);
+                                t->active = false;
+                                removeTimerFromWheel(t);
                                 this->timerMap_.erase(it);
                                 --this->activeTimerCount_;
-                                if (timer->coro) timer->coro.destroy();
-                                delete timer;
+                                if (t->coro) t->coro.destroy();
+                                delete t;
                             }
                         }
                         break;
@@ -239,7 +248,13 @@ namespace usub::uvent::utils
 
         const timeout_t newTime = getCurrentTime();
         const uint64_t elapsed = newTime - this->currentTime_;
-        if (elapsed == 0) return;
+
+        if (elapsed == 0)
+        {
+            updateNextExpiryTime();
+            return;
+        }
+
         this->currentTime_ = newTime;
 
         uint64_t ticks = elapsed / this->wheels_[0].interval_;
