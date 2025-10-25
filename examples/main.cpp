@@ -69,7 +69,7 @@ task::Awaitable<void> listeningCoro()
     for (;;)
     {
         auto soc = co_await acceptor->async_accept();
-        // co_await test_coro();
+        co_await test_coro();
         if (soc) system::co_spawn(clientCoro(std::move(soc.value())));
     }
 }
