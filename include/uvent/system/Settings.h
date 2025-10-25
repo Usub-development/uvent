@@ -7,7 +7,8 @@
 
 #include <cstdint>
 
-namespace usub::uvent::settings {
+namespace usub::uvent::settings
+{
     /**
      * \brief Timer wheel levels.
      * This variable defines the number of hierarchical levels in the timer wheel.
@@ -69,6 +70,13 @@ namespace usub::uvent::settings {
      */
     extern int max_pre_allocated_tmp_coroutines_items;
 
+    /**
+     * @brief Idle wait duration in milliseconds for worker threads.
+     *
+     * Defines how often an idle worker thread wakes up to check for new tasks
+     * when no work is currently available in its queue.
+     */
+    extern int idle_fallback_ms;
 }
 
 #endif //UVENT_SETTINGS_H
