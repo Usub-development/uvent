@@ -32,8 +32,6 @@ namespace usub::uvent::net::detail
 #endif
         auto r = std::exchange(header->first, nullptr);
         auto w = std::exchange(header->second, nullptr);
-        header->clear_reading();
-        header->clear_writing();
 #ifndef UVENT_ENABLE_REUSEADDR
         header->clear_busy();
 #endif

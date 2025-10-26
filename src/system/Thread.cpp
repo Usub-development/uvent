@@ -40,7 +40,7 @@ namespace usub::uvent::system
 #if defined(OS_LINUX) && defined(UVENT_PIN_THREADS)
         pthread_t self = pthread_self();
         pin_thread_to_core(this->index_);
-        set_thread_name(std::string("Uvent worker " + std::to_string(this->index_)), self);
+        set_thread_name(std::string("uvent_worker_" + std::to_string(this->index_)), self);
 #endif
         usub::utils::HighPerfTimer highPerfTimer;
         this->barrier->arrive_and_wait();
@@ -57,7 +57,7 @@ namespace usub::uvent::system
                 local_pl->poll((local_q->empty() && system::this_thread::detail::is_started.load(std::memory_order_relaxed))
                              ? (next_timeout > 0)
                                    ? next_timeout
-                                   : 5000
+                                   : settings::idle_fallback_ms
                              : 0);
                 local_pl->unlock();
             }

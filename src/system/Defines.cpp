@@ -50,9 +50,6 @@ void pin_thread_to_core(int core_id) {
     if (pthread_setaffinity_np(thread, sizeof(cpu_set_t), &cpuset) != 0) {
         std::lock_guard<std::mutex> lock(cout_mutex);
         std::cerr << "Failed to set affinity for core " << core_id << "\n";
-    } else {
-        std::lock_guard<std::mutex> lock(cout_mutex);
-        std::cout << "Pinned thread to core: " << core_id << std::endl;
     }
 }
 

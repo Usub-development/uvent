@@ -31,7 +31,9 @@ namespace usub::utils::errors {
         RecvFailed,
         RecvFromFailed,
         InvalidAddressVariant,
-        Timeout
+        Timeout,
+        Closed,
+        SendFailed
     };
 
     enum class SocketError
