@@ -36,7 +36,7 @@ namespace usub::uvent::net
          * \brief Default constructor.
          * Creates an uninitialized socket object with no file descriptor.
          */
-        Socket() noexcept = default;
+        Socket() noexcept;
 
         /**
          * \brief Constructs a passive TCP socket bound to given address/port (lvalue ip).
@@ -153,10 +153,11 @@ namespace usub::uvent::net
          * \brief Asynchronously sends data with chunking.
          * Sends data in chunks of chunkSize up to maxSize total. Waits for EPOLLOUT readiness.
          */
-        [[nodiscard]] task::Awaitable<std::expected<std::string, usub::utils::errors::SendError>,
-                                      uvent::detail::AwaitableIOFrame<std::expected<
-                                          std::string, usub::utils::errors::SendError>>>
-        async_send(uint8_t* buf, size_t sz, size_t chunkSize = 16384, size_t maxSize = 65536) requires((p == Proto::TCP
+        task::Awaitable<
+            std::expected<size_t, usub::utils::errors::SendError>,
+            uvent::detail::AwaitableIOFrame<std::expected<size_t, usub::utils::errors::SendError>>
+        >
+        async_send(uint8_t* buf, size_t sz) requires((p == Proto::TCP
             && r == Role::ACTIVE) || (p == Proto::UDP));
 
         /**
@@ -201,14 +202,14 @@ namespace usub::uvent::net
         void set_timeout_ms(timeout_t timeout = settings::timeout_duration_ms) const requires (p == Proto::TCP && r ==
             Role::ACTIVE);
 
+        std::expected<std::string, usub::utils::errors::SendError> receive(size_t chunk_size, size_t maxSize);
+
     protected:
         void destroy() noexcept override;
 
         void remove();
 
     private:
-        std::expected<std::string, usub::utils::errors::SendError> receive(size_t chunk_size, size_t maxSize);
-
         size_t send_aux(uint8_t* buf, size_t size);
 
     public:
@@ -218,6 +219,16 @@ namespace usub::uvent::net
     private:
         SocketHeader* header_{nullptr};
     };
+
+    template <Proto p, Role r>
+    Socket<p, r>::Socket() noexcept
+    {
+        this->header_ = new SocketHeader{
+            .socket_info = (static_cast<uint8_t>(Proto::TCP) | static_cast<uint8_t>(Role::ACTIVE) | static_cast<uint8_t>
+                (AdditionalState::CONNECTION_PENDING)),
+            .state = (1 & usub::utils::sync::refc::COUNT_MASK) | (false ? usub::utils::sync::refc::CLOSED_MASK : 0)
+        };
+    }
 
     template <Proto p, Role r>
     Socket<p, r>::Socket(std::string& ip_addr, int port, int backlog,
@@ -263,7 +274,8 @@ namespace usub::uvent::net
         {
             this->release();
 #if UVENT_DEBUG
-            spdlog::warn("Socket counter: {}, fd: {}", (this->header_->state & usub::utils::sync::refc::COUNT_MASK), this->header_->fd);
+            spdlog::warn("Socket counter: {}, fd: {}", (this->header_->state & usub::utils::sync::refc::COUNT_MASK),
+                         this->header_->fd);
 #endif
         }
     }
@@ -350,14 +362,12 @@ namespace usub::uvent::net
         p == Proto::UDP))
     {
 #if UVENT_DEBUG
-        spdlog::info("Entered into read coroutine");
+        spdlog::info("Entered into read coroutine: {}", this->header_->fd);
 #endif
-        if (this->is_disconnected_now()) co_return -3;
         co_await detail::AwaiterRead{this->header_};
-        if (this->is_disconnected_now()) co_return -3;
 
 #if UVENT_DEBUG
-        spdlog::info("Triggered by epoll");
+        spdlog::info("Triggered by epoll: {}", this->header_->fd);
 #endif
         int retries = 0;
         ssize_t total_read = 0;
@@ -377,7 +387,7 @@ namespace usub::uvent::net
             else if (res == 0)
             {
                 this->remove();
-                co_return (this->is_disconnected_now()) ? -3 : (total_read > 0 ? total_read : 0);
+                co_return total_read > 0 ? total_read : 0;
             }
             else
             {
@@ -390,20 +400,20 @@ namespace usub::uvent::net
                     if (++retries >= settings::max_read_retries)
                     {
                         this->remove();
-                        co_return (this->is_disconnected_now()) ? -3 : -1;
+                        co_return -1;
                     }
                     continue;
                 }
                 else
                 {
                     this->remove();
-                    co_return (this->is_disconnected_now()) ? -3 : -1;
+                    co_return -1;
                 }
             }
 
             if (buffer.size() >= max_read_size)
             {
-                co_return (this->is_disconnected_now()) ? -3 : -2;
+                co_return -2;
             }
         }
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -611,8 +621,9 @@ namespace usub::uvent::net
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
 
-        system::this_thread::detail::pl->addEvent(this->header_, core::WRITE);
+        system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::ALL);
         co_await detail::AwaiterWrite{this->header_};
+
         freeaddrinfo(res);
         if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
             co_return
@@ -629,6 +640,8 @@ namespace usub::uvent::net
         std::string&& host, std::string&& port) requires (p ==
         Proto::TCP && r == Role::ACTIVE)
     {
+        spdlog::warn("[T0] async_connect start");
+
 #if defined(OS_LINUX) || defined(OS_BSD)
         addrinfo hints{}, *res = nullptr;
         hints.ai_family = (this->ipv == utils::net::IPV::IPV4) ? AF_INET : AF_INET6;
@@ -642,6 +655,10 @@ namespace usub::uvent::net
         }
 
         this->header_->fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+        spdlog::warn("[T1] socket created fd={}", this->header_->fd);
+#ifdef UVENT_DEBUG
+        spdlog::debug("async_connect fd: {}", this->header_->fd);
+#endif
         if (this->header_->fd < 0)
         {
             freeaddrinfo(res);
@@ -664,9 +681,12 @@ namespace usub::uvent::net
             freeaddrinfo(res);
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
+        spdlog::warn("[T2] connect() called ret={} errno={}", ret, errno);
 
-        system::this_thread::detail::pl->addEvent(this->header_, core::WRITE);
+        system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::ALL);
+        spdlog::warn("[T3] before await write fd={}", this->header_->fd);
         co_await detail::AwaiterWrite{this->header_};
+        spdlog::warn("[T4] after await write fd={}", this->header_->fd);
         freeaddrinfo(res);
         if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
             co_return
@@ -678,32 +698,110 @@ namespace usub::uvent::net
     }
 
     template <Proto p, Role r>
-    task::Awaitable<std::expected<std::string, usub::utils::errors::SendError>, uvent::detail::AwaitableIOFrame<std::
-                        expected<std::string, usub::utils::errors::SendError>>> Socket<p, r>::async_send(
-        uint8_t* buf, size_t sz,
-        size_t chunkSize, size_t maxSize) requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP))
+    task::Awaitable<
+        std::expected<size_t, usub::utils::errors::SendError>,
+        uvent::detail::AwaitableIOFrame<std::expected<size_t, usub::utils::errors::SendError>>
+    >
+    Socket<p, r>::async_send(
+        uint8_t* buf,
+        size_t sz
+    ) requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP))
     {
         auto buf_internal = std::unique_ptr<uint8_t[]>(new uint8_t[sz], std::default_delete<uint8_t[]>());
         std::copy_n(buf, sz, buf_internal.get());
-        co_await detail::AwaiterWrite{this->header_};
 
-        if (this->is_disconnected_now())
-            co_return std::unexpected(usub::utils::errors::SendError::Timeout);
+        ssize_t total_written = 0;
+        int retries = 0;
 
-        auto sendRes = this->send_aux(buf_internal.get(), sz);
-        if (sendRes != -1)
+        while (total_written < static_cast<ssize_t>(sz))
         {
-            this->header_->timeout_epoch_bump();
-            co_await detail::AwaiterRead{this->header_};
+            co_await detail::AwaiterWrite{this->header_};
 
             if (this->is_disconnected_now())
-                co_return std::unexpected(usub::utils::errors::SendError::Timeout);
+                co_return std::unexpected(usub::utils::errors::SendError::Closed);
 
-            auto resp = this->receive(chunkSize, maxSize);
-            if (resp && !resp->empty()) this->header_->timeout_epoch_bump();
-            co_return std::move(resp);
+            ssize_t res{0};
+            if constexpr (p == Proto::TCP)
+            {
+                res = ::send(
+                    this->header_->fd,
+                    buf_internal.get() + total_written,
+                    sz - total_written,
+                    MSG_DONTWAIT
+                );
+            }
+            else
+            {
+                try
+                {
+                    if (std::holds_alternative<sockaddr_in>(this->address))
+                    {
+                        sockaddr_in& addr = std::get<sockaddr_in>(this->address);
+                        socklen_t addr_len = sizeof(sockaddr_in);
+                        res = ::sendto(
+                            this->header_->fd,
+                            buf_internal.get() + total_written,
+                            sz - total_written,
+                            MSG_DONTWAIT,
+                            reinterpret_cast<sockaddr*>(&addr),
+                            addr_len
+                        );
+                    }
+                    else if (std::holds_alternative<sockaddr_in6>(this->address))
+                    {
+                        sockaddr_in6& addr = std::get<sockaddr_in6>(this->address);
+                        socklen_t addr_len = sizeof(sockaddr_in6);
+                        res = ::sendto(
+                            this->header_->fd,
+                            buf_internal.get() + total_written,
+                            sz - total_written,
+                            MSG_DONTWAIT,
+                            reinterpret_cast<sockaddr*>(&addr),
+                            addr_len
+                        );
+                    }
+                }
+                catch (const std::bad_variant_access&)
+                {
+                    co_return std::unexpected(usub::utils::errors::SendError::InvalidAddressVariant);
+                }
+            }
+
+            if (res > 0)
+            {
+                total_written += res;
+                retries = 0;
+                continue;
+            }
+
+            if (res == -1)
+            {
+                if (errno == EINTR)
+                {
+                    if (++retries >= settings::max_write_retries)
+                    {
+                        this->remove();
+                        co_return std::unexpected(usub::utils::errors::SendError::SendFailed);
+                    }
+                    continue;
+                }
+
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                {
+                    continue;
+                }
+
+                this->remove();
+                co_return std::unexpected(usub::utils::errors::SendError::SendFailed);
+            }
         }
-        co_return std::unexpected(usub::utils::errors::SendError::InvalidSocketFd);
+
+#ifndef UVENT_ENABLE_REUSEADDR
+        if (total_written > 0)
+            this->header_->timeout_epoch_bump();
+#endif
+
+        co_return static_cast<size_t>(total_written);
     }
 
     template <Proto p, Role r>

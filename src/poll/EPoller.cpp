@@ -31,7 +31,7 @@ namespace usub::uvent::core
             break;
         case WRITE: event.events |= EPOLLOUT;
             break;
-        default: event.events |= EPOLLIN | EPOLLOUT;
+        case ALL: event.events |= EPOLLIN | EPOLLOUT;
             break;
         }
 
@@ -58,8 +58,6 @@ namespace usub::uvent::core
         struct epoll_event event{};
         event.data.ptr = reinterpret_cast<void*>(header);
         if (!(header->is_tcp() && header->is_passive())) event.events = EPOLLET;
-        if (header->is_writing_now()) event.events |= EPOLLOUT;
-        if (header->is_reading_now()) event.events |= EPOLLIN;
 
         switch (initialState)
         {
@@ -109,6 +107,7 @@ namespace usub::uvent::core
 
         epoll_ctl(this->poll_fd, EPOLL_CTL_DEL, header->fd, nullptr);
         ::close(header->fd);
+        header->fd = -1;
     }
 
     bool EPoller::poll(int timeout)
@@ -128,12 +127,8 @@ namespace usub::uvent::core
 #ifndef UVENT_ENABLE_REUSEADDR
             if (sock->is_busy_now() || sock->is_disconnected_now()) continue;
 #endif
-            if (const bool is_listener = sock->is_tcp() && sock->is_passive(); !is_listener && (event.events & (EPOLLHUP
-                | EPOLLRDHUP | EPOLLERR)))
-            {
-                this->removeEvent(sock, ALL);
-                continue;
-            }
+            bool hup = !(sock->is_tcp() && sock->is_passive()) && (event.events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR));
+            if (hup) sock->mark_disconnected();
 #ifndef UVENT_ENABLE_REUSEADDR
             sock->try_mark_busy();
 #endif
@@ -164,12 +159,20 @@ namespace usub::uvent::core
                         socklen_t len = sizeof(err);
                         getsockopt(sock->fd, SOL_SOCKET, SO_ERROR, &err, &len);
                         sock->socket_info &= ~static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING);
-                        if (err != 0)
+                        if (err != 0) sock->socket_info |= static_cast<uint8_t>(net::AdditionalState::CONNECTION_FAILED);
+                        else
                         {
-                            sock->socket_info |= static_cast<uint8_t>(net::AdditionalState::CONNECTION_FAILED);
+                            auto c = std::exchange(sock->second, nullptr);
+                            system::this_thread::detail::q->enqueue(c);
                         }
                     }
                 }
+            }
+            if (hup) {
+                this->removeEvent(sock, ALL);
+#if UVENT_DEBUG
+                spdlog::debug("Socket hup/err fd={}", sock->fd);
+#endif
             }
         }
         if (n == this->events.size()) this->events.resize(this->events.size() << 1);

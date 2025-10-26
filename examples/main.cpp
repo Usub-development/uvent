@@ -76,29 +76,75 @@ task::Awaitable<void> listeningCoro()
 
 task::Awaitable<void> sendingCoro()
 {
+#if UVENT_DEBUG
+    spdlog::warn("sending coro");
+#endif
+
     auto socket = net::TCPClientSocket{};
+
     auto res = co_await socket.async_connect("example.com", "80");
-    if (res.has_value()) co_return;
+    if (res.has_value())
+    {
+#if UVENT_DEBUG
+        spdlog::error("connect failed");
+#endif
+        co_return;
+    }
+
+#if UVENT_DEBUG
+    spdlog::warn("connect success");
+#endif
+
     uint8_t buffer[] =
         "GET / HTTP/1.1\r\n"
         "Host: example.com\r\n"
         "User-Agent: test-client\r\n"
         "Accept: */*\r\n"
         "Connection: close\r\n\r\n";
+
     size_t size = sizeof(buffer) - 1;
 
-    for (int i = 0; i < 2; i++)
+    auto result = co_await socket.async_send(buffer, size);
+    if (!result.has_value())
     {
-        auto result = co_await socket.async_send(buffer, size);
-        if (result.has_value())
-        {
-            std::cout << result.value() << std::endl;
-        }
-        else
-        {
-            std::cout << toString(result.error()) << std::endl;
-        }
+#if UVENT_DEBUG
+        spdlog::warn("Failed async_send: {}", toString(result.error()));
+#endif
+        co_return;
     }
+
+#if UVENT_DEBUG
+    spdlog::warn("Success async_send: {} bytes", result.value());
+#endif
+
+    static constexpr size_t max_read_size = 64 * 1024;
+    utils::DynamicBuffer read_buffer;
+    read_buffer.reserve(max_read_size);
+
+    while (true)
+    {
+        auto r = co_await socket.async_read(read_buffer, max_read_size);
+
+#if UVENT_DEBUG
+        spdlog::warn("async_read returned: {}", r);
+#endif
+
+        if (r <= 0)
+            break;
+
+        if (read_buffer.size() >= max_read_size)
+            break;
+    }
+
+#if UVENT_DEBUG
+    spdlog::warn(
+        "RESPONSE BEGIN\n{}\nRESPONSE END",
+        std::string(
+            reinterpret_cast<const char*>(read_buffer.data()),
+            read_buffer.size()
+        )
+    );
+#endif
 
     co_return;
 }
@@ -116,6 +162,7 @@ int main()
         system::co_spawn_static(listeningCoro(), threadIndex);
         system::co_spawn_static(listeningCoro(), threadIndex);
     });
+    system::co_spawn(sendingCoro());
     uvent.run();
     return 0;
 }

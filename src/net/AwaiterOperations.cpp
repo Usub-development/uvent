@@ -18,15 +18,12 @@ namespace usub::uvent::net::detail
 
     void AwaiterRead::await_suspend(std::coroutine_handle<> h)
     {
-        if (!this->header_->is_reading_now())
-        {
-            system::this_thread::detail::pl->updateEvent(this->header_, core::READ);
-            this->header_->try_mark_reading();
-        }
         auto c = std::coroutine_handle<uvent::detail::AwaitableFrameBase>::from_address(h.address());
         this->header_->first = c;
+        system::this_thread::detail::pl->updateEvent(this->header_, core::READ);
         this->header_->clear_busy();
     }
+
 
     void AwaiterRead::await_resume()
     {
@@ -43,15 +40,15 @@ namespace usub::uvent::net::detail
 
     void AwaiterWrite::await_suspend(std::coroutine_handle<> h)
     {
-        if (!this->header_->is_writing_now())
-        {
-            system::this_thread::detail::pl->updateEvent(this->header_, core::WRITE);
-            this->header_->try_mark_writing();
-        }
         auto c = std::coroutine_handle<uvent::detail::AwaitableFrameBase>::from_address(h.address());
-        this->header_->second = c;
+        if (this->header_->second == nullptr) {
+            this->header_->second = c;
+        }
+
+        system::this_thread::detail::pl->updateEvent(this->header_, core::WRITE);
         this->header_->clear_busy();
     }
+
 
     void AwaiterWrite::await_resume()
     {
