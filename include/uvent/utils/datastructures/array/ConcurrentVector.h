@@ -150,7 +150,7 @@ namespace usub::array::concurrent
                 std::size_t pub = this->published_.load(std::memory_order_acquire);
                 if (pub == 0) return false;
                 if (this->published_.
-                    compare_exchange_weak(pub, pub - 1, std::memory_order_acq_rel, std::memory_order_acquire))
+                          compare_exchange_weak(pub, pub - 1, std::memory_order_acq_rel, std::memory_order_acquire))
                 {
                     const std::size_t idx = pub - 1;
                     auto [L,off] = locate(idx);
@@ -170,15 +170,66 @@ namespace usub::array::concurrent
             }
         }
 
+        bool erase(std::size_t i)
+        {
+            std::size_t pub = this->published_.load(std::memory_order_acquire);
+            if (i >= pub) return false;
+
+            auto [L, off] = locate(i);
+
+            Bucket<T>* b = this->buckets_[L].load(std::memory_order_acquire);
+            if (!b) return false;
+
+            Cell<T>& c = b->cells[off];
+
+            uint8_t st = c.state.load(std::memory_order_acquire);
+            for (;;)
+            {
+                if (st == Cell<T>::READY) break;
+                if (st == Cell<T>::EMPTY) return false;
+                if (st == Cell<T>::DELETING)
+                {
+                    while (c.state.load(std::memory_order_acquire) == Cell<T>::DELETING) cpu_relax();
+                    return false;
+                }
+                cpu_relax();
+                st = c.state.load(std::memory_order_acquire);
+            }
+
+            st = Cell<T>::READY;
+            if (!c.state.compare_exchange_strong(st,
+                                                 Cell<T>::DELETING,
+                                                 std::memory_order_acq_rel,
+                                                 std::memory_order_acquire))
+                return false;
+
+            std::destroy_at(c.ptr());
+
+            c.state.store(Cell<T>::EMPTY, std::memory_order_release);
+
+            shrink_published_tail_();
+
+            return true;
+        }
+
         T& operator[](std::size_t i) noexcept
         {
             auto [L,off] = locate(i);
             Bucket<T>* b = nullptr;
             while ((b = this->buckets_[L].load(std::memory_order_acquire)) == nullptr) cpu_relax();
             Cell<T>& c = b->cells[off];
-            while (c.state.load(std::memory_order_acquire) != Cell<T>::READY) cpu_relax();
-            prefetch_for_read(c.ptr());
-            return *c.ptr();
+
+            for (;;)
+            {
+                uint8_t st = c.state.load(std::memory_order_acquire);
+                if (st == Cell<T>::READY)
+                {
+                    prefetch_for_read(c.ptr());
+                    return *c.ptr();
+                }
+                if (st == Cell<T>::EMPTY) __builtin_trap();
+                cpu_relax();
+            }
         }
 
         const T& operator[](std::size_t i) const noexcept
@@ -187,10 +238,20 @@ namespace usub::array::concurrent
             Bucket<T>* b = nullptr;
             while ((b = this->buckets_[L].load(std::memory_order_acquire)) == nullptr) cpu_relax();
             const Cell<T>& c = b->cells[off];
-            while (c.state.load(std::memory_order_acquire) != Cell<T>::READY) cpu_relax();
-            prefetch_for_read(c.ptr());
-            return *c.ptr();
+
+            for (;;)
+            {
+                uint8_t st = c.state.load(std::memory_order_acquire);
+                if (st == Cell<T>::READY)
+                {
+                    prefetch_for_read(c.ptr());
+                    return *c.ptr();
+                }
+                if (st == Cell<T>::EMPTY) __builtin_trap();
+                cpu_relax();
+            }
         }
+
 
         T& at(std::size_t i)
         {
@@ -225,8 +286,8 @@ namespace usub::array::concurrent
             Bucket<T>* cand = Bucket<T>::allocate(pow2(L));
             Bucket<T>* exp = nullptr;
             if (!this->buckets_[L].compare_exchange_strong(exp, cand,
-                                                     std::memory_order_acq_rel,
-                                                     std::memory_order_acquire))
+                                                           std::memory_order_acq_rel,
+                                                           std::memory_order_acquire))
             {
                 Bucket<T>::destroy(cand);
             }
@@ -254,11 +315,41 @@ namespace usub::array::concurrent
                 }
 
                 if (this->published_.compare_exchange_weak(cur, scan,
-                                                     std::memory_order_acq_rel,
-                                                     std::memory_order_acquire))
+                                                           std::memory_order_acq_rel,
+                                                           std::memory_order_acquire))
                 {
                     continue;
                 }
+                cpu_relax();
+            }
+        }
+
+        void shrink_published_tail_() noexcept
+        {
+            for (;;)
+            {
+                std::size_t pub = this->published_.load(std::memory_order_acquire);
+                if (pub == 0) return;
+
+                std::size_t idx = pub - 1;
+
+                auto [L, off] = locate(idx);
+                Bucket<T>* b = this->buckets_[L].load(std::memory_order_acquire);
+                if (!b) return;
+
+                Cell<T>& c = b->cells[off];
+
+                uint8_t st = c.state.load(std::memory_order_acquire);
+
+                if (st == Cell<T>::READY || st == Cell<T>::WRITING || st == Cell<T>::DELETING) return;
+
+                if (this->published_.compare_exchange_weak(
+                    pub,
+                    pub - 1,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire))
+                    continue;
+
                 cpu_relax();
             }
         }
