@@ -640,7 +640,6 @@ namespace usub::uvent::net
         std::string&& host, std::string&& port) requires (p ==
         Proto::TCP && r == Role::ACTIVE)
     {
-        spdlog::warn("[T0] async_connect start");
 
 #if defined(OS_LINUX) || defined(OS_BSD)
         addrinfo hints{}, *res = nullptr;
@@ -655,7 +654,6 @@ namespace usub::uvent::net
         }
 
         this->header_->fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-        spdlog::warn("[T1] socket created fd={}", this->header_->fd);
 #ifdef UVENT_DEBUG
         spdlog::debug("async_connect fd: {}", this->header_->fd);
 #endif
@@ -681,12 +679,9 @@ namespace usub::uvent::net
             freeaddrinfo(res);
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
-        spdlog::warn("[T2] connect() called ret={} errno={}", ret, errno);
 
         system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::ALL);
-        spdlog::warn("[T3] before await write fd={}", this->header_->fd);
         co_await detail::AwaiterWrite{this->header_};
-        spdlog::warn("[T4] after await write fd={}", this->header_->fd);
         freeaddrinfo(res);
         if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
             co_return
