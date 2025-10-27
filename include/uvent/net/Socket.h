@@ -39,6 +39,14 @@ namespace usub::uvent::net
         Socket() noexcept;
 
         /**
+         * \brief Constructs a socket from an existing file descriptor.
+         *
+         * Initializes the socket object to wrap the given file descriptor.
+         * The descriptor must be valid and owned by the caller.
+         */
+        explicit Socket(int fd) noexcept;
+
+        /**
          * \brief Constructs a passive TCP socket bound to given address/port (lvalue ip).
          * Used for listening sockets (bind + listen).
          */
@@ -228,6 +236,18 @@ namespace usub::uvent::net
                 (AdditionalState::CONNECTION_PENDING)),
             .state = (1 & usub::utils::sync::refc::COUNT_MASK) | (false ? usub::utils::sync::refc::CLOSED_MASK : 0)
         };
+    }
+
+    template <Proto p, Role r>
+    Socket<p, r>::Socket(int fd) noexcept
+    {
+        this->header_ = new SocketHeader{
+            .socket_info = (static_cast<uint8_t>(Proto::TCP) | static_cast<uint8_t>(Role::ACTIVE) | static_cast<uint8_t>
+                (AdditionalState::CONNECTION_PENDING)),
+            .state = (1 & usub::utils::sync::refc::COUNT_MASK) | (false ? usub::utils::sync::refc::CLOSED_MASK : 0),
+            .fd = fd
+        };
+        system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::ALL);
     }
 
     template <Proto p, Role r>
@@ -640,7 +660,6 @@ namespace usub::uvent::net
         std::string&& host, std::string&& port) requires (p ==
         Proto::TCP && r == Role::ACTIVE)
     {
-
 #if defined(OS_LINUX) || defined(OS_BSD)
         addrinfo hints{}, *res = nullptr;
         hints.ai_family = (this->ipv == utils::net::IPV::IPV4) ? AF_INET : AF_INET6;
