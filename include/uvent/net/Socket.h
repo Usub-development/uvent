@@ -242,10 +242,10 @@ namespace usub::uvent::net
     Socket<p, r>::Socket(int fd) noexcept
     {
         this->header_ = new SocketHeader{
+            .fd = fd,
             .socket_info = (static_cast<uint8_t>(Proto::TCP) | static_cast<uint8_t>(Role::ACTIVE) | static_cast<uint8_t>
                 (AdditionalState::CONNECTION_PENDING)),
-            .state = (1 & usub::utils::sync::refc::COUNT_MASK) | (false ? usub::utils::sync::refc::CLOSED_MASK : 0),
-            .fd = fd
+            .state = (1 & usub::utils::sync::refc::COUNT_MASK) | (false ? usub::utils::sync::refc::CLOSED_MASK : 0)
         };
         system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::ALL);
     }
