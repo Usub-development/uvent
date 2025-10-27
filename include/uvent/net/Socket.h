@@ -413,7 +413,7 @@ namespace usub::uvent::net
 
             if (buffer.size() >= max_read_size)
             {
-                co_return -2;
+                break;
             }
         }
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -530,7 +530,7 @@ namespace usub::uvent::net
 
             if (buffer.size() >= max_read_size)
             {
-                return -2;
+                break;
             }
         }
         return total_read;
