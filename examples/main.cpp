@@ -149,6 +149,33 @@ task::Awaitable<void> sendingCoro()
     co_return;
 }
 
+task::Awaitable<int, detail::AwaitableFrame<int>> generator()
+{
+    for (int i = 1; i <= 3; ++i)
+    {
+        std::cout << "yield " << i << "\n";
+        co_yield i;
+    }
+    co_return 0;
+}
+
+task::Awaitable<void, detail::AwaitableFrame<void>> consumer()
+{
+    auto g = generator();
+
+    while (true)
+    {
+        int v = co_await g;
+        std::cout << "got " << v << "\n";
+
+        if (g.get_promise()->get_coroutine_handle().done())
+            break;
+    }
+
+    co_return;
+}
+
+
 int main()
 {
     settings::timeout_duration_ms = 5000;
@@ -163,6 +190,7 @@ int main()
         system::co_spawn_static(listeningCoro(), threadIndex);
     });
     system::co_spawn(sendingCoro());
+    system::co_spawn(consumer());
     uvent.run();
     return 0;
 }

@@ -247,6 +247,12 @@ namespace usub::uvent
             new(&this->result_) T(std::move(value));
             this->has_result_ = true;
 
+            if (this->prev_)
+            {
+                auto parent = std::coroutine_handle<::usub::uvent::detail::AwaitableFrameBase>
+                    ::from_address(this->prev_.address());
+                push_frame_into_task_queue(static_cast<std::coroutine_handle<>>(parent));
+            }
             return {};
         }
 

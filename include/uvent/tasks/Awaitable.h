@@ -52,6 +52,8 @@ namespace usub::uvent::task
         /// @brief Should be used carefully! Only for `get_return_object` in promise type.
         explicit Awaitable(promise_type* af);
 
+        bool is_done() const;
+
     protected:
         promise_type* frame_{nullptr};
     };
@@ -86,6 +88,8 @@ namespace usub::uvent::task
         /// @brief Should be used carefully! Only for `get_return_object` in promise type.
         explicit Awaitable(promise_type* af);
 
+        bool is_done() const;
+
     protected:
         promise_type* frame_{nullptr};
     };
@@ -111,6 +115,18 @@ namespace usub::uvent::task
     typename Awaitable<Value, FrameType>::promise_type* Awaitable<Value, FrameType>::get_promise()
     {
         return this->frame_;
+    }
+
+    template <class Value, class FrameType>
+    bool Awaitable<Value, FrameType>::is_done() const
+    {
+        return this->frame_->get_coroutine_handle().done();
+    }
+
+    template <class FrameType>
+    bool Awaitable<void, FrameType>::is_done() const
+    {
+        return this->frame_->get_coroutine_handle().done();
     }
 }
 
