@@ -70,11 +70,12 @@ namespace usub::uvent::system
 
     namespace this_coroutine
     {
-        template <typename Rep, typename Period>
-        task::Awaitable<void> sleep_for(const std::chrono::duration<Rep, Period>& sleep_duration)
+        template <class Rep, class Period>
+        task::Awaitable<void> sleep_for(std::chrono::duration<Rep, Period> d)
         {
             using namespace std::chrono;
-            const auto ms = duration_cast<milliseconds>(sleep_duration).count();
+            auto ms = duration_cast<milliseconds>(d + milliseconds(1) - milliseconds(0));
+            auto ms_count = std::max<int64_t>(1, ms.count());
 
             struct SleepAwaiter
             {
@@ -83,8 +84,8 @@ namespace usub::uvent::system
 
                 void await_suspend(std::coroutine_handle<> h) const noexcept
                 {
-                    this->t->bind(h);
-                    this_thread::detail::wh->addTimer(this->t);
+                    t->bind(h);
+                    this_thread::detail::wh->addTimer(t);
                 }
 
                 void await_resume() const noexcept
@@ -92,32 +93,10 @@ namespace usub::uvent::system
                 }
             };
 
-            co_await SleepAwaiter{new utils::Timer(static_cast<timer_duration_t>(ms), utils::TimerType::TIMEOUT)};
-        }
-
-        template <typename Rep, typename Period>
-        task::Awaitable<void> sleep_for(const std::chrono::duration<Rep, Period>&& sleep_duration)
-        {
-            using namespace std::chrono;
-            const auto ms = duration_cast<milliseconds>(sleep_duration).count();
-
-            struct SleepAwaiter
-            {
-                utils::Timer* t;
-                bool await_ready() const noexcept { return false; }
-
-                void await_suspend(std::coroutine_handle<> h) const noexcept
-                {
-                    this->t->bind(h);
-                    this_thread::detail::wh->addTimer(this->t);
-                }
-
-                void await_resume() const noexcept
-                {
-                }
+            co_await SleepAwaiter{
+                new utils::Timer(static_cast<timer_duration_t>(ms_count),
+                                 utils::TimerType::TIMEOUT)
             };
-
-            co_await SleepAwaiter{new utils::Timer(static_cast<timer_duration_t>(ms), utils::TimerType::TIMEOUT)};
         }
     }
 
