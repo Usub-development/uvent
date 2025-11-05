@@ -1,4 +1,5 @@
 #include "uvent/Uvent.h"
+#include "uvent/sync/AsyncMutex.h"
 
 using namespace usub::uvent;
 
@@ -175,6 +176,19 @@ task::Awaitable<void, detail::AwaitableFrame<void>> consumer()
     co_return;
 }
 
+static usub::uvent::sync::AsyncMutex g_mutex;
+
+task::Awaitable<void> critical_task(int id)
+{
+    {
+        auto guard = co_await g_mutex.lock();
+        std::cout << "task " << id << " entered critical section\n";
+        co_await system::this_coroutine::sleep_for(std::chrono::milliseconds(500));
+        std::cout << "task " << id << " leaving critical section\n";
+    }
+    co_return;
+}
+
 
 int main()
 {
@@ -191,6 +205,11 @@ int main()
     });
     system::co_spawn(sendingCoro());
     system::co_spawn(consumer());
+
+    system::co_spawn(critical_task(1));
+    system::co_spawn(critical_task(2));
+    system::co_spawn(critical_task(3));
+
     uvent.run();
     return 0;
 }

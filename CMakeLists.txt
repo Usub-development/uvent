@@ -21,13 +21,7 @@ foreach (header ${UVENT_HEADERS})
     endif ()
 endforeach ()
 
-add_library(uvent ${UVENT_SOURCES}
-        include/uvent/pool/TLS.h
-        src/pool/TLS.cpp
-        include/uvent/pool/TLSRegistry.h
-        src/pool/TLSRegistry.cpp
-        include/uvent/utils/datastructures/array/ConcurrentVector.h
-        include/uvent/utils/datastructures/array/ShardedConcurrentVector.h)
+add_library(uvent ${UVENT_SOURCES})
 add_library(usub::uvent ALIAS uvent)
 
 configure_package_config_file(
