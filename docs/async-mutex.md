@@ -27,7 +27,7 @@ This ensures efficient CPU usage and avoids kernel-level blocking.
 ## Example
 
 ```cpp
-#include "AsyncMutex.h"
+#include "uvent/sync/AsyncMutex.h"
 #include "uvent/Uvent.h"
 #include "uvent/system/SystemContext.h"
 #include <iostream>
