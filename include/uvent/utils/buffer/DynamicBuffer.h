@@ -27,6 +27,8 @@ namespace usub::uvent::utils {
 
         [[nodiscard]] const uint8_t *data() const;
 
+        [[nodiscard]] uint8_t *data();
+
         void clear();
 
         void append(const uint8_t *src, size_t len);

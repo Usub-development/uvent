@@ -1,5 +1,9 @@
 #include "uvent/Uvent.h"
 #include "uvent/sync/AsyncMutex.h"
+#include "uvent/sync/AsyncSemaphore.h"
+#include "uvent/sync/AsyncEvent.h"
+#include "uvent/sync/AsyncWaitGroup.h"
+#include "uvent/sync/AsyncCancellation.h"
 
 using namespace usub::uvent;
 
@@ -35,7 +39,6 @@ task::Awaitable<void> clientCoro(net::TCPClientSocket socket)
             socket.shutdown();
             break;
         }
-        auto buf = std::make_unique<uint8_t[]>(1024);
         size_t wrsz = co_await socket.async_write(
             const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(httpResponse.data())),
             httpResponse.size()
@@ -43,10 +46,7 @@ task::Awaitable<void> clientCoro(net::TCPClientSocket socket)
 #ifdef UVENT_DEBUG
         spdlog::warn("Write size: {}", wrsz);
 #endif
-        if (wrsz <= 0)
-        {
-            break;
-        }
+        if (wrsz <= 0) break;
         socket.update_timeout(5000);
     }
 #ifdef UVENT_DEBUG
@@ -80,17 +80,9 @@ task::Awaitable<void> sendingCoro()
 #if UVENT_DEBUG
     spdlog::warn("sending coro");
 #endif
-
     auto socket = net::TCPClientSocket{};
-
     auto res = co_await socket.async_connect("example.com", "80");
-    if (res.has_value())
-    {
-#if UVENT_DEBUG
-        spdlog::error("connect failed");
-#endif
-        co_return;
-    }
+    if (res.has_value()) co_return;
 
 #if UVENT_DEBUG
     spdlog::warn("connect success");
@@ -103,16 +95,8 @@ task::Awaitable<void> sendingCoro()
         "Accept: */*\r\n"
         "Connection: close\r\n\r\n";
 
-    size_t size = sizeof(buffer) - 1;
-
-    auto result = co_await socket.async_send(buffer, size);
-    if (!result.has_value())
-    {
-#if UVENT_DEBUG
-        spdlog::warn("Failed async_send: {}", toString(result.error()));
-#endif
-        co_return;
-    }
+    auto result = co_await socket.async_send(buffer, sizeof(buffer) - 1);
+    if (!result.has_value()) co_return;
 
 #if UVENT_DEBUG
     spdlog::warn("Success async_send: {} bytes", result.value());
@@ -125,28 +109,15 @@ task::Awaitable<void> sendingCoro()
     while (true)
     {
         auto r = co_await socket.async_read(read_buffer, max_read_size);
-
-#if UVENT_DEBUG
-        spdlog::warn("async_read returned: {}", r);
-#endif
-
-        if (r <= 0)
-            break;
-
-        if (read_buffer.size() >= max_read_size)
-            break;
+        if (r <= 0 || read_buffer.size() >= max_read_size) break;
     }
 
 #if UVENT_DEBUG
     spdlog::warn(
         "RESPONSE BEGIN\n{}\nRESPONSE END",
-        std::string(
-            reinterpret_cast<const char*>(read_buffer.data()),
-            read_buffer.size()
-        )
+        std::string(reinterpret_cast<const char*>(read_buffer.data()), read_buffer.size())
     );
 #endif
-
     co_return;
 }
 
@@ -163,16 +134,12 @@ task::Awaitable<int, detail::AwaitableFrame<int>> generator()
 task::Awaitable<void, detail::AwaitableFrame<void>> consumer()
 {
     auto g = generator();
-
     while (true)
     {
         int v = co_await g;
         std::cout << "got " << v << "\n";
-
-        if (g.get_promise()->get_coroutine_handle().done())
-            break;
+        if (g.get_promise()->get_coroutine_handle().done()) break;
     }
-
     co_return;
 }
 
@@ -189,6 +156,66 @@ task::Awaitable<void> critical_task(int id)
     co_return;
 }
 
+usub::uvent::sync::AsyncSemaphore g_sem{2};
+usub::uvent::sync::AsyncEvent g_evt{usub::uvent::sync::Reset::Manual, false};
+usub::uvent::sync::WaitGroup g_wg;
+usub::uvent::sync::CancellationSource g_cancel_src;
+
+task::Awaitable<void> semaphore_task(int id)
+{
+    co_await g_sem.acquire();
+    std::cout << "[sem] task " << id << " acquired\n";
+    co_await system::this_coroutine::sleep_for(std::chrono::milliseconds(300));
+    std::cout << "[sem] task " << id << " released\n";
+    g_sem.release();
+    g_wg.done();
+    co_return;
+}
+
+task::Awaitable<void> event_waiter(int id)
+{
+    std::cout << "[evt] waiter " << id << " waiting\n";
+    co_await g_evt.wait();
+    std::cout << "[evt] waiter " << id << " woke up\n";
+    co_return;
+}
+
+task::Awaitable<void> set_event_after_1s()
+{
+    using namespace std::chrono_literals;
+    co_await system::this_coroutine::sleep_for(1s);
+    std::cout << "[evt] set manual event\n";
+    g_evt.set();
+    co_return;
+}
+
+task::Awaitable<void> cancellation_task(usub::uvent::sync::CancellationToken tok)
+{
+    int ticks = 0;
+    while (!tok.stop_requested())
+    {
+        ++ticks;
+        co_await system::this_coroutine::sleep_for(std::chrono::milliseconds(200));
+    }
+    std::cout << "[cancel] canceled after " << ticks << " ticks\n";
+    co_return;
+}
+
+task::Awaitable<void> cancel_after_1500ms()
+{
+    using namespace std::chrono_literals;
+    co_await system::this_coroutine::sleep_for(1500ms);
+    std::cout << "[cancel] request_cancel()\n";
+    g_cancel_src.request_cancel();
+    co_return;
+}
+
+task::Awaitable<void> wg_waiter()
+{
+    co_await g_wg.wait();
+    std::cout << "[wg] all semaphore tasks done\n";
+    co_return;
+}
 
 int main()
 {
@@ -197,18 +224,34 @@ int main()
     spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [thread %t] [%l] %v%$");
     spdlog::set_level(spdlog::level::trace);
 #endif
+
     usub::Uvent uvent(4);
     uvent.for_each_thread([&](int threadIndex, thread::ThreadLocalStorage* tls)
     {
         system::co_spawn_static(listeningCoro(), threadIndex);
-        system::co_spawn_static(listeningCoro(), threadIndex);
     });
+
     system::co_spawn(sendingCoro());
     system::co_spawn(consumer());
-
     system::co_spawn(critical_task(1));
     system::co_spawn(critical_task(2));
     system::co_spawn(critical_task(3));
+
+    g_wg.add(4);
+    system::co_spawn(semaphore_task(0));
+    system::co_spawn(semaphore_task(1));
+    system::co_spawn(semaphore_task(2));
+    system::co_spawn(semaphore_task(3));
+
+    system::co_spawn(event_waiter(1));
+    system::co_spawn(event_waiter(2));
+    system::co_spawn(set_event_after_1s());
+
+    auto tok = g_cancel_src.token();
+    system::co_spawn(cancellation_task(tok));
+    system::co_spawn(cancel_after_1500ms());
+
+    system::co_spawn(wg_waiter());
 
     uvent.run();
     return 0;

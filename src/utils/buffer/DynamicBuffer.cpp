@@ -17,6 +17,11 @@ namespace usub::uvent::utils {
         return this->data_.data();
     }
 
+    uint8_t* DynamicBuffer::data()
+    {
+        return this->data_.data();
+    }
+
     void DynamicBuffer::clear() {
         this->data_.clear();
     }
