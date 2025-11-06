@@ -62,7 +62,7 @@ nav:
   - Delayed tasks:
       - Timers: timers.md
   - Synchronization:
-      - AsyncMutex: async-mutex.md
+      - AsyncMutex: synchronization.md
   - Contributing: contributing.md
 
 extra:
