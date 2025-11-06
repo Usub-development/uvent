@@ -120,6 +120,14 @@ namespace usub::uvent::net
             || (p == Proto::UDP));
 
         /**
+         * \brief Asynchronously reads data into the buffer.
+         * Waits for EPOLLIN event and reads up to max_read_size bytes into the given buffer.
+         */
+        [[nodiscard]] task::Awaitable<ssize_t, uvent::detail::AwaitableIOFrame<ssize_t>>
+        async_read(uint8_t* buffer, size_t max_read_size) requires((p == Proto::TCP && r == Role::ACTIVE)
+            || (p == Proto::UDP));
+
+        /**
          * \brief Asynchronously writes data from the buffer.
          * Waits for EPOLLOUT event and attempts to write sz bytes from buf.
          */
@@ -440,6 +448,104 @@ namespace usub::uvent::net
         if (total_read > 0) this->header_->timeout_epoch_bump();
 #endif
         co_return total_read;
+    }
+
+    template <Proto p, Role r>
+    task::Awaitable<ssize_t, uvent::detail::AwaitableIOFrame<ssize_t>>
+    Socket<p, r>::async_read(uint8_t* dst, size_t max_read_size)
+        requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP))
+    {
+#if UVENT_DEBUG
+        spdlog::info("Entered into read coroutine: fd={}", this->header_->fd);
+#endif
+        if (!dst || max_read_size == 0) co_return 0;
+
+        co_await detail::AwaiterRead{this->header_};
+
+#if UVENT_DEBUG
+        spdlog::info("Triggered by epoll: fd={}", this->header_->fd);
+#endif
+
+        ssize_t total_read = 0;
+        int retries = 0;
+
+        if constexpr (p == Proto::UDP)
+        {
+            for (;;)
+            {
+                ssize_t res = ::recvfrom(this->header_->fd, dst, max_read_size, MSG_DONTWAIT, nullptr, nullptr);
+                if (res > 0)
+                {
+#ifndef UVENT_ENABLE_REUSEADDR
+                    this->header_->timeout_epoch_bump();
+#endif
+                    co_return res;
+                }
+                if (res == 0)
+                {
+                    co_return 0;
+                }
+
+                if (errno == EAGAIN || errno == EWOULDBLOCK) co_return 0;
+                if (errno == EINTR)
+                {
+                    if (++retries >= settings::max_read_retries)
+                    {
+                        this->remove();
+                        co_return -1;
+                    }
+                    continue;
+                }
+
+                this->remove();
+                co_return -1;
+            }
+        }
+        else
+        {
+            uint8_t* out = dst;
+            size_t left = max_read_size;
+
+            while (left > 0)
+            {
+                ssize_t res = ::recv(this->header_->fd, out, left, MSG_DONTWAIT);
+                if (res > 0)
+                {
+                    out += static_cast<size_t>(res);
+                    left -= static_cast<size_t>(res);
+                    total_read += res;
+                    retries = 0;
+                    continue;
+                }
+                if (res == 0)
+                {
+                    this->remove();
+#ifndef UVENT_ENABLE_REUSEADDR
+                    if (total_read > 0) this->header_->timeout_epoch_bump();
+#endif
+                    co_return total_read;
+                }
+
+                if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                if (errno == EINTR)
+                {
+                    if (++retries >= settings::max_read_retries)
+                    {
+                        this->remove();
+                        co_return -1;
+                    }
+                    continue;
+                }
+
+                this->remove();
+                co_return -1;
+            }
+
+#ifndef UVENT_ENABLE_REUSEADDR
+            if (total_read > 0) this->header_->timeout_epoch_bump();
+#endif
+            co_return total_read;
+        }
     }
 
     template <Proto p, Role r>
