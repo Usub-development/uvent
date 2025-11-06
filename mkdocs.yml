@@ -61,8 +61,7 @@ nav:
       - Socket: socket.md
   - Delayed tasks:
       - Timers: timers.md
-  - Synchronization:
-      - AsyncMutex: synchronization.md
+  - Synchronization: synchronization.md
   - Contributing: contributing.md
 
 extra:
