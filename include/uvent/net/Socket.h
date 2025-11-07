@@ -231,7 +231,8 @@ namespace usub::uvent::net
          *
          * \return The client address variant.
          */
-        client_addr_t get_client_addr() const;
+        [[nodiscard]] client_addr_t get_client_addr() const requires (p == Proto::TCP && r ==
+            Role::ACTIVE);
 
         /**
          * \brief Returns the client network address (IPv4 or IPv6) associated with this socket.
@@ -240,7 +241,18 @@ namespace usub::uvent::net
          *
          * \return The client address variant.
          */
-        client_addr_t get_client_addr();
+        [[nodiscard]] client_addr_t get_client_addr() requires (p == Proto::TCP && r ==
+            Role::ACTIVE);
+
+        /**
+          * \brief Returns the IP version (IPv4 or IPv6) of the connected peer.
+          *
+          * Determines whether the underlying active TCP socket is using an IPv4 or IPv6 address family.
+          *
+          * \return utils::net::IPV enum value indicating the IP version.
+          */
+        [[nodiscard]] utils::net::IPV get_client_ipv() const requires (p == Proto::TCP && r ==
+            Role::ACTIVE);
 
     protected:
         void destroy() noexcept override;
@@ -1132,15 +1144,23 @@ namespace usub::uvent::net
     }
 
     template <Proto p, Role r>
-    client_addr_t Socket<p, r>::get_client_addr() const
+    client_addr_t Socket<p, r>::get_client_addr() const requires (p == Proto::TCP && r ==
+        Role::ACTIVE)
     {
         return this->address;
     }
 
     template <Proto p, Role r>
-    client_addr_t Socket<p, r>::get_client_addr()
+    client_addr_t Socket<p, r>::get_client_addr() requires (p == Proto::TCP && r ==
+        Role::ACTIVE)
     {
         return this->address;
+    }
+
+    template <Proto p, Role r>
+    utils::net::IPV Socket<p, r>::get_client_ipv() const requires (p == Proto::TCP && r == Role::ACTIVE)
+    {
+        return this->ipv;
     }
 
     template <Proto p, Role r>

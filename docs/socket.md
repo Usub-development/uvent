@@ -186,6 +186,58 @@ Destruction path (internal):
 
 ---
 
+## Client addr
+
+To get client addr you can simply use:
+```cpp
+        /**
+         * \brief Returns the client network address (IPv4 or IPv6) associated with this socket.
+         *
+         * The type alias \c client_addr_t is defined as:
+         * \code
+         * typedef std::variant<sockaddr_in, sockaddr_in6> client_addr_t;
+         * \endcode
+         * allowing the caller to handle both IPv4 and IPv6 endpoints transparently.
+         *
+         * \return The client address variant.
+         */
+        client_addr_t get_client_addr() const;
+
+        /**
+         * \brief Returns the client network address (IPv4 or IPv6) associated with this socket.
+         *
+         * Non-const overload allowing modifications to the returned structure if necessary.
+         *
+         * \return The client address variant.
+         */
+        client_addr_t get_client_addr();
+```
+
+both of them returning: `typedef std::variant<sockaddr_in, sockaddr_in6> client_addr_t;`.
+
+To get client's IP version you can simply use:
+```cpp
+        /**
+          * \brief Returns the IP version (IPv4 or IPv6) of the connected peer.
+          *
+          * Determines whether the underlying active TCP socket is using an IPv4 or IPv6 address family.
+          *
+          * \return utils::net::IPV enum value indicating the IP version.
+          */
+        [[nodiscard]] utils::net::IPV get_client_ipv() const requires (p == Proto::TCP && r ==
+            Role::ACTIVE);
+```
+Returns: 
+```cpp
+    enum IPV {
+        IPV4 = 0x0,
+        IPV6 = 0x1,
+    };
+```
+It reflects the actual IP version of the connected client.
+
+---
+
 ## Return/Error Summary
 
 * `ssize_t` I/O: `>0` bytes, `0` EOF (read), `-1` error, `-2` read cap reached.
