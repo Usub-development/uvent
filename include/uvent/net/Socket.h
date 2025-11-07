@@ -220,6 +220,28 @@ namespace usub::uvent::net
 
         std::expected<std::string, usub::utils::errors::SendError> receive(size_t chunk_size, size_t maxSize);
 
+        /**
+         * \brief Returns the client network address (IPv4 or IPv6) associated with this socket.
+         *
+         * The type alias \c client_addr_t is defined as:
+         * \code
+         * typedef std::variant<sockaddr_in, sockaddr_in6> client_addr_t;
+         * \endcode
+         * allowing the caller to handle both IPv4 and IPv6 endpoints transparently.
+         *
+         * \return The client address variant.
+         */
+        client_addr_t get_client_addr() const;
+
+        /**
+         * \brief Returns the client network address (IPv4 or IPv6) associated with this socket.
+         *
+         * Non-const overload allowing modifications to the returned structure if necessary.
+         *
+         * \return The client address variant.
+         */
+        client_addr_t get_client_addr();
+
     protected:
         void destroy() noexcept override;
 
@@ -1107,6 +1129,18 @@ namespace usub::uvent::net
         {
             return std::unexpected(usub::utils::errors::SendError::InvalidAddressVariant);
         }
+    }
+
+    template <Proto p, Role r>
+    client_addr_t Socket<p, r>::get_client_addr() const
+    {
+        return this->address;
+    }
+
+    template <Proto p, Role r>
+    client_addr_t Socket<p, r>::get_client_addr()
+    {
+        return this->address;
     }
 
     template <Proto p, Role r>
