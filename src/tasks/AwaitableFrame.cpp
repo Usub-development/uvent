@@ -116,5 +116,6 @@ namespace usub::uvent::detail
 
     std::suspend_always AwaitableFrame<void>::yield_value() noexcept
     {
+        return {};
     }
 }

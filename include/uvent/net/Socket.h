@@ -305,7 +305,7 @@ namespace usub::uvent::net
             .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))
 #else
             .state = (1ull & usub::utils::sync::refc::COUNT_MASK)
-#endif),
+#endif
         };
         utils::socket::makeSocketNonBlocking(this->header_->fd);
         system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::READ);
