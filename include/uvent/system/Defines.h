@@ -17,6 +17,9 @@
 #define OS_BSD 1
 #endif
 
+#if defined(_WIN32) || defined(_WIN64)
+#define OS_WINDOWS 1
+#endif
 
 #if defined(__APPLE__) || defined(__BSD__)
 
@@ -75,15 +78,41 @@ std::string get_thread_name() {
     return "unsupported";
 }
 
-#elif defined(_WIN32) || defined(_WIN64)
+#elif defined(OS_WINDOWS)
 
-#include <winsock.h> // sockaddr_in: https://learn.microsoft.com/ru-ru/windows/win32/api/winsock/ns-winsock-sockaddr_in
-#include <ws2ipdef.h> // sockaddr_in6: https://learn.microsoft.com/ru-ru/windows/win32/api/ws2ipdef/ns-ws2ipdef-sockaddr_in6_lh
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <mswsock.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <io.h>
 
-#define OS_WINDOWS
+#pragma comment(lib, "Ws2_32.lib")
+#pragma comment(lib, "Mswsock.lib")
 
-typedef std::variant <sockaddr_in, sockaddr_in6> client_addr_t;
+typedef std::variant<sockaddr_in, sockaddr_in6> client_addr_t;
 typedef int socklen_t;
+
+using ssize_t = long long;
+
+inline void set_thread_name(const std::string& name){
+    using SetThreadDescription_t = HRESULT(WINAPI*)(HANDLE, PCWSTR);
+    HMODULE h = GetModuleHandleW(L"Kernel32.dll");
+    if (h) {
+        auto p = reinterpret_cast<SetThreadDescription_t>(
+            GetProcAddress(h, "SetThreadDescription"));
+        if (p) {
+            int wlen = MultiByteToWideChar(CP_UTF8, 0, name.c_str(), -1, nullptr, 0);
+            std::wstring wname; wname.resize(wlen);
+            MultiByteToWideChar(CP_UTF8, 0, name.c_str(), -1, wname.data(), wlen);
+            p(GetCurrentThread(), wname.c_str());
+        }
+    }
+}
+
+inline std::string get_thread_name(){ return "unsupported"; }
 
 #else
 
@@ -129,6 +158,10 @@ static inline void uvent_sock_nosigpipe(int fd) {
     int one = 1;
     (void)setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
 }
+
+#elif defined(OS_WINDOWS)
+#define UVENT_SEND_NOSIG_FLAGS 0
+static inline void uvent_sock_nosigpipe(int) {}
 #else
 #define UVENT_SEND_NOSIG_FLAGS 0
 static inline void uvent_sock_nosigpipe(int) {}
@@ -138,14 +171,13 @@ static inline void uvent_sock_nosigpipe(int) {}
 #include <sys/types.h>
 
 static inline
-#if defined(_WIN32) || defined(_WIN64)
+#if defined(OS_WINDOWS)
 int
 #else
 ssize_t
 #endif
 uvent_send_nosig(int fd, const void* buf, size_t len, int flags) {
-#if defined(_WIN32) || defined(_WIN64)
-    // На Windows SIGPIPE не возникает
+#if defined(OS_WINDOWS)
     return ::send((SOCKET)fd, (const char*)buf, (int)len, flags);
 #else
     return ::send(fd, buf, len, flags | UVENT_SEND_NOSIG_FLAGS);
@@ -157,9 +189,11 @@ uvent_send_nosig(int fd, const void* buf, size_t len, int flags) {
 
 #include <string>
 #include <system_error>
+#ifndef OS_WINDOWS
 #include <execinfo.h>
-#include <iostream>
 #include <cxxabi.h>
+#endif
+#include <iostream>
 
 extern std::string get_caller_function_name(int depth = 2);
 

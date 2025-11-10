@@ -22,7 +22,7 @@ namespace usub::uvent::net {
         extern void processSocketTimeout(std::any arg);
     }
 
-    template<Proto p, Role r>
+ template<Proto p, Role r>
     class Socket : usub::utils::sync::refc::RefCounted<Socket<p, r> > {
     public:
         friend class usub::utils::sync::refc::RefCounted<Socket<p, r> >;
@@ -272,9 +272,8 @@ namespace usub::uvent::net {
     template<Proto p, Role r>
     Socket<p, r>::Socket() noexcept {
         this->header_ = new SocketHeader{
-            .socket_info = (static_cast<uint8_t>(Proto::TCP) | static_cast<uint8_t>(Role::ACTIVE) | static_cast<uint8_t>
-                            (AdditionalState::CONNECTION_PENDING)),
-            .state = (1 & usub::utils::sync::refc::COUNT_MASK) | (false ? usub::utils::sync::refc::CLOSED_MASK : 0)
+            .socket_info = (static_cast<uint8_t>(Proto::TCP) | static_cast<uint8_t>(Role::ACTIVE) | static_cast<uint8_t>(AdditionalState::CONNECTION_PENDING)),
+            .state = (1 & usub::utils::sync::refc::COUNT_MASK)
         };
     }
 
@@ -282,18 +281,21 @@ namespace usub::uvent::net {
     Socket<p, r>::Socket(int fd) noexcept {
         this->header_ = new SocketHeader{
             .fd = fd,
-            .socket_info = (static_cast<uint8_t>(Proto::TCP) | static_cast<uint8_t>(Role::ACTIVE) | static_cast<uint8_t>
-                            (AdditionalState::CONNECTION_PENDING)),
-            .state = (1 & usub::utils::sync::refc::COUNT_MASK) | (false ? usub::utils::sync::refc::CLOSED_MASK : 0)
+            .socket_info = (static_cast<uint8_t>(Proto::TCP) | static_cast<uint8_t>(Role::ACTIVE) | static_cast<uint8_t>(AdditionalState::CONNECTION_PENDING)),
+            .state = (1 & usub::utils::sync::refc::COUNT_MASK)
         };
+#if defined(OS_WINDOWS)
+        u_long nb = 1;
+        ioctlsocket((SOCKET)fd, FIONBIO, &nb);
+#else
         system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::ALL);
+#endif
     }
 
     template<Proto p, Role r>
     Socket<p, r>::Socket(std::string &ip_addr, int port, int backlog,
                          utils::net::IPV ipv,
-                         utils::net::SocketAddressType socketAddressType) noexcept requires (p == Proto::TCP && r ==
-        Role::PASSIVE) {
+                         utils::net::SocketAddressType socketAddressType) noexcept requires (p == Proto::TCP && r == Role::PASSIVE) {
         this->header_ = new SocketHeader{
             .fd = utils::socket::createSocket(port, ip_addr, backlog, ipv, socketAddressType),
             .socket_info = (uint8_t(p) | uint8_t(r)),
@@ -303,14 +305,18 @@ namespace usub::uvent::net {
             .state = (1ull & usub::utils::sync::refc::COUNT_MASK)
 #endif
         };
+#if defined(OS_WINDOWS)
+        u_long nb = 1;
+        ioctlsocket((SOCKET)this->header_->fd, FIONBIO, &nb);
+#else
         utils::socket::makeSocketNonBlocking(this->header_->fd);
+#endif
         system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::READ);
     }
 
     template<Proto p, Role r>
     Socket<p, r>::Socket(std::string &&ip_addr, int port, int backlog, utils::net::IPV ipv,
-                         utils::net::SocketAddressType socketAddressType) noexcept requires (p == Proto::TCP && r ==
-        Role::PASSIVE) {
+                         utils::net::SocketAddressType socketAddressType) noexcept requires (p == Proto::TCP && r == Role::PASSIVE) {
         this->header_ = new SocketHeader{
             .fd = utils::socket::createSocket(port, ip_addr, backlog, ipv, socketAddressType),
             .socket_info = (static_cast<uint8_t>(p) | static_cast<uint8_t>(r)),
@@ -320,7 +326,12 @@ namespace usub::uvent::net {
             .state = (1ull & usub::utils::sync::refc::COUNT_MASK)
 #endif
         };
+#if defined(OS_WINDOWS)
+        u_long nb = 1;
+        ioctlsocket((SOCKET)this->header_->fd, FIONBIO, &nb);
+#else
         utils::socket::makeSocketNonBlocking(this->header_->fd);
+#endif
         system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::READ);
     }
 
@@ -341,9 +352,7 @@ namespace usub::uvent::net {
     }
 
     template<Proto p, Role r>
-    Socket<p, r>::Socket(Socket &&o) noexcept : header_(o.header_) {
-        o.header_ = nullptr;
-    }
+    Socket<p, r>::Socket(Socket &&o) noexcept : header_(o.header_) { o.header_ = nullptr; }
 
     template<Proto p, Role r>
     Socket<p, r> &Socket<p, r>::operator=(const Socket &o) noexcept {
@@ -362,73 +371,70 @@ namespace usub::uvent::net {
     }
 
     template<Proto p, Role r>
-    Socket<p, r> Socket<p, r>::from_existing(SocketHeader *header) {
-        return Socket(header);
-    }
+    Socket<p, r> Socket<p, r>::from_existing(SocketHeader *header) { return Socket(header); }
 
     template<Proto p, Role r>
-    SocketHeader *Socket<p, r>::get_raw_header() {
-        return this->header_;
-    }
+    SocketHeader *Socket<p, r>::get_raw_header() { return this->header_; }
 
     template<Proto p, Role r>
     task::Awaitable<std::optional<TCPClientSocket>, uvent::detail::AwaitableIOFrame<std::optional<TCPClientSocket> > >
-    Socket<p, r>::async_accept()
-        requires (
-            p == Proto::TCP && r == Role::PASSIVE) {
+    Socket<p, r>::async_accept() requires (p == Proto::TCP && r == Role::PASSIVE) {
         co_await detail::AwaiterAccept{this->header_};
-#if defined(OS_LINUX)
         sockaddr_storage sockaddr{};
         socklen_t socklen = sizeof(sockaddr);
-
-        int client_fd = ::accept4(this->header_->fd, reinterpret_cast<struct sockaddr *>(&sockaddr), &socklen,
-                                  SOCK_NONBLOCK);
-        if (client_fd < 0) co_return std::nullopt;
+        int client_fd =
+#if defined(OS_LINUX) || defined(OS_BSD) || defined(OS_APPLE)
+            ::accept4(this->header_->fd, reinterpret_cast<struct sockaddr *>(&sockaddr), &socklen, SOCK_NONBLOCK);
+#elif defined(OS_WINDOWS)
+            ::accept(this->header_->fd, reinterpret_cast<struct sockaddr *>(&sockaddr), &socklen);
 #else
-        sockaddr_storage sockaddr{};
-        socklen_t socklen = sizeof(sockaddr);
+            ::accept(this->header_->fd, reinterpret_cast<struct sockaddr *>(&sockaddr), &socklen);
+#endif
+        if (client_fd < 0) co_return std::nullopt;
 
-        int client_fd = ::accept(this->header_->fd, reinterpret_cast<struct sockaddr *>(&sockaddr), &socklen);
-        if (!utils::socket::makeSocketNonBlocking(client_fd) || client_fd < 0) co_return std::nullopt;
+#if defined(OS_WINDOWS)
+        u_long nb = 1; ioctlsocket((SOCKET)client_fd, FIONBIO, &nb);
 #endif
         auto header = new SocketHeader{
             .fd = client_fd,
             .socket_info = (static_cast<uint8_t>(Proto::TCP) | static_cast<uint8_t>(Role::ACTIVE)),
-            .state = (1 & usub::utils::sync::refc::COUNT_MASK) | (false ? usub::utils::sync::refc::CLOSED_MASK : 0)
+            .state = (1 & usub::utils::sync::refc::COUNT_MASK)
         };
         system::this_thread::detail::pl->addEvent(header, core::OperationType::READ);
-        auto sc = TCPClientSocket(header);
 #if defined(OS_LINUX) || defined(OS_BSD) || defined(OS_APPLE)
         if (sockaddr.ss_family == AF_INET)
-            sc.address = *reinterpret_cast<sockaddr_in *>(&sockaddr);
+            reinterpret_cast<TCPClientSocket*>(this)->address = *reinterpret_cast<sockaddr_in *>(&sockaddr);
+        else if (sockaddr.ss_family == AF_INET6)
+        {
+            reinterpret_cast<TCPClientSocket*>(this)->address = *reinterpret_cast<sockaddr_in6 *>(&sockaddr);
+            reinterpret_cast<TCPClientSocket*>(this)->ipv = utils::net::IPV6;
+        }
+#elif defined(OS_WINDOWS)
+        if (sockaddr.ss_family == AF_INET)
+            reinterpret_cast<TCPClientSocket*>(this)->address = *reinterpret_cast<sockaddr_in *>(&sockaddr);
         else if (sockaddr.ss_family == AF_INET6) {
-            sc.address = *reinterpret_cast<sockaddr_in6 *>(&sockaddr);
-            sc.ipv = utils::net::IPV6;
+            reinterpret_cast<TCPClientSocket*>(this)->address = *reinterpret_cast<sockaddr_in6 *>(&sockaddr);
+            reinterpret_cast<TCPClientSocket*>(this)->ipv = utils::net::IPV6;
         }
 #endif
-        co_return sc;
+        co_return TCPClientSocket(header);
     }
 
     template<Proto p, Role r>
-    task::Awaitable<ssize_t, uvent::detail::AwaitableIOFrame<ssize_t> > Socket<p, r>::
-    async_read(utils::DynamicBuffer &buffer, size_t max_read_size) requires ((p == Proto::TCP && r == Role::ACTIVE) || (
-                                                                                 p == Proto::UDP)) {
-#if UVENT_DEBUG
-        spdlog::info("Entered into read coroutine: {}", this->header_->fd);
-#endif
+    task::Awaitable<ssize_t, uvent::detail::AwaitableIOFrame<ssize_t> >
+    Socket<p, r>::async_read(utils::DynamicBuffer &buffer, size_t max_read_size)
+        requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP)) {
         co_await detail::AwaiterRead{this->header_};
-
-#if UVENT_DEBUG
-        spdlog::info("Triggered by epoll: {}", this->header_->fd);
-#endif
         int retries = 0;
         ssize_t total_read = 0;
         while (true) {
             uint8_t temp[16384];
             size_t to_read = std::min(sizeof(temp), max_read_size - buffer.size());
-
+#if defined(OS_WINDOWS)
+            int res = ::recv(this->header_->fd, reinterpret_cast<char*>(temp), (int)to_read, 0);
+#else
             ssize_t res = ::recv(this->header_->fd, temp, to_read, MSG_DONTWAIT);
-
+#endif
             if (res > 0) {
                 buffer.append(temp, res);
                 total_read += res;
@@ -437,23 +443,18 @@ namespace usub::uvent::net {
                 this->remove();
                 co_return total_read > 0 ? total_read : 0;
             } else {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    break;
-                } else if (errno == EINTR) {
-                    if (++retries >= settings::max_read_retries) {
-                        this->remove();
-                        co_return -1;
-                    }
-                    continue;
-                } else {
-                    this->remove();
-                    co_return -1;
-                }
+#if defined(OS_WINDOWS)
+                int err = WSAGetLastError();
+                if (err == WSAEWOULDBLOCK) break;
+                if (err == WSAEINTR) { if (++retries >= settings::max_read_retries) { this->remove(); co_return -1; } continue; }
+#else
+                if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                if (errno == EINTR) { if (++retries >= settings::max_read_retries) { this->remove(); co_return -1; } continue; }
+#endif
+                this->remove();
+                co_return -1;
             }
-
-            if (buffer.size() >= max_read_size) {
-                break;
-            }
+            if (buffer.size() >= max_read_size) break;
         }
 #ifndef UVENT_ENABLE_REUSEADDR
         if (total_read > 0) this->header_->timeout_epoch_bump();
@@ -465,79 +466,65 @@ namespace usub::uvent::net {
     task::Awaitable<ssize_t, uvent::detail::AwaitableIOFrame<ssize_t> >
     Socket<p, r>::async_read(uint8_t *dst, size_t max_read_size)
         requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP)) {
-#if UVENT_DEBUG
-        spdlog::info("Entered into read coroutine: fd={}", this->header_->fd);
-#endif
         if (!dst || max_read_size == 0) co_return 0;
-
         co_await detail::AwaiterRead{this->header_};
-
-#if UVENT_DEBUG
-        spdlog::info("Triggered by epoll: fd={}", this->header_->fd);
-#endif
 
         ssize_t total_read = 0;
         int retries = 0;
 
         if constexpr (p == Proto::UDP) {
             for (;;) {
+#if defined(OS_WINDOWS)
+                int res = ::recvfrom(this->header_->fd, reinterpret_cast<char*>(dst), (int)max_read_size, 0, nullptr, nullptr);
+#else
                 ssize_t res = ::recvfrom(this->header_->fd, dst, max_read_size, MSG_DONTWAIT, nullptr, nullptr);
+#endif
                 if (res > 0) {
 #ifndef UVENT_ENABLE_REUSEADDR
                     this->header_->timeout_epoch_bump();
 #endif
                     co_return res;
                 }
-                if (res == 0) {
-                    co_return 0;
-                }
+                if (res == 0) co_return 0;
 
+#if defined(OS_WINDOWS)
+                int err = WSAGetLastError();
+                if (err == WSAEWOULDBLOCK) co_return 0;
+                if (err == WSAEINTR) { if (++retries >= settings::max_read_retries) { this->remove(); co_return -1; } continue; }
+#else
                 if (errno == EAGAIN || errno == EWOULDBLOCK) co_return 0;
-                if (errno == EINTR) {
-                    if (++retries >= settings::max_read_retries) {
-                        this->remove();
-                        co_return -1;
-                    }
-                    continue;
-                }
-
-                this->remove();
-                co_return -1;
+                if (errno == EINTR) { if (++retries >= settings::max_read_retries) { this->remove(); co_return -1; } continue; }
+#endif
+                this->remove(); co_return -1;
             }
         } else {
             uint8_t *out = dst;
             size_t left = max_read_size;
-
             while (left > 0) {
+#if defined(OS_WINDOWS)
+                int res = ::recv(this->header_->fd, reinterpret_cast<char*>(out), (int)left, 0);
+#else
                 ssize_t res = ::recv(this->header_->fd, out, left, MSG_DONTWAIT);
+#endif
                 if (res > 0) {
-                    out += static_cast<size_t>(res);
-                    left -= static_cast<size_t>(res);
-                    total_read += res;
-                    retries = 0;
-                    continue;
+                    out += (size_t)res; left -= (size_t)res; total_read += res; retries = 0; continue;
                 }
-                if (res == 0) {
-                    this->remove();
+                if (res == 0) { this->remove();
 #ifndef UVENT_ENABLE_REUSEADDR
                     if (total_read > 0) this->header_->timeout_epoch_bump();
 #endif
                     co_return total_read;
                 }
-
+#if defined(OS_WINDOWS)
+                int err = WSAGetLastError();
+                if (err == WSAEWOULDBLOCK) break;
+                if (err == WSAEINTR) { if (++retries >= settings::max_read_retries) { this->remove(); co_return -1; } continue; }
+#else
                 if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-                if (errno == EINTR) {
-                    if (++retries >= settings::max_read_retries) {
-                        this->remove();
-                        co_return -1;
-                    }
-                    continue;
-                }
-
-                this->remove();
-                co_return -1;
+                if (errno == EINTR) { if (++retries >= settings::max_read_retries) { this->remove(); co_return -1; } continue; }
+#endif
+                this->remove(); co_return -1;
             }
-
 #ifndef UVENT_ENABLE_REUSEADDR
             if (total_read > 0) this->header_->timeout_epoch_bump();
 #endif
@@ -546,50 +533,39 @@ namespace usub::uvent::net {
     }
 
     template<Proto p, Role r>
-    task::Awaitable<ssize_t, uvent::detail::AwaitableIOFrame<ssize_t> > Socket<p, r>::
-    async_write(uint8_t *buf, size_t sz) requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP)) {
-#if UVENT_DEBUG
-        spdlog::info("Entered into write coroutine");
-#endif
+    task::Awaitable<ssize_t, uvent::detail::AwaitableIOFrame<ssize_t> >
+    Socket<p, r>::async_write(uint8_t *buf, size_t sz)
+        requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP)) {
         auto buf_internal = std::unique_ptr<uint8_t[]>(new uint8_t[sz], std::default_delete<uint8_t[]>());
         std::copy_n(buf, sz, buf_internal.get());
-#if UVENT_DEBUG
-        spdlog::info("Triggered by epoll");
-#endif
 
-
-        if (this->is_disconnected_now()) {
-            co_return -3;
-        }
+        if (this->is_disconnected_now()) co_return -3;
         co_await detail::AwaiterWrite{this->header_};
         if (this->is_disconnected_now()) co_return -3;
 
         ssize_t total_written = 0;
         int retries = 0;
 
-        while (total_written < sz) {
-            ssize_t res = ::send(this->header_->fd, buf_internal.get() + total_written, sz - total_written,
-                                 MSG_DONTWAIT);
-            if (res > 0) {
-                total_written += res;
-                retries = 0;
-                continue;
-            } else if (res == -1) {
-                if (errno == EINTR) {
-                    if (++retries >= settings::max_write_retries) {
-                        this->remove();
-                        co_return (this->is_disconnected_now()) ? -3 : -1;
-                    }
-                    continue;
-                } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    break;
-                } else {
-                    this->remove();
-                    co_return (this->is_disconnected_now()) ? -3 : -1;
-                }
+        while (total_written < (ssize_t)sz) {
+#if defined(OS_WINDOWS)
+            int res = ::send(this->header_->fd, reinterpret_cast<char*>(buf_internal.get() + total_written),
+                             (int)(sz - total_written), 0);
+#else
+            ssize_t res = ::send(this->header_->fd, buf_internal.get() + total_written, sz - total_written, MSG_DONTWAIT);
+#endif
+            if (res > 0) { total_written += res; retries = 0; continue; }
+            if (res == -1) {
+#if defined(OS_WINDOWS)
+                int err = WSAGetLastError();
+                if (err == WSAEINTR) { if (++retries >= settings::max_write_retries) { this->remove(); co_return (this->is_disconnected_now()) ? -3 : -1; } continue; }
+                if (err == WSAEWOULDBLOCK) break;
+#else
+                if (errno == EINTR) { if (++retries >= settings::max_write_retries) { this->remove(); co_return (this->is_disconnected_now()) ? -3 : -1; } continue; }
+                if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+#endif
+                this->remove(); co_return (this->is_disconnected_now()) ? -3 : -1;
             }
         }
-
 #ifndef UVENT_ENABLE_REUSEADDR
         if (total_written > 0) this->header_->timeout_epoch_bump();
 #endif
@@ -597,267 +573,189 @@ namespace usub::uvent::net {
     }
 
     template<Proto p, Role r>
-    ssize_t Socket<p, r>::read(utils::DynamicBuffer &buffer, size_t max_read_size) requires ((p == Proto::TCP && r ==
-            Role::ACTIVE) || (p == Proto::UDP)) {
+    ssize_t Socket<p, r>::read(utils::DynamicBuffer &buffer, size_t max_read_size)
+        requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP)) {
         ssize_t total_read = 0;
         int retries = 0;
         while (true) {
             uint8_t temp[16384];
             size_t to_read = std::min(sizeof(temp), max_read_size - buffer.size());
-
+#if defined(OS_WINDOWS)
+            int res = ::recv(this->header_->fd, reinterpret_cast<char*>(temp), (int)to_read, 0);
+#else
             ssize_t res = ::recv(this->header_->fd, temp, to_read, MSG_DONTWAIT);
-
-            if (res > 0) {
-                buffer.append(temp, res);
-                total_read += res;
-                retries = 0;
-            } else if (res == 0) {
-                return total_read > 0 ? total_read : 0;
-            } else {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    break;
-                } else if (errno == EINTR) {
-                    if (++retries >= settings::max_read_retries) {
-                        return -1;
-                    }
-                    continue;
-                } else {
-                    return -1;
-                }
+#endif
+            if (res > 0) { buffer.append(temp, res); total_read += res; retries = 0; }
+            else if (res == 0) { return total_read > 0 ? total_read : 0; }
+            else {
+#if defined(OS_WINDOWS)
+                int err = WSAGetLastError();
+                if (err == WSAEWOULDBLOCK) break;
+                if (err == WSAEINTR) { if (++retries >= settings::max_read_retries) return -1; continue; }
+#else
+                if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                if (errno == EINTR) { if (++retries >= settings::max_read_retries) return -1; continue; }
+#endif
+                return -1;
             }
-
-            if (buffer.size() >= max_read_size) {
-                break;
-            }
+            if (buffer.size() >= max_read_size) break;
         }
         return total_read;
     }
 
     template<Proto p, Role r>
-    ssize_t Socket<p, r>::write(uint8_t *buf, size_t sz) requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto
-                                                                       ::UDP)) {
+    ssize_t Socket<p, r>::write(uint8_t *buf, size_t sz)
+        requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP)) {
         auto buf_internal = std::unique_ptr<uint8_t[]>(new uint8_t[sz], std::default_delete<uint8_t[]>());
         std::copy_n(buf, sz, buf_internal.get());
-
-        ssize_t total_written = 0;
-        int retries = 0;
-
-        while (total_written < sz) {
-            ssize_t res = ::send(this->header_->fd, buf_internal.get() + total_written, sz - total_written,
-                                 MSG_DONTWAIT);
-            if (res > 0) {
-                total_written += res;
-                retries = 0;
-                continue;
-            } else if (res == -1) {
-                if (errno == EINTR) {
-                    if (++retries >= settings::max_write_retries) {
-                        return -1;
-                    }
-                    continue;
-                } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    break;
-                } else {
-                    return -1;
-                }
+        ssize_t total_written = 0; int retries = 0;
+        while (total_written < (ssize_t)sz) {
+#if defined(OS_WINDOWS)
+            int res = ::send(this->header_->fd, reinterpret_cast<char*>(buf_internal.get() + total_written),
+                             (int)(sz - total_written), 0);
+#else
+            ssize_t res = ::send(this->header_->fd, buf_internal.get() + total_written, sz - total_written, MSG_DONTWAIT);
+#endif
+            if (res > 0) { total_written += res; retries = 0; continue; }
+            if (res == -1) {
+#if defined(OS_WINDOWS)
+                int err = WSAGetLastError();
+                if (err == WSAEINTR) { if (++retries >= settings::max_write_retries) return -1; continue; }
+                if (err == WSAEWOULDBLOCK) break;
+#else
+                if (errno == EINTR) { if (++retries >= settings::max_write_retries) return -1; continue; }
+                if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+#endif
+                return -1;
             }
         }
         return total_written;
     }
 
     template<Proto p, Role r>
-    task::Awaitable<std::optional<usub::utils::errors::ConnectError>, uvent::detail::AwaitableIOFrame<std::
-        optional<usub::utils::errors::ConnectError> > > Socket<p, r>::async_connect(
-        std::string &host, std::string &port)
-        requires (p == Proto::TCP && r == Role::ACTIVE) {
-#if defined(OS_LINUX) || defined(OS_BSD) || defined(OS_APPLE)
+    task::Awaitable<std::optional<usub::utils::errors::ConnectError>,
+        uvent::detail::AwaitableIOFrame<std::optional<usub::utils::errors::ConnectError>> >
+    Socket<p, r>::async_connect(std::string &host, std::string &port) requires (p == Proto::TCP && r == Role::ACTIVE) {
         addrinfo hints{}, *res = nullptr;
         hints.ai_family = (this->ipv == utils::net::IPV::IPV4) ? AF_INET : AF_INET6;
-        if constexpr (p == Proto::TCP) hints.ai_socktype = SOCK_STREAM;
-        else hints.ai_socktype = SOCK_DGRAM;
+        if constexpr (p == Proto::TCP) hints.ai_socktype = SOCK_STREAM; else hints.ai_socktype = SOCK_DGRAM;
 
         if (getaddrinfo(host.c_str(), port.c_str(), &hints, &res) != 0 || !res) {
             this->header_->fd = -1;
             co_return usub::utils::errors::ConnectError::GetAddrInfoFailed;
         }
+        this->header_->fd = (int)socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+        if (this->header_->fd < 0) { freeaddrinfo(res); co_return usub::utils::errors::ConnectError::SocketCreationFailed; }
 
-        this->header_->fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-        if (this->header_->fd < 0) {
-            freeaddrinfo(res);
-            co_return usub::utils::errors::ConnectError::SocketCreationFailed;
-        }
-
+#if defined(OS_WINDOWS)
+        u_long nb = 1; ioctlsocket((SOCKET)this->header_->fd, FIONBIO, &nb);
+#else
         int s_flags = fcntl(this->header_->fd, F_GETFL, 0);
         fcntl(this->header_->fd, F_SETFL, s_flags | O_NONBLOCK);
+#endif
+        if (res->ai_family == AF_INET) this->address = *reinterpret_cast<sockaddr_in *>(res->ai_addr);
+        else                            this->address = *reinterpret_cast<sockaddr_in6 *>(res->ai_addr);
 
-        if (res->ai_family == AF_INET)
-            this->address = *reinterpret_cast<sockaddr_in *>(res->ai_addr);
-        else
-            this->address = *reinterpret_cast<sockaddr_in6 *>(res->ai_addr);
-
-        int ret = ::connect(this->header_->fd, res->ai_addr, res->ai_addrlen);
-        if (ret < 0 && errno != EINPROGRESS) {
-            close(this->header_->fd);
-            this->header_->fd = -1;
-            freeaddrinfo(res);
+        int ret = ::connect(this->header_->fd, res->ai_addr, (int)res->ai_addrlen);
+#if defined(OS_WINDOWS)
+        if (ret < 0 && WSAGetLastError() != WSAEWOULDBLOCK) {
+            closesocket((SOCKET)this->header_->fd); this->header_->fd = -1; freeaddrinfo(res);
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
-
+#else
+        if (ret < 0 && errno != EINPROGRESS) {
+            close(this->header_->fd); this->header_->fd = -1; freeaddrinfo(res);
+            co_return usub::utils::errors::ConnectError::ConnectFailed;
+        }
+#endif
         system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::ALL);
         co_await detail::AwaiterWrite{this->header_};
-
         freeaddrinfo(res);
         if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
-            co_return
-                    usub::utils::errors::ConnectError::Unknown;
+            co_return usub::utils::errors::ConnectError::Unknown;
 
         this->header_->timeout_epoch_bump();
         co_return std::nullopt;
-#endif
     }
 
     template<Proto p, Role r>
-    task::Awaitable<std::optional<usub::utils::errors::ConnectError>, uvent::detail::AwaitableIOFrame<std::optional<usub
-        ::utils::errors::ConnectError> > > Socket<p, r>::async_connect(
-        std::string &&host, std::string &&port) requires (p ==
-                                                          Proto::TCP && r == Role::ACTIVE) {
-#if defined(OS_LINUX) || defined(OS_BSD) || defined(OS_APPLE)
-        addrinfo hints{}, *res = nullptr;
-        hints.ai_family = (this->ipv == utils::net::IPV::IPV4) ? AF_INET : AF_INET6;
-        if constexpr (p == Proto::TCP) hints.ai_socktype = SOCK_STREAM;
-        else hints.ai_socktype = SOCK_DGRAM;
-
-        if (getaddrinfo(host.c_str(), port.c_str(), &hints, &res) != 0 || !res) {
-            this->header_->fd = -1;
-            co_return usub::utils::errors::ConnectError::GetAddrInfoFailed;
-        }
-
-        this->header_->fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-#ifdef UVENT_DEBUG
-        spdlog::debug("async_connect fd: {}", this->header_->fd);
-#endif
-        if (this->header_->fd < 0) {
-            freeaddrinfo(res);
-            co_return usub::utils::errors::ConnectError::SocketCreationFailed;
-        }
-
-        int s_flags = fcntl(this->header_->fd, F_GETFL, 0);
-        fcntl(this->header_->fd, F_SETFL, s_flags | O_NONBLOCK);
-
-        if (res->ai_family == AF_INET)
-            this->address = *reinterpret_cast<sockaddr_in *>(res->ai_addr);
-        else
-            this->address = *reinterpret_cast<sockaddr_in6 *>(res->ai_addr);
-
-        int ret = ::connect(this->header_->fd, res->ai_addr, res->ai_addrlen);
-        if (ret < 0 && errno != EINPROGRESS) {
-            close(this->header_->fd);
-            this->header_->fd = -1;
-            freeaddrinfo(res);
-            co_return usub::utils::errors::ConnectError::ConnectFailed;
-        }
-
-        system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::ALL);
-        co_await detail::AwaiterWrite{this->header_};
-        freeaddrinfo(res);
-        if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
-            co_return
-                    usub::utils::errors::ConnectError::Unknown;
-
-        this->header_->timeout_epoch_bump();
-        co_return std::nullopt;
-#endif
+    task::Awaitable<std::optional<usub::utils::errors::ConnectError>,
+        uvent::detail::AwaitableIOFrame<std::optional<usub::utils::errors::ConnectError>> >
+    Socket<p, r>::async_connect(std::string &&host, std::string &&port) requires (p == Proto::TCP && r == Role::ACTIVE) {
+        std::string h = std::move(host), pstr = std::move(port);
+        co_return co_await async_connect(h, pstr);
     }
 
     template<Proto p, Role r>
     task::Awaitable<
         std::expected<size_t, usub::utils::errors::SendError>,
-        uvent::detail::AwaitableIOFrame<std::expected<size_t, usub::utils::errors::SendError> >
+        uvent::detail::AwaitableIOFrame<std::expected<size_t, usub::utils::errors::SendError>>
     >
-    Socket<p, r>::async_send(
-        uint8_t *buf,
-        size_t sz
-    ) requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP)) {
+    Socket<p, r>::async_send(uint8_t *buf, size_t sz) requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP)) {
         auto buf_internal = std::unique_ptr<uint8_t[]>(new uint8_t[sz], std::default_delete<uint8_t[]>());
         std::copy_n(buf, sz, buf_internal.get());
 
-        ssize_t total_written = 0;
-        int retries = 0;
-
-        while (total_written < static_cast<ssize_t>(sz)) {
+        ssize_t total_written = 0; int retries = 0;
+        while (total_written < (ssize_t)sz) {
             co_await detail::AwaiterWrite{this->header_};
-
             if (this->is_disconnected_now())
                 co_return std::unexpected(usub::utils::errors::SendError::Closed);
 
             ssize_t res{0};
             if constexpr (p == Proto::TCP) {
-                res = ::send(
-                    this->header_->fd,
-                    buf_internal.get() + total_written,
-                    sz - total_written,
-                    MSG_DONTWAIT
-                );
+#if defined(OS_WINDOWS)
+                res = ::send(this->header_->fd, reinterpret_cast<char*>(buf_internal.get() + total_written),
+                             (int)(sz - total_written), 0);
+#else
+                res = ::send(this->header_->fd, buf_internal.get() + total_written, sz - total_written, MSG_DONTWAIT);
+#endif
             } else {
                 try {
                     if (std::holds_alternative<sockaddr_in>(this->address)) {
                         sockaddr_in &addr = std::get<sockaddr_in>(this->address);
                         socklen_t addr_len = sizeof(sockaddr_in);
-                        res = ::sendto(
-                            this->header_->fd,
-                            buf_internal.get() + total_written,
-                            sz - total_written,
-                            MSG_DONTWAIT,
-                            reinterpret_cast<sockaddr *>(&addr),
-                            addr_len
-                        );
+#if defined(OS_WINDOWS)
+                        res = ::sendto(this->header_->fd, reinterpret_cast<char*>(buf_internal.get() + total_written),
+                                       (int)(sz - total_written), 0, reinterpret_cast<sockaddr *>(&addr), addr_len);
+#else
+                        res = ::sendto(this->header_->fd, buf_internal.get() + total_written,
+                                       sz - total_written, MSG_DONTWAIT, reinterpret_cast<sockaddr *>(&addr), addr_len);
+#endif
                     } else if (std::holds_alternative<sockaddr_in6>(this->address)) {
                         sockaddr_in6 &addr = std::get<sockaddr_in6>(this->address);
                         socklen_t addr_len = sizeof(sockaddr_in6);
-                        res = ::sendto(
-                            this->header_->fd,
-                            buf_internal.get() + total_written,
-                            sz - total_written,
-                            MSG_DONTWAIT,
-                            reinterpret_cast<sockaddr *>(&addr),
-                            addr_len
-                        );
+#if defined(OS_WINDOWS)
+                        res = ::sendto(this->header_->fd, reinterpret_cast<char*>(buf_internal.get() + total_written),
+                                       (int)(sz - total_written), 0, reinterpret_cast<sockaddr *>(&addr), addr_len);
+#else
+                        res = ::sendto(this->header_->fd, buf_internal.get() + total_written,
+                                       sz - total_written, MSG_DONTWAIT, reinterpret_cast<sockaddr *>(&addr), addr_len);
+#endif
                     }
                 } catch (const std::bad_variant_access &) {
                     co_return std::unexpected(usub::utils::errors::SendError::InvalidAddressVariant);
                 }
             }
 
-            if (res > 0) {
-                total_written += res;
-                retries = 0;
-                continue;
-            }
+            if (res > 0) { total_written += res; retries = 0; continue; }
 
             if (res == -1) {
-                if (errno == EINTR) {
-                    if (++retries >= settings::max_write_retries) {
-                        this->remove();
-                        co_return std::unexpected(usub::utils::errors::SendError::SendFailed);
-                    }
-                    continue;
-                }
-
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    continue;
-                }
-
+#if defined(OS_WINDOWS)
+                int err = WSAGetLastError();
+                if (err == WSAEINTR) { if (++retries >= settings::max_write_retries) { this->remove(); co_return std::unexpected(usub::utils::errors::SendError::SendFailed); } continue; }
+                if (err == WSAEWOULDBLOCK) continue;
+#else
+                if (errno == EINTR) { if (++retries >= settings::max_write_retries) { this->remove(); co_return std::unexpected(usub::utils::errors::SendError::SendFailed); } continue; }
+                if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+#endif
                 this->remove();
                 co_return std::unexpected(usub::utils::errors::SendError::SendFailed);
             }
         }
-
 #ifndef UVENT_ENABLE_REUSEADDR
-        if (total_written > 0)
-            this->header_->timeout_epoch_bump();
+        if (total_written > 0) this->header_->timeout_epoch_bump();
 #endif
-
-        co_return static_cast<size_t>(total_written);
+        co_return (size_t)total_written;
     }
 
     template<Proto p, Role r>
@@ -866,107 +764,161 @@ namespace usub::uvent::net {
         auto buf_internal = std::unique_ptr<uint8_t[]>(new uint8_t[sz], std::default_delete<uint8_t[]>());
         std::copy_n(buf, sz, buf_internal.get());
         auto sendRes = this->send_aux(buf_internal.get(), sz);
-        if (sendRes != -1) return std::move(this->receive(chunkSize, maxSize));
+        if (sendRes != (size_t)-1) return std::move(this->receive(chunkSize, maxSize));
         return std::unexpected(usub::utils::errors::SendError::InvalidSocketFd);
     }
 
     template<Proto p, Role r>
     task::Awaitable<ssize_t, uvent::detail::AwaitableIOFrame<ssize_t> >
     Socket<p, r>::async_sendfile(int in_fd, off_t *offset, size_t count)
-        requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP)) {
+        requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP))
+    {
         co_await detail::AwaiterWrite{this->header_};
         if (this->is_disconnected_now()) co_return -3;
 
-        ssize_t sent = -1;
+    #if defined(OS_WINDOWS)
+        HANDLE hFile = (HANDLE)_get_osfhandle(in_fd);
+        if (hFile == INVALID_HANDLE_VALUE) co_return -1;
 
-#if defined(__linux__)
-        // Linux: sendfile(out_fd, in_fd, &offset, count) -> ssize_t
-        off_t *offp = offset;
-        ssize_t res = ::sendfile(this->header_->fd, in_fd, offp, count);
-        if (res == -1) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                this->remove();
-#ifdef UVENT_DEBUG
-        spdlog::debug("sendfile(linux) EAGAIN: {}", strerror(errno));
-#endif
-        co_return -1;
+        if (offset) {
+            LARGE_INTEGER li; li.QuadPart = static_cast<LONGLONG>(*offset);
+            if (!SetFilePointerEx(hFile, li, nullptr, FILE_BEGIN)) co_return -1;
         }
-        co_return -1;
-    }
-        if (res > 0) this->header_->timeout_epoch_bump();
+
+        DWORD to_write = (count > 0xFFFFFFFFull) ? 0xFFFFFFFFul : static_cast<DWORD>(count);
+        if (to_write == 0) co_return 0;
+
+        BOOL ok = TransmitFile(
+            (SOCKET)this->header_->fd,
+            hFile,
+            to_write,
+            0,
+            nullptr,
+            nullptr,
+            0
+        );
+
+        if (!ok) co_return -1;
+
+        if (offset) *offset += to_write;
+    #ifndef UVENT_ENABLE_REUSEADDR
+        this->header_->timeout_epoch_bump();
+    #endif
+        co_return static_cast<ssize_t>(to_write);
+
+    #elif defined(__linux__)
+        // Linux: sendfile(out_fd, in_fd, off_t* offset, size_t count)
+        ssize_t res = ::sendfile(this->header_->fd, in_fd, offset, count);
+        if (res == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            this->remove();
+            co_return -1;
+        }
+        if (res > 0) {
+    #ifndef UVENT_ENABLE_REUSEADDR
+            this->header_->timeout_epoch_bump();
+    #endif
+        }
         co_return res;
 
-#elif defined(__APPLE__)
+    #elif defined(__APPLE__)
+        // macOS: int sendfile(in_fd, out_fd, off_t offset, off_t* len, sf_hdtr*, int flags)
         off_t off = offset ? *offset : 0;
-        auto len = static_cast<off_t>(count);
+        off_t len = static_cast<off_t>(count);
         int rc = ::sendfile(in_fd, this->header_->fd, off, &len, nullptr, 0);
         if (rc == -1) {
             if ((errno == EAGAIN || errno == EWOULDBLOCK) && len > 0) {
                 if (offset) *offset = off + len;
+    #ifndef UVENT_ENABLE_REUSEADDR
                 this->header_->timeout_epoch_bump();
+    #endif
                 co_return static_cast<ssize_t>(len);
             }
-#ifdef UVENT_DEBUG
-            spdlog::debug("sendfile(darwin) error: {}", strerror(errno));
-#endif
             co_return -1;
         }
         if (offset) *offset = off + len;
+    #ifndef UVENT_ENABLE_REUSEADDR
         if (len > 0) this->header_->timeout_epoch_bump();
+    #endif
         co_return static_cast<ssize_t>(len);
 
-#elif defined(__FreeBSD__) || defined(__DragonFly__) || defined(__OpenBSD__) || defined(__NetBSD__)
+    #elif defined(__FreeBSD__) || defined(__DragonFly__) || defined(__OpenBSD__) || defined(__NetBSD__)
+        // *BSD: int sendfile(in_fd, out_fd, off_t offset, nbytes, sf_hdtr*, off_t* sbytes, int flags)
         off_t off = offset ? *offset : 0;
         off_t sbytes = 0;
-        // На OpenBSD/NetBSD прототип может отличаться — но общая семантика: sbytes возвращает отправленные байты.
         int rc = ::sendfile(in_fd, this->header_->fd, off,
-#if defined(__FreeBSD__) || defined(__DragonFly__)
-        static_cast<size_t>(count),
-#else
-        static_cast<off_t>(count), // допускает off_t nbytes на некоторых BSD
-#endif
-        nullptr, &sbytes, 0);
+        #if defined(__FreeBSD__) || defined(__DragonFly__)
+            static_cast<size_t>(count),
+        #else
+            static_cast<off_t>(count),
+        #endif
+            nullptr, &sbytes, 0);
         if (rc == -1) {
             if ((errno == EAGAIN || errno == EWOULDBLOCK) && sbytes > 0) {
                 if (offset) *offset = off + sbytes;
+    #ifndef UVENT_ENABLE_REUSEADDR
                 this->header_->timeout_epoch_bump();
+    #endif
                 co_return static_cast<ssize_t>(sbytes);
             }
-#ifdef UVENT_DEBUG
-        spdlog::debug("sendfile(bsd) error: {}", strerror(errno));
-#endif
-        co_return -1;
-    }
+            co_return -1;
+        }
         if (offset) *offset = off + sbytes;
+    #ifndef UVENT_ENABLE_REUSEADDR
         if (sbytes > 0) this->header_->timeout_epoch_bump();
+    #endif
         co_return static_cast<ssize_t>(sbytes);
 
-#else
-        (void) in_fd; (void) offset; (void) count;
+    #else
+        (void)in_fd; (void)offset; (void)count;
         co_return -1;
-#endif
+    #endif
     }
-
 
     template<Proto p, Role r>
     ssize_t Socket<p, r>::sendfile(int in_fd, off_t *offset, size_t count)
-        requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP)) {
-#if defined(__linux__)
+        requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP))
+    {
+    #if defined(OS_WINDOWS)
+        // Windows: TransmitFile (синхронно)
+        HANDLE hFile = (HANDLE)_get_osfhandle(in_fd);
+        if (hFile == INVALID_HANDLE_VALUE) { errno = EBADF; return -1; }
+
+        if (offset) {
+            LARGE_INTEGER li; li.QuadPart = static_cast<LONGLONG>(*offset);
+            if (!SetFilePointerEx(hFile, li, nullptr, FILE_BEGIN)) { errno = EINVAL; return -1; }
+        }
+
+        DWORD to_write = (count > 0xFFFFFFFFull) ? 0xFFFFFFFFul : static_cast<DWORD>(count);
+        if (to_write == 0) return 0;
+
+        BOOL ok = TransmitFile(
+            (SOCKET)this->header_->fd,
+            hFile,
+            to_write,
+            0,
+            nullptr,
+            nullptr,
+            0
+        );
+
+        if (!ok) { errno = EIO; return -1; }
+
+        if (offset) *offset += to_write;
+        return static_cast<ssize_t>(to_write);
+
+    #elif defined(__linux__)
         // Linux: ssize_t sendfile(out_fd, in_fd, off_t* offset, size_t count)
         ssize_t res = ::sendfile(this->header_->fd, in_fd, offset, count);
         if (res == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             this->remove();
-#ifdef UVENT_DEBUG
-        spdlog::debug("sendfile(linux) EAGAIN/EWOULDBLOCK: {}", strerror(errno));
-#endif
-        return -1;
-    }
+            return -1;
+        }
         return res;
 
-#elif defined(__APPLE__)
+    #elif defined(__APPLE__)
         // macOS: int sendfile(in_fd, out_fd, off_t offset, off_t* len, sf_hdtr*, int flags)
         off_t off = offset ? *offset : 0;
-        auto len = static_cast<off_t>(count);
+        off_t len = static_cast<off_t>(count);
         int rc = ::sendfile(in_fd, this->header_->fd, off, &len, nullptr, 0);
         if (rc == -1) {
             if ((errno == EAGAIN || errno == EWOULDBLOCK) && len > 0) {
@@ -974,44 +926,38 @@ namespace usub::uvent::net {
                 return static_cast<ssize_t>(len);
             }
             this->remove();
-#ifdef UVENT_DEBUG
-            spdlog::debug("sendfile(darwin) err: {}", strerror(errno));
-#endif
             return -1;
         }
         if (offset) *offset = off + len;
         return static_cast<ssize_t>(len);
 
-#elif defined(__FreeBSD__) || defined(__DragonFly__) || defined(__OpenBSD__) || defined(__NetBSD__)
+    #elif defined(__FreeBSD__) || defined(__DragonFly__) || defined(__OpenBSD__) || defined(__NetBSD__)
         // *BSD: int sendfile(in_fd, out_fd, off_t offset, nbytes, sf_hdtr*, off_t* sbytes, int flags)
         off_t off = offset ? *offset : 0;
         off_t sbytes = 0;
         int rc = ::sendfile(in_fd, this->header_->fd, off,
-#if defined(__FreeBSD__) || defined(__DragonFly__)
-        static_cast<size_t>(count),
-#else
-        static_cast<off_t>(count), // на некоторых BSD параметр off_t
-#endif
-        nullptr, &sbytes, 0);
+        #if defined(__FreeBSD__) || defined(__DragonFly__)
+            static_cast<size_t>(count),
+        #else
+            static_cast<off_t>(count),
+        #endif
+            nullptr, &sbytes, 0);
         if (rc == -1) {
             if ((errno == EAGAIN || errno == EWOULDBLOCK) && sbytes > 0) {
                 if (offset) *offset = off + sbytes;
                 return static_cast<ssize_t>(sbytes);
             }
             this->remove();
-#ifdef UVENT_DEBUG
-        spdlog::debug("sendfile(bsd) err: {}", strerror(errno));
-#endif
-        return -1;
-    }
+            return -1;
+        }
         if (offset) *offset = off + sbytes;
         return static_cast<ssize_t>(sbytes);
 
-#else
-        (void) in_fd; (void) offset; (void) count;
+    #else
+        (void)in_fd; (void)offset; (void)count;
         errno = ENOTSUP;
         return -1;
-#endif
+    #endif
     }
 
     template<Proto p, Role r>
@@ -1021,7 +967,11 @@ namespace usub::uvent::net {
 
     template<Proto p, Role r>
     void Socket<p, r>::shutdown() {
+#if defined(OS_WINDOWS)
+        ::shutdown((SOCKET)this->header_->fd, SD_BOTH);
+#else
         ::shutdown(this->header_->fd, SHUT_RDWR);
+#endif
     }
 
     template<Proto p, Role r>
@@ -1031,11 +981,9 @@ namespace usub::uvent::net {
             uint64_t s = this->header_->state.load(std::memory_order_relaxed);
             for (;;) {
                 if (s & usub::utils::sync::refc::CLOSED_MASK) break;
-
                 const uint64_t cnt = (s & usub::utils::sync::refc::COUNT_MASK);
                 if (cnt == usub::utils::sync::refc::COUNT_MASK) break;
                 const uint64_t ns = (s & ~usub::utils::sync::refc::COUNT_MASK) | (cnt + 1);
-
                 if (this->header_->state.compare_exchange_weak(
                     s, ns, std::memory_order_acq_rel, std::memory_order_relaxed))
                     break;
@@ -1045,7 +993,6 @@ namespace usub::uvent::net {
 #else
         {
             uint64_t &st = this->header_->state;
-
             if ((st & usub::utils::sync::refc::CLOSED_MASK) == 0) {
                 const uint64_t cnt = st & usub::utils::sync::refc::COUNT_MASK;
                 if (cnt != usub::utils::sync::refc::COUNT_MASK) {
@@ -1066,8 +1013,7 @@ namespace usub::uvent::net {
     template<Proto p, Role r>
     void Socket<p, r>::destroy() noexcept {
         this->header_->close_for_new_refs();
-        system::this_thread::detail::pl->removeEvent(this->header_,
-                                                     core::OperationType::ALL);
+        system::this_thread::detail::pl->removeEvent(this->header_, core::OperationType::ALL);
 #ifndef UVENT_ENABLE_REUSEADDR
         system::this_thread::detail::g_qsbr.retire(static_cast<void *>(this->header_), &delete_header);
 #else
@@ -1077,39 +1023,46 @@ namespace usub::uvent::net {
 
     template<Proto p, Role r>
     void Socket<p, r>::remove() {
-        system::this_thread::detail::pl->removeEvent(this->header_,
-                                                     core::OperationType::ALL);
+        system::this_thread::detail::pl->removeEvent(this->header_, core::OperationType::ALL);
         this->header_->close_for_new_refs();
+#if defined(OS_WINDOWS)
+        if (this->header_->fd != -1) { closesocket((SOCKET)this->header_->fd); this->header_->fd = -1; }
+#endif
     }
 
     template<Proto p, Role r>
-    std::expected<std::string, usub::utils::errors::SendError> Socket<p,
-        r>::receive(size_t chunk_size, size_t maxSize) {
-        std::string result;
-        result.reserve(chunk_size * 2);
-
+    std::expected<std::string, usub::utils::errors::SendError> Socket<p, r>::receive(size_t chunk_size, size_t maxSize) {
+        std::string result; result.reserve(chunk_size * 2);
         size_t totalReceive{0};
         auto recv_loop = [&](auto &&recv_fn) -> std::expected<std::string, usub::utils::errors::SendError> {
-            char buffer[chunk_size];
-            while (true) {
-                ssize_t received = recv_fn(buffer, chunk_size);
-                totalReceive += received;
+            std::vector<char> buffer(chunk_size);
+            for (;;) {
+                ssize_t received = recv_fn(buffer.data(), chunk_size);
+                totalReceive += (size_t)((received>0)?received:0);
                 if (totalReceive >= maxSize) break;
                 if (received < 0) {
-                    if (errno == EAGAIN || errno == EWOULDBLOCK)
-                        break;
+#if defined(OS_WINDOWS)
+                    int err = WSAGetLastError();
+                    if (err == WSAEWOULDBLOCK) break;
+#else
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+#endif
                     return std::unexpected(usub::utils::errors::SendError::RecvFailed);
                 }
                 if (received == 0) break;
-                result.append(buffer, received);
-                if (received < static_cast<ssize_t>(chunk_size)) break;
+                result.append(buffer.data(), (size_t)received);
+                if ((size_t)received < chunk_size) break;
             }
             return result;
         };
 
         if constexpr (p == Proto::TCP) {
             return recv_loop([&](char *buf, size_t sz) {
+#if defined(OS_WINDOWS)
+                return (ssize_t)::recv(this->header_->fd, buf, (int)sz, 0);
+#else
                 return ::recv(this->header_->fd, buf, sz, 0);
+#endif
             });
         }
 
@@ -1118,8 +1071,13 @@ namespace usub::uvent::net {
                 using T = std::decay_t<decltype(addr)>;
                 socklen_t addr_len = sizeof(T);
                 return recv_loop([&](char *buf, size_t sz) {
+#if defined(OS_WINDOWS)
+                    return (ssize_t)::recvfrom(this->header_->fd, buf, (int)sz, 0,
+                                               reinterpret_cast<sockaddr *>(&addr), &addr_len);
+#else
                     return ::recvfrom(this->header_->fd, buf, sz, 0,
                                       reinterpret_cast<sockaddr *>(&addr), &addr_len);
+#endif
                 });
             }, this->address);
         } catch (const std::bad_variant_access &) {
@@ -1128,14 +1086,12 @@ namespace usub::uvent::net {
     }
 
     template<Proto p, Role r>
-    client_addr_t Socket<p, r>::get_client_addr() const requires (p == Proto::TCP && r ==
-                                                                  Role::ACTIVE) {
+    client_addr_t Socket<p, r>::get_client_addr() const requires (p == Proto::TCP && r == Role::ACTIVE) {
         return this->address;
     }
 
     template<Proto p, Role r>
-    client_addr_t Socket<p, r>::get_client_addr() requires (p == Proto::TCP && r ==
-                                                            Role::ACTIVE) {
+    client_addr_t Socket<p, r>::get_client_addr() requires (p == Proto::TCP && r == Role::ACTIVE) {
         return this->address;
     }
 
@@ -1147,26 +1103,37 @@ namespace usub::uvent::net {
     template<Proto p, Role r>
     size_t Socket<p, r>::send_aux(uint8_t *buf, size_t size) {
         if (this->header_->fd < 0)
-            return -1;
+            return (size_t)-1;
 
-        if constexpr (p == Proto::TCP) return ::send(this->header_->fd, buf, size, 0);
+        if constexpr (p == Proto::TCP) {
+#if defined(OS_WINDOWS)
+            int res = ::send(this->header_->fd, reinterpret_cast<char*>(buf), (int)size, 0);
+            return res < 0 ? (size_t)-1 : (size_t)res;
+#else
+            return ::send(this->header_->fd, buf, size, 0);
+#endif
+        }
 
-        // UDP
         try {
             return std::visit([&](auto &&addr) -> size_t {
                 using T = std::decay_t<decltype(addr)>;
                 socklen_t addr_len = sizeof(T);
+    #if defined(OS_WINDOWS)
+                int res = ::sendto(this->header_->fd, reinterpret_cast<char*>(buf), (int)size, 0,
+                                   reinterpret_cast<sockaddr *>(&addr), addr_len);
+                return res < 0 ? (size_t)-1 : (size_t)res;
+    #else
                 return ::sendto(this->header_->fd, buf, size, 0,
                                 reinterpret_cast<sockaddr *>(&addr), addr_len);
+    #endif
             }, this->address);
         } catch (const std::bad_variant_access &) {
-            return -1;
+            return (size_t)-1;
         }
     }
 
     template<Proto p, Role r>
-    Socket<p, r>::Socket(SocketHeader *header) noexcept : header_(header) {
-    }
+    Socket<p, r>::Socket(SocketHeader *header) noexcept : header_(header) {}
 }
 
 #endif //NEWSOCKET_H

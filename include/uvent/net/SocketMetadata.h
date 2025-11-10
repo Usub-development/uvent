@@ -15,12 +15,12 @@
 #include "uvent/base/Predefines.h"
 #include "uvent/utils/sync/RefCountedSession.h"
 #include "uvent/utils/intrinsincs/optimizations.h"
+#include "uvent/system/Defines.h"
 
 namespace usub::uvent::net
 {
     enum class Proto : uint8_t { TCP = 1 << 0, UDP = 1 << 1 };
-
-    enum class Role : uint8_t { PASSIVE = 1 << 2, ACTIVE = 1 << 3 };
+    enum class Role  : uint8_t { PASSIVE = 1 << 2, ACTIVE = 1 << 3 };
 
     enum class AdditionalState : uint8_t
     {
@@ -31,20 +31,31 @@ namespace usub::uvent::net
     {
         int fd{-1};
         uint64_t timer_id{0};
-        uint8_t socket_info;
-        std::coroutine_handle<> first, second;
+        uint8_t socket_info{};
+        std::coroutine_handle<> first{}, second{};
 #ifndef UVENT_ENABLE_REUSEADDR
-        std::atomic<uint64_t> state;
+        std::atomic<uint64_t> state{};
 #else
-        uint64_t state;
+        uint64_t state{};
 #endif
 
+#if defined(OS_WINDOWS)
+        struct IocpRead {
+            WSAOVERLAPPED ov{};
+            WSABUF        buf{};
+            char          one{};
+            bool          posted{false};
+        } iocp_read;
+
+        struct IocpWrite {
+            bool armed{false};
+        } iocp_write;
+
+        ULONG_PTR completion_key{0};
+#endif
 
 #if UVENT_DEBUG
-        ~SocketHeader()
-        {
-            spdlog::info("Socket header destroyed: {}", this->fd);
-        }
+        ~SocketHeader() { spdlog::info("Socket header destroyed: {}", this->fd); }
 #endif
 
         __attribute__((always_inline)) void decrease_ref() noexcept
@@ -65,7 +76,6 @@ namespace usub::uvent::net
 #else
             this->state |= CLOSED_MASK;
 #endif
-
         }
 
         __attribute__((always_inline)) bool try_mark_busy() noexcept
@@ -96,7 +106,6 @@ namespace usub::uvent::net
 #else
             this->state &= ~BUSY_MASK;
 #endif
-
         }
 
         [[nodiscard]] __attribute__((always_inline)) bool is_busy_now() const noexcept
@@ -191,7 +200,6 @@ namespace usub::uvent::net
 #else
             return this->state & WRITING_MASK;
 #endif
-
         }
 
         __attribute__((always_inline)) void mark_disconnected() noexcept
@@ -295,8 +303,8 @@ namespace usub::uvent::net
 
     using TCPServerSocket = Socket<Proto::TCP, Role::PASSIVE>;
     using TCPClientSocket = Socket<Proto::TCP, Role::ACTIVE>;
-    using UDPBoundSocket = Socket<Proto::UDP, Role::ACTIVE>;
-    using UDPSocket = Socket<Proto::UDP, Role::PASSIVE>;
+    using UDPBoundSocket  = Socket<Proto::UDP, Role::ACTIVE>;
+    using UDPSocket       = Socket<Proto::UDP, Role::PASSIVE>;
 }
 
 #endif //SOCKETMETADATA_H

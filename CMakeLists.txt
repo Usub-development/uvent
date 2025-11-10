@@ -22,11 +22,18 @@ endif ()
 if (APPLE OR BSD)
     list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/EPoller\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/EPoller\\.cpp$")
+    list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/IOCPPoller\\.h$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/IOCPPoller\\.cpp$")
 elseif (UNIX) # Linux
     list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/KPoller\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/KPoller\\.cpp$")
+    list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/IOCPPoller\\.h$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/IOCPPoller\\.cpp$")
 elseif (WIN32)
-    message(FATAL_ERROR "Uvent does not support Windows.")
+    list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/KPoller\\.h$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/KPoller\\.cpp$")
+    list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/EPoller\\.h$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/EPoller\\.cpp$")
 endif ()
 
 foreach (header ${UVENT_HEADERS})
@@ -40,7 +47,9 @@ foreach(src ${UVENT_SOURCES})
     message(STATUS "  ${src}")
 endforeach()
 
-add_library(uvent ${UVENT_SOURCES})
+add_library(uvent ${UVENT_SOURCES}
+        include/uvent/poll/IOCPPoller.h
+        src/poll/IOCPPoller.cpp)
 add_library(usub::uvent ALIAS uvent)
 
 configure_package_config_file(
