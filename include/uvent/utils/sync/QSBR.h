@@ -8,6 +8,7 @@
 #include <atomic>
 #include <limits>
 #include <vector>
+#include <mutex>
 
 namespace usub::utils::sync
 {

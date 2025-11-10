@@ -6,7 +6,7 @@
 
 namespace usub::uvent::utils::socket {
     int createSocket(int port, const std::string &ip_addr, int backlog, net::IPV ipv, net::SocketAddressType socType) {
-#if defined(OS_LINUX) || defined(OS_BSD)
+#if defined(OS_LINUX) || defined(OS_BSD) || defined(OS_APPLE)
         int soc_fd = ::socket((ipv == net::IPV::IPV4) ? AF_INET : AF_INET6,
                               (socType == net::SocketAddressType::TCP) ? SOCK_STREAM : SOCK_DGRAM, 0);
         if (soc_fd < 0) throw std::system_error(errno, std::generic_category(), "socket()");
@@ -52,14 +52,4 @@ namespace usub::uvent::utils::socket {
 #error "Windows isn't supported yet"
 #endif
     }
-
-    void makeSocketNonBlocking(int soc_fd) {
-#if defined(OS_LINUX) || defined(OS_BSD)
-        if (int flags; (flags = fcntl(soc_fd, F_GETFL, 0)) < 0 || fcntl(soc_fd, F_SETFL, flags | O_NONBLOCK) < 0)
-            throw std::system_error(errno, std::generic_category(), "fcntl()");
-    }
-
-#elif
-#error "Windows isn't supported yet"
-#endif
 }

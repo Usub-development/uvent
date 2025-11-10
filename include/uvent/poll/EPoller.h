@@ -5,6 +5,8 @@
 #ifndef UVENT_EPOLLER_H
 #define UVENT_EPOLLER_H
 
+#include <uvent/system/Defines.h>
+
 #include <mutex>
 #include <csignal>
 #include <utility>
