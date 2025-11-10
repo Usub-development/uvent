@@ -4,11 +4,9 @@
 
 #include "uvent/net/Socket.h"
 
-namespace usub::uvent::net::detail
-{
-    void processSocketTimeout(std::any arg)
-    {
-        auto header = std::any_cast<SocketHeader*>(arg);
+namespace usub::uvent::net::detail {
+    void processSocketTimeout(std::any arg) {
+        auto header = std::any_cast<SocketHeader *>(arg);
         auto socket = Socket<Proto::TCP, Role::ACTIVE>::from_existing(header);
 
 #if UVENT_DEBUG
@@ -16,14 +14,12 @@ namespace usub::uvent::net::detail
 #endif
 #ifndef UVENT_ENABLE_REUSEADDR
         const uint64_t expected = header->timeout_epoch_load();
-        if (!header->try_mark_busy())
-        {
+        if (!header->try_mark_busy()) {
             socket.release();
             return;
         }
 
-        if (header->timeout_epoch_changed(expected))
-        {
+        if (header->timeout_epoch_changed(expected)) {
             header->clear_busy();
             socket.release();
             return;
@@ -35,9 +31,17 @@ namespace usub::uvent::net::detail
 #ifndef UVENT_ENABLE_REUSEADDR
         header->clear_busy();
 #endif
-
+#ifdef OS_LINUX
         epoll_ctl(system::this_thread::detail::pl->get_poll_fd(), EPOLL_CTL_DEL, header->fd, nullptr);
         ::close(header->fd);
+#elif defined(OS_APPLE)
+        struct kevent ev;
+        EV_SET(&ev, header->fd, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
+        kevent(system::this_thread::detail::pl->get_poll_fd(), &ev, 1, nullptr, 0, nullptr);
+        EV_SET(&ev, header->fd, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
+        kevent(system::this_thread::detail::pl->get_poll_fd(), &ev, 1, nullptr, 0, nullptr);
+        ::close(header->fd);
+#endif
 #if UVENT_DEBUG
         spdlog::warn("Socket counter in timeout: {}", header->get_counter());
 #endif

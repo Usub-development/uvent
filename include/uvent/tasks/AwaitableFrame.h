@@ -8,6 +8,8 @@
 #include <coroutine>
 #include <atomic>
 #include <ranges>
+#include <memory>
+#include <new>
 
 #include "Awaitable.h"
 #include "uvent/utils/datastructures/queue/FastQueue.h"

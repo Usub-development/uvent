@@ -6,6 +6,7 @@
 #define DATASTRUCTURESMETADATA_H
 
 #include <cstdint>
+#include <utility>
 
 namespace usub::data_structures::metadata
 {

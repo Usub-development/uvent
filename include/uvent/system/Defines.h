@@ -9,18 +9,26 @@
 #include <variant>
 #include <iostream>
 
-#if defined(__APPLE__) || defined(__BSD__) || defined(__MACH__)
+#if defined(__APPLE__) || defined(__MACH__)
+#define OS_APPLE 1
+#endif
+
+#if defined(__BSD__)
+#define OS_BSD 1
+#endif
+
+
+#if defined(__APPLE__) || defined(__BSD__)
 
 #include <netinet/in.h>
 #include <sys/Event.h>
 #include <sys/time.h>
 #include <sys/types.h>
-#include <sys/sendfile.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <unistd.h>
-
-#define OS_BSD
+#include <sys/socket.h>
+#include <netdb.h>
 
 typedef std::variant<sockaddr_in, sockaddr_in6> client_addr_t;
 
@@ -85,8 +93,8 @@ typedef int socklen_t;
 
 // -------------------- SIGPIPE compatibility (cross-platform) --------------------
 #if defined(__unix__) || defined(__APPLE__) || defined(__MACH__) || defined(__linux__) || defined(__BSD__)
-#include <signal.h>
-#include <string.h>
+#include <csignal>
+#include <cstring>
 
 static inline void uvent_ignore_sigpipe_once() {
     struct sigaction sa;
@@ -126,7 +134,7 @@ static inline void uvent_sock_nosigpipe(int fd) {
 static inline void uvent_sock_nosigpipe(int) {}
 #endif
 
-#include <stddef.h>
+#include <cstddef>
 #include <sys/types.h>
 
 static inline

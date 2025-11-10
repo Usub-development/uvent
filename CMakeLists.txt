@@ -15,11 +15,30 @@ include(GNUInstallDirs)
 file(GLOB_RECURSE UVENT_HEADERS include/*.h include/*.hpp)
 file(GLOB_RECURSE UVENT_SOURCES src/*.cpp src/*.c)
 
+if (CMAKE_SYSTEM_NAME MATCHES ".*BSD")
+    set(BSD TRUE)
+endif ()
+
+if (APPLE OR BSD)
+    list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/EPoller\\.h$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/EPoller\\.cpp$")
+elseif (UNIX) # Linux
+    list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/KPoller\\.h$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/KPoller\\.cpp$")
+elseif (WIN32)
+    message(FATAL_ERROR "Uvent does not support Windows.")
+endif ()
+
 foreach (header ${UVENT_HEADERS})
     if (header MATCHES "${CMAKE_BINARY_DIR}")
         list(REMOVE_ITEM UVENT_HEADERS ${header})
     endif ()
 endforeach ()
+
+message(STATUS "UVENT sources:")
+foreach(src ${UVENT_SOURCES})
+    message(STATUS "  ${src}")
+endforeach()
 
 add_library(uvent ${UVENT_SOURCES})
 add_library(usub::uvent ALIAS uvent)
@@ -64,7 +83,7 @@ install(EXPORT uventTargets
         DESTINATION lib/cmake/uvent
 )
 
-option(BUILD_MAIN "Buld main executable for testing" OFF)
+option(BUILD_MAIN "Buld main executable for testing" ON)
 option(ENABLE_SANITIZERS "Buld main executable for testing" OFF)
 
 if (BUILD_MAIN)
