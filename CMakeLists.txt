@@ -3,8 +3,17 @@ cmake_minimum_required(VERSION 3.22..3.29)
 project(uvent)
 
 set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -rdynamic -fPIC" CACHE STRING "Debug flags" FORCE)
-set(CMAKE_C_FLAGS_DEBUG "-g -O0 -rdynamic -fPIC" CACHE STRING "Debug flags" FORCE)
+if (MSVC)
+    set(CMAKE_CXX_FLAGS_DEBUG "/Zi /Od /MDd /EHsc" CACHE STRING "Debug flags" FORCE)
+    set(CMAKE_C_FLAGS_DEBUG   "/Zi /Od /MDd"       CACHE STRING "Debug flags" FORCE)
+
+    set(CMAKE_EXE_LINKER_FLAGS_DEBUG     "/DEBUG" CACHE STRING "Debug linker flags" FORCE)
+    set(CMAKE_SHARED_LINKER_FLAGS_DEBUG  "/DEBUG" CACHE STRING "Debug linker flags" FORCE)
+
+else()
+    set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -rdynamic -fPIC" CACHE STRING "Debug flags" FORCE)
+    set(CMAKE_C_FLAGS_DEBUG   "-g -O0 -rdynamic -fPIC" CACHE STRING "Debug flags" FORCE)
+endif()
 
 option(UVENT_ENABLE_REUSEADDR "Use SO_REUSEADDR (portable)" ON)
 option(UVENT_PIN_THREADS "Use thread PINNING" ON)

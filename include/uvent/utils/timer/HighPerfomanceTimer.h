@@ -2,13 +2,20 @@
 #define TIMERBENCH_HIGHPERFOMANCETIMER_H
 
 #include <chrono>
-#include <thread>
 #include <cstdint>
 #include <iostream>
+#include <thread>
 
 #if defined(__x86_64__) || defined(_M_X64)
 
+#if defined(_MSC_VER)
+#include <immintrin.h>
+#include <intrin.h>
+#elif defined(__clang__) || defined(__GNUC__)
 #include <x86intrin.h>
+#else
+#error "Unsupported compiler for high-performance timer intrinsics"
+#endif
 
 #define USE_RDTSC
 #elif defined(__aarch64__)
@@ -18,44 +25,44 @@
 #endif
 
 namespace usub::utils {
-    class HighPerfTimer {
-    public:
-        HighPerfTimer();
+class HighPerfTimer {
+public:
+  HighPerfTimer();
 
-        static double calibrate_cpu_ghz();
+  static double calibrate_cpu_ghz();
 
-        void reset();
+  void reset();
 
-        [[nodiscard]] uint64_t elapsed_cycles() const;
+  [[nodiscard]] uint64_t elapsed_cycles() const;
 
-        [[nodiscard]] uint64_t elapsed_ns() const;
+  [[nodiscard]] uint64_t elapsed_ns() const;
 
-        [[nodiscard]] double elapsed_ms() const;
+  [[nodiscard]] double elapsed_ms() const;
 
-        [[nodiscard]] double frequency_ghz() const;
+  [[nodiscard]] double frequency_ghz() const;
 
-    private:
-        double cpu_ghz = 0.0;
-        uint64_t start_ticks = 0;
+private:
+  double cpu_ghz = 0.0;
+  uint64_t start_ticks = 0;
 
 #ifdef STEADY_CLOCK_FALLBACK
-        std::chrono::steady_clock::time_point chrono_start;
+  std::chrono::steady_clock::time_point chrono_start;
 #endif
 
 #ifdef USE_CNTVCT
-        static inline uint64_t read_cntvct() {
-            uint64_t val;
-            asm volatile("mrs %0, cntvct_el0" : "=r"(val));
-            return val;
-        }
+  static inline uint64_t read_cntvct() {
+    uint64_t val;
+    asm volatile("mrs %0, cntvct_el0" : "=r"(val));
+    return val;
+  }
 
-        static inline double get_arm_freq_ghz() {
-            uint64_t frq;
-            asm volatile("mrs %0, cntfrq_el0" : "=r"(frq));
-            return static_cast<double>(frq) / 1e9;
-        }
+  static inline double get_arm_freq_ghz() {
+    uint64_t frq;
+    asm volatile("mrs %0, cntfrq_el0" : "=r"(frq));
+    return static_cast<double>(frq) / 1e9;
+  }
 #endif
-    };
-}
+};
+} // namespace usub::utils
 
-#endif //TIMERBENCH_HIGHPERFOMANCETIMER_H
+#endif // TIMERBENCH_HIGHPERFOMANCETIMER_H
