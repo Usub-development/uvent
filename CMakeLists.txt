@@ -85,7 +85,6 @@ install(EXPORT uventTargets
 
 option(BUILD_MAIN "Buld main executable for testing" ON)
 option(ENABLE_SANITIZERS "Buld main executable for testing" OFF)
-option(UVENT_DEBUG "Enable debug" ON)
 
 if (BUILD_MAIN)
     if (CMAKE_BUILD_TYPE STREQUAL "Debug")
