@@ -60,16 +60,6 @@ namespace usub::uvent::detail
         return false;
     }
 
-    void AwaitableFrameBase::set_awaited()
-    {
-        this->flag->store(true);
-    }
-
-    void AwaitableFrameBase::unset_awaited()
-    {
-        this->flag->store(false);
-    }
-
     void AwaitableFrameBase::push_frame_to_be_destroyed()
     {
         system::this_thread::detail::q_c->enqueue(this->coro_);
@@ -106,7 +96,6 @@ namespace usub::uvent::detail
         {
             auto c_temp = std::coroutine_handle<::usub::uvent::detail::AwaitableFrameBase>::from_address(
                 this->prev_.address());
-            c_temp.promise().unset_awaited();
             AwaitableFrame<void>::push_frame_into_task_queue(static_cast<std::coroutine_handle<>>(c_temp));
             std::exchange(this->prev_, nullptr);
         }

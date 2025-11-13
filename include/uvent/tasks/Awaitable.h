@@ -5,36 +5,33 @@
 #ifndef UVENT_AWAITABLE_H
 #define UVENT_AWAITABLE_H
 
-#include <queue>
-#include <cstdint>
-#include <iostream>
 #include <coroutine>
+#include <cstdint>
 #include <exception>
+#include <iostream>
+#include <queue>
+
 #include "uvent/base/Predefines.h"
 
 #ifdef UVENT_DEBUG
 
-#include <spdlog/spdlog.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/spdlog.h>
 
 #endif
 
-namespace usub::uvent::task
-{
+namespace usub::uvent::task {
     template <class Value, class FrameType = detail::AwaitableFrame<Value>>
-    struct Awaitable
-    {
-    public:
+    struct Awaitable {
+       public:
         using promise_type = FrameType;
 
         template <typename>
-        friend
-        class detail::AwaitableFrame;
+        friend class detail::AwaitableFrame;
 
         template <typename>
-        friend
-        class detail::AwaitableIOFrame;
+        friend class detail::AwaitableIOFrame;
 
         Awaitable() = default;
 
@@ -54,23 +51,20 @@ namespace usub::uvent::task
 
         bool is_done() const;
 
-    protected:
+       protected:
         promise_type* frame_{nullptr};
     };
 
     template <class FrameType>
-    struct Awaitable<void, FrameType>
-    {
-    public:
+    struct Awaitable<void, FrameType> {
+       public:
         using promise_type = FrameType;
 
         template <typename>
-        friend
-        class detail::AwaitableFrame;
+        friend class detail::AwaitableFrame;
 
         template <typename>
-        friend
-        class AwaitableIOFrame;
+        friend class AwaitableIOFrame;
 
         Awaitable() = default;
 
@@ -90,44 +84,37 @@ namespace usub::uvent::task
 
         bool is_done() const;
 
-    protected:
+       protected:
         promise_type* frame_{nullptr};
     };
 
     template <class Value, class FrameType>
-    Value Awaitable<Value, FrameType>::await_resume()
-    {
+    Value Awaitable<Value, FrameType>::await_resume() {
         return this->frame_->get();
     }
 
     template <class Value, class FrameType>
-    bool Awaitable<Value, FrameType>::await_ready() const noexcept
-    {
-        return false;
+    bool Awaitable<Value, FrameType>::await_ready() const noexcept {
+        return !frame_ || frame_->get_coroutine_handle().done();
     }
 
     template <class Value, class FrameType>
-    Awaitable<Value, FrameType>::Awaitable(promise_type* af) : frame_(af)
-    {
-    }
+    Awaitable<Value, FrameType>::Awaitable(promise_type* af) : frame_(af) {}
 
     template <class Value, class FrameType>
-    typename Awaitable<Value, FrameType>::promise_type* Awaitable<Value, FrameType>::get_promise()
-    {
+    typename Awaitable<Value, FrameType>::promise_type* Awaitable<Value, FrameType>::get_promise() {
         return this->frame_;
     }
 
     template <class Value, class FrameType>
-    bool Awaitable<Value, FrameType>::is_done() const
-    {
+    bool Awaitable<Value, FrameType>::is_done() const {
         return this->frame_->get_coroutine_handle().done();
     }
 
     template <class FrameType>
-    bool Awaitable<void, FrameType>::is_done() const
-    {
+    bool Awaitable<void, FrameType>::is_done() const {
         return this->frame_->get_coroutine_handle().done();
     }
-}
+}  // namespace usub::uvent::task
 
-#endif //UVENT_AWAITABLE_H
+#endif  // UVENT_AWAITABLE_H
