@@ -12,9 +12,8 @@ namespace usub::uvent::net::detail {
         auto c =
             std::coroutine_handle<uvent::detail::AwaitableFrameBase>::from_address(h.address());
 
-        header_->first = c;
-        system::this_thread::detail::pl->updateEvent(header_, core::READ);
-        header_->clear_busy();
+        this->header_->first = c;
+        this->header_->clear_busy();
     }
 
     void AwaiterRead::await_resume() {}
@@ -27,9 +26,8 @@ namespace usub::uvent::net::detail {
         auto c =
             std::coroutine_handle<uvent::detail::AwaitableFrameBase>::from_address(h.address());
 
-        header_->second = c;
-        system::this_thread::detail::pl->updateEvent(header_, core::WRITE);
-        header_->clear_busy();
+        this->header_->second = c;
+        this->header_->clear_busy();
     }
 
     void AwaiterWrite::await_resume() {}
@@ -42,9 +40,8 @@ namespace usub::uvent::net::detail {
         auto c =
             std::coroutine_handle<uvent::detail::AwaitableFrameBase>::from_address(h.address());
 
-        header_->first = c;
-        system::this_thread::detail::pl->updateEvent(header_, core::READ);
-        header_->clear_busy();
+        this->header_->first = c;
+        this->header_->clear_busy();
     }
 
     void AwaiterAccept::await_resume() {}
