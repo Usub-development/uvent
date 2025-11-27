@@ -31,17 +31,8 @@ namespace usub::uvent::net::detail {
 #ifndef UVENT_ENABLE_REUSEADDR
         header->clear_busy();
 #endif
-#ifdef OS_LINUX
         epoll_ctl(system::this_thread::detail::pl->get_poll_fd(), EPOLL_CTL_DEL, header->fd, nullptr);
         ::close(header->fd);
-#elif defined(OS_APPLE)
-        struct kevent ev;
-        EV_SET(&ev, header->fd, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
-        kevent(system::this_thread::detail::pl->get_poll_fd(), &ev, 1, nullptr, 0, nullptr);
-        EV_SET(&ev, header->fd, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
-        kevent(system::this_thread::detail::pl->get_poll_fd(), &ev, 1, nullptr, 0, nullptr);
-        ::close(header->fd);
-#endif
 #if UVENT_DEBUG
         spdlog::warn("Socket counter in timeout: {}", header->get_counter());
 #endif
