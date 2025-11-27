@@ -15,7 +15,9 @@
 #include <functional>
 #include <coroutine>
 #include <iostream>
+#if !defined(_WIN32) && !defined(_WIN64)
 #include <unistd.h>
+#endif
 #include <cstdint>
 #include <chrono>
 #include <vector>

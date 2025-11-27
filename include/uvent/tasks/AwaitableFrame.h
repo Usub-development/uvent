@@ -140,8 +140,8 @@ namespace usub::uvent {
                 return task::Awaitable<T, selt_t>{this};
             }
 
-            void return_value(T&& value) {
-                new (&this->result_) T(std::move(std::forward<T>(value)));
+            void return_value(T value) {
+                new (&this->result_) T(std::move(value));
                 this->has_result_ = true;
             }
 

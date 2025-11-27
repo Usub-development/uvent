@@ -6,16 +6,18 @@
 #include <cstdint>
 #include <iostream>
 
-#if defined(__x86_64__) || defined(_M_X64)
-
-#include <x86intrin.h>
-
-#define USE_RDTSC
-#elif defined(__aarch64__)
-#define USE_CNTVCT
+#if defined(__aarch64__)
+    #define USE_CNTVCT
+#elif defined(_MSC_VER) && defined(_M_X64)
+    #include <intrin.h>
+    #define USE_RDTSC
+#elif (defined(__x86_64__) || defined(__i386__)) && !defined(_MSC_VER)
+    #include <x86intrin.h>
+    #define USE_RDTSC
 #else
-#define STEADY_CLOCK_FALLBACK
+    #define STEADY_CLOCK_FALLBACK
 #endif
+
 
 namespace usub::utils {
     class HighPerfTimer {

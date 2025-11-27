@@ -7,6 +7,8 @@
 
 #include <atomic>
 #include <concepts>
+
+#include "uvent/system/Defines.h"
 #include "uvent/utils/intrinsincs/optimizations.h"
 
 namespace usub::utils::sync::refc
@@ -95,12 +97,12 @@ namespace usub::utils::sync::refc
 #endif
         }
 
-        __attribute__((always_inline)) void close_for_new_refs() noexcept
+        UVENT_ALWAYS_INLINE_FN void close_for_new_refs() noexcept
         {
             static_cast<Derived*>(this)->close_for_new_refs();
         }
 
-        [[nodiscard]] __attribute__((always_inline)) bool is_disconnected_now() const noexcept
+        [[nodiscard]] UVENT_ALWAYS_INLINE_FN bool is_disconnected_now() const noexcept
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR

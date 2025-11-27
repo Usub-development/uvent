@@ -13,6 +13,7 @@
 #endif
 
 #include "uvent/base/Predefines.h"
+#include "uvent/system/Defines.h"
 #include "uvent/utils/sync/RefCountedSession.h"
 #include "uvent/utils/intrinsincs/optimizations.h"
 
@@ -29,7 +30,7 @@ namespace usub::uvent::net
 
     struct alignas(32) SocketHeader
     {
-        int fd{-1};
+        socket_fd_t fd{INVALID_FD};
         uint64_t timer_id{0};
         uint8_t socket_info;
         std::coroutine_handle<> first, second;
@@ -47,7 +48,7 @@ namespace usub::uvent::net
         }
 #endif
 
-        __attribute__((always_inline)) void decrease_ref() noexcept
+        UVENT_ALWAYS_INLINE_FN void decrease_ref() noexcept
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -57,7 +58,7 @@ namespace usub::uvent::net
 #endif
         }
 
-        __attribute__((always_inline)) void close_for_new_refs() noexcept
+        UVENT_ALWAYS_INLINE_FN void close_for_new_refs() noexcept
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -68,7 +69,7 @@ namespace usub::uvent::net
 
         }
 
-        __attribute__((always_inline)) bool try_mark_busy() noexcept
+        UVENT_ALWAYS_INLINE_FN bool try_mark_busy() noexcept
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -88,7 +89,7 @@ namespace usub::uvent::net
 #endif
         }
 
-        __attribute__((always_inline)) void clear_busy() noexcept
+        UVENT_ALWAYS_INLINE_FN void clear_busy() noexcept
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -99,7 +100,7 @@ namespace usub::uvent::net
 
         }
 
-        [[nodiscard]] __attribute__((always_inline)) bool is_busy_now() const noexcept
+        [[nodiscard]] UVENT_ALWAYS_INLINE_FN bool is_busy_now() const noexcept
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -109,7 +110,7 @@ namespace usub::uvent::net
 #endif
         }
 
-        __attribute__((always_inline)) bool try_mark_reading() noexcept
+        UVENT_ALWAYS_INLINE_FN bool try_mark_reading() noexcept
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -131,7 +132,7 @@ namespace usub::uvent::net
 #endif
         }
 
-        __attribute__((always_inline)) void clear_reading() noexcept
+        UVENT_ALWAYS_INLINE_FN void clear_reading() noexcept
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -141,7 +142,7 @@ namespace usub::uvent::net
 #endif
         }
 
-        __attribute__((always_inline)) bool is_reading_now() const noexcept
+        UVENT_ALWAYS_INLINE_FN bool is_reading_now() const noexcept
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -151,7 +152,7 @@ namespace usub::uvent::net
 #endif
         }
 
-        __attribute__((always_inline)) bool try_mark_writing() noexcept
+        UVENT_ALWAYS_INLINE_FN bool try_mark_writing() noexcept
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -173,7 +174,7 @@ namespace usub::uvent::net
 #endif
         }
 
-        __attribute__((always_inline)) void clear_writing() noexcept
+        UVENT_ALWAYS_INLINE_FN void clear_writing() noexcept
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -183,7 +184,7 @@ namespace usub::uvent::net
 #endif
         }
 
-        __attribute__((always_inline)) bool is_writing_now() const noexcept
+        UVENT_ALWAYS_INLINE_FN bool is_writing_now() const noexcept
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -194,7 +195,7 @@ namespace usub::uvent::net
 
         }
 
-        __attribute__((always_inline)) void mark_disconnected() noexcept
+        UVENT_ALWAYS_INLINE_FN void mark_disconnected() noexcept
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -204,7 +205,7 @@ namespace usub::uvent::net
 #endif
         }
 
-        [[nodiscard]] __attribute__((always_inline)) bool is_disconnected_now() const noexcept
+        [[nodiscard]] UVENT_ALWAYS_INLINE_FN bool is_disconnected_now() const noexcept
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -214,7 +215,7 @@ namespace usub::uvent::net
 #endif
         }
 
-        __attribute__((always_inline)) uint64_t timeout_epoch_snapshot() noexcept
+        UVENT_ALWAYS_INLINE_FN uint64_t timeout_epoch_snapshot() noexcept
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -224,7 +225,7 @@ namespace usub::uvent::net
 #endif
         }
 
-        __attribute__((always_inline)) uint64_t timeout_epoch_load() noexcept
+        UVENT_ALWAYS_INLINE_FN uint64_t timeout_epoch_load() noexcept
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -234,7 +235,7 @@ namespace usub::uvent::net
 #endif
         }
 
-        __attribute__((always_inline)) void timeout_epoch_bump() noexcept
+        UVENT_ALWAYS_INLINE_FN void timeout_epoch_bump() noexcept
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -244,7 +245,7 @@ namespace usub::uvent::net
 #endif
         }
 
-        __attribute__((always_inline)) bool timeout_epoch_changed(uint64_t snap) noexcept
+        UVENT_ALWAYS_INLINE_FN bool timeout_epoch_changed(uint64_t snap) noexcept
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -254,7 +255,7 @@ namespace usub::uvent::net
 #endif
         }
 
-        [[nodiscard]] __attribute__((always_inline)) bool is_done_client_coroutine_with_timeout() const
+        [[nodiscard]] UVENT_ALWAYS_INLINE_FN bool is_done_client_coroutine_with_timeout() const
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -264,7 +265,7 @@ namespace usub::uvent::net
 #endif
         }
 
-        [[nodiscard]] __attribute__((always_inline)) uint64_t get_counter() const
+        [[nodiscard]] UVENT_ALWAYS_INLINE_FN uint64_t get_counter() const
         {
             using namespace usub::utils::sync::refc;
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -274,12 +275,12 @@ namespace usub::uvent::net
 #endif
         }
 
-        [[nodiscard]] __attribute__((always_inline)) bool is_tcp() const
+        [[nodiscard]] UVENT_ALWAYS_INLINE_FN bool is_tcp() const
         {
             return (this->socket_info & static_cast<uint8_t>(Proto::TCP)) != 0;
         }
 
-        [[nodiscard]] __attribute__((always_inline)) bool is_passive() const
+        [[nodiscard]] UVENT_ALWAYS_INLINE_FN bool is_passive() const
         {
             return (this->socket_info & static_cast<uint8_t>(Role::PASSIVE)) != 0;
         }
