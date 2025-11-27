@@ -20,13 +20,17 @@ if (CMAKE_SYSTEM_NAME MATCHES ".*BSD")
 endif ()
 
 if (APPLE OR BSD)
+    # Pollers
     list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/EPoller\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/EPoller\\.cpp$")
+    # Sockets
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinux\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinux\\.cpp$")
 elseif (UNIX) # Linux
+    # Pollers
     list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/KPoller\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/KPoller\\.cpp$")
+    # Sockets
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketBSD\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketBSD\\.cpp$")
 elseif (WIN32)
