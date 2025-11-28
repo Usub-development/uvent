@@ -410,93 +410,209 @@ namespace usub::uvent::net {
         uvent::detail::AwaitableIOFrame<std::optional<TCPClientSocket> > >
     Socket<p, r>::async_accept()
         requires(p == Proto::TCP && r == Role::PASSIVE) {
-        auto *header = this->header_;
-        socket_fd_t listen_fd = header->fd;
+        using Awaitable = task::Awaitable<
+            std::optional<TCPClientSocket>,
+            uvent::detail::AwaitableIOFrame<std::optional<TCPClientSocket> > >;
+
+        SocketHeader *header = this->header_;
+        if (!header || header->fd == INVALID_FD) {
+#if UVENT_ERROR
+            spdlog::error("async_accept(win): invalid listen header/fd");
+#endif
+            co_return std::nullopt;
+        }
+
+        SOCKET listen_s = static_cast<SOCKET>(header->fd);
 
 #if UVENT_DEBUG
-        spdlog::info("async_accept(win) enter: listen fd={}",
-                     static_cast<socket_fd_t>(listen_fd));
+        spdlog::info("async_accept(win): enter, listen fd={}",
+                     static_cast<socket_fd_t>(listen_s));
 #endif
 
-        for (;;) {
-            sockaddr_storage addr_storage{};
-            int addr_len = static_cast<int>(sizeof(addr_storage));
-
-            SOCKET client_fd = ::accept(
-                static_cast<SOCKET>(listen_fd),
-                reinterpret_cast<sockaddr *>(&addr_storage),
-                &addr_len);
-
-            if (client_fd == INVALID_SOCKET) {
-                const int err = ::WSAGetLastError();
-
-                if (err == WSAEWOULDBLOCK || err == WSAEINTR) {
-#if UVENT_TRACE
-                    spdlog::trace(
-                        "async_accept(win): WSAEWOULDBLOCK/WSAEINTR, "
-                        "co_await AwaiterAccept, listen fd={}",
-                        static_cast<socket_fd_t>(listen_fd));
-#endif
-                    co_await uvent::net::detail::AwaiterAccept{header};
-                    continue;
-                }
-
+        LPFN_ACCEPTEX accept_ex = detail::get_accept_ex(listen_s);
+        if (!accept_ex) {
 #if UVENT_ERROR
-                spdlog::error("async_accept(win): accept() failed, listen fd={}, err={}",
-                              static_cast<socket_fd_t>(listen_fd),
-                              err);
+            spdlog::error("async_accept(win): get_accept_ex failed for listen fd={}",
+                          static_cast<socket_fd_t>(listen_s));
 #endif
+            co_return std::nullopt;
+        }
+
+        int family = (this->ipv == utils::net::IPV::IPV4) ? AF_INET : AF_INET6;
+
+        SOCKET client_s = ::WSASocket(
+            family,
+            SOCK_STREAM,
+            IPPROTO_TCP,
+            nullptr,
+            0,
+            WSA_FLAG_OVERLAPPED);
+
+        if (client_s == INVALID_SOCKET) {
+#if UVENT_ERROR
+            spdlog::error("async_accept(win): WSASocket(accept) failed, err={}",
+                          WSAGetLastError());
+#endif
+            co_return std::nullopt;
+        }
+
+        DWORD addr_len = static_cast<DWORD>(sizeof(sockaddr_storage) + 16);
+        DWORD buf_len = addr_len * 2;
+        auto addr_buf = std::make_unique<char[]>(buf_len);
+
+        auto ov = std::make_unique<IocpOverlapped>();
+        std::memset(&ov->ov, 0, sizeof(ov->ov));
+        ov->header = header;
+        ov->op = IocpOp::ACCEPT;
+        ov->bytes_transferred = 0;
+
+        DWORD bytes = 0;
+
+#if UVENT_DEBUG
+        spdlog::trace("async_accept(win): posting AcceptEx listen_fd={} accept_fd={}",
+                      static_cast<socket_fd_t>(listen_s),
+                      static_cast<socket_fd_t>(client_s));
+#endif
+
+        BOOL ok = accept_ex(
+            listen_s,
+            client_s,
+            addr_buf.get(),
+            0,
+            addr_len,
+            addr_len,
+            &bytes,
+            &ov->ov);
+
+        if (!ok) {
+            int err = ::WSAGetLastError();
+            if (err != ERROR_IO_PENDING) {
+#if UVENT_ERROR
+                spdlog::error(
+                    "async_accept(win): AcceptEx failed immediately, "
+                    "listen_fd={}, accept_fd={}, err={}",
+                    static_cast<socket_fd_t>(listen_s),
+                    static_cast<socket_fd_t>(client_s),
+                    err);
+#endif
+                ::closesocket(client_s);
                 co_return std::nullopt;
             }
 
-            {
-                u_long mode = 1;
-                int rc = ::ioctlsocket(client_fd, FIONBIO, &mode);
-                if (rc == SOCKET_ERROR) {
-#if UVENT_ERROR
-                    int err = ::WSAGetLastError();
-                    spdlog::error(
-                        "async_accept(win): ioctlsocket(FIONBIO) failed, "
-                        "client fd={}, err={}",
-                        static_cast<socket_fd_t>(client_fd),
-                        err);
+#if UVENT_TRACE
+            spdlog::trace(
+                "async_accept(win): AcceptEx pending, listen_fd={}, accept_fd={}",
+                static_cast<socket_fd_t>(listen_s),
+                static_cast<socket_fd_t>(client_s));
 #endif
-                    ::closesocket(client_fd);
-                    co_return std::nullopt;
-                }
+
+            co_await detail::AwaiterRead{header};
+
+            DWORD flags = 0;
+            if (!::WSAGetOverlappedResult(listen_s, &ov->ov, &bytes, FALSE, &flags)) {
+                int err2 = WSAGetLastError();
+#if UVENT_ERROR
+                spdlog::error(
+                    "async_accept(win): WSAGetOverlappedResult failed, "
+                    "listen_fd={}, accept_fd={}, err={}",
+                    static_cast<socket_fd_t>(listen_s),
+                    static_cast<socket_fd_t>(client_s),
+                    err2);
+#endif
+                ::closesocket(client_s);
+                co_return std::nullopt;
             }
+        } else {
+#if UVENT_TRACE
+            spdlog::trace(
+                "async_accept(win): AcceptEx completed synchronously, "
+                "listen_fd={}, accept_fd={}, bytes={}",
+                static_cast<socket_fd_t>(listen_s),
+                static_cast<socket_fd_t>(client_s),
+                bytes);
+#endif
+        }
 
-            TCPClientSocket client{static_cast<socket_fd_t>(client_fd)};
-            auto *ch = client.get_raw_header();
+        if (::setsockopt(
+                client_s,
+                SOL_SOCKET,
+                SO_UPDATE_ACCEPT_CONTEXT,
+                reinterpret_cast<char *>(&listen_s),
+                sizeof(listen_s)) == SOCKET_ERROR) {
+#if UVENT_ERROR
+            spdlog::error(
+                "async_accept(win): SO_UPDATE_ACCEPT_CONTEXT failed, "
+                "accept_fd={}, err={}",
+                static_cast<socket_fd_t>(client_s),
+                WSAGetLastError());
+#endif
+            ::closesocket(client_s);
+            co_return std::nullopt;
+        }
 
+        {
+            u_long mode = 1;
+            if (::ioctlsocket(client_s, FIONBIO, &mode) == SOCKET_ERROR) {
+#if UVENT_ERROR
+                spdlog::error(
+                    "async_accept(win): ioctlsocket(FIONBIO) failed, "
+                    "accept_fd={}, err={}",
+                    static_cast<socket_fd_t>(client_s),
+                    WSAGetLastError());
+#endif
+                ::closesocket(client_s);
+                co_return std::nullopt;
+            }
+        }
+
+        sockaddr *local_sa = nullptr;
+        sockaddr *remote_sa = nullptr;
+        int local_len = 0;
+        int remote_len = 0;
+
+        ::GetAcceptExSockaddrs(
+            addr_buf.get(),
+            0,
+            addr_len,
+            addr_len,
+            &local_sa,
+            &local_len,
+            &remote_sa,
+            &remote_len);
+
+        TCPClientSocket client{static_cast<socket_fd_t>(client_s)};
+
+        if (remote_sa) {
+            if (remote_sa->sa_family == AF_INET) {
+                sockaddr_in sa{};
+                std::memcpy(&sa, remote_sa, sizeof(sockaddr_in));
+                client.address = sa;
+                client.ipv = utils::net::IPV::IPV4;
+            } else if (remote_sa->sa_family == AF_INET6) {
+                sockaddr_in6 sa6{};
+                std::memcpy(&sa6, remote_sa, sizeof(sockaddr_in6));
+                client.address = sa6;
+                client.ipv = utils::net::IPV::IPV6;
+            }
+        }
+
+#if UVENT_DEBUG
+        if (auto *ch = client.get_raw_header()) {
             ch->socket_info &=
                     ~static_cast<uint8_t>(AdditionalState::CONNECTION_PENDING);
 
-            if (addr_len > 0) {
-                if (addr_storage.ss_family == AF_INET) {
-                    sockaddr_in sa{};
-                    std::memcpy(&sa, &addr_storage, sizeof(sockaddr_in));
-                    client.address = sa;
-                    client.ipv = utils::net::IPV::IPV4;
-                } else if (addr_storage.ss_family == AF_INET6) {
-                    sockaddr_in6 sa6{};
-                    std::memcpy(&sa6, &addr_storage, sizeof(sockaddr_in6));
-                    client.address = sa6;
-                    client.ipv = utils::net::IPV::IPV6;
-                }
-            }
-
-#if UVENT_DEBUG
-            spdlog::debug("async_accept(win): accepted client fd={} on listen fd={}",
-                          static_cast<socket_fd_t>(client_fd),
-                          static_cast<socket_fd_t>(listen_fd));
-            spdlog::debug("async_accept(win): client header={} refcnt={}",
-                          static_cast<void *>(ch),
-                          ch->get_counter());
+            spdlog::info(
+                "async_accept(win): accepted client_fd={} on listen_fd={}",
+                static_cast<socket_fd_t>(client_s),
+                static_cast<socket_fd_t>(listen_s));
+            spdlog::debug(
+                "async_accept(win): client header={} refcnt={}",
+                static_cast<void *>(ch),
+                ch->get_counter());
+        }
 #endif
 
-            co_return std::move(client);
-        }
+        co_return std::move(client);
     }
 
     template<Proto p, Role r>

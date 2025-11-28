@@ -40,12 +40,6 @@ namespace usub::uvent::net
         uint64_t state;
 #endif
 
-#ifdef _WIN32
-        std::atomic<DWORD> last_io_bytes{0};
-        std::atomic<DWORD> last_io_error{0};
-#endif
-
-
 #if UVENT_DEBUG
         ~SocketHeader()
         {
