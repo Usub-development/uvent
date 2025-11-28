@@ -1,19 +1,28 @@
-//
-// IocpPoller.h — Windows backend на WSAPoll (readiness-модель)
-//
-
 #ifndef UVENT_IOCPPOLLER_H
 #define UVENT_IOCPPOLLER_H
 
 #include <vector>
-#include <unordered_map>
-#include <atomic>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
+// СНАЧАЛА winsock2 / ws2tcpip / mswsock
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <mswsock.h>
+// ПОТОМ windows.h, чтобы он НЕ подтащил winsock.h
+#include <windows.h>
+#endif
 
 #include "uvent/system/Defines.h"
 #include "uvent/poll/PollerBase.h"
 #include "uvent/utils/timer/TimerWheel.h"
 #include "uvent/net/SocketMetadata.h"
-#include "uvent/net/SocketWindows.h"
 
 namespace usub::uvent::core {
 
@@ -34,16 +43,9 @@ namespace usub::uvent::core {
         void lock_poll(int timeout_ms) override;
 
     private:
+        HANDLE iocp_handle{nullptr};
         utils::TimerWheel* wheel{nullptr};
-
-        std::vector<WSAPOLLFD> pollfds_;
-        std::vector<net::SocketHeader*> headers_;
-
-        std::unordered_map<SOCKET, std::size_t> index_by_fd_;
-
-        HANDLE iocp_{nullptr};
-
-        void set_events_for_op(WSAPOLLFD& pfd, OperationType op);
+        std::vector<OVERLAPPED_ENTRY> events;
     };
 
 } // namespace usub::uvent::core

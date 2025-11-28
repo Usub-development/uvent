@@ -1,313 +1,289 @@
 #include "uvent/poll/IocpPoller.h"
-
-#include <cstddef>
-
-#include "uvent/system/Settings.h"
 #include "uvent/system/SystemContext.h"
-#include "uvent/system/Thread.h"
-#include "uvent/net/Socket.h"
+#include "uvent/system/Settings.h"
+#include "uvent/net/SocketWindows.h"
 
-namespace usub::uvent::core
-{
-
-    using usub::uvent::net::SocketHeader;
+namespace usub::uvent::core {
 
     IocpPoller::IocpPoller(utils::TimerWheel* wheel)
-        : PollerBase()
-        , wheel(wheel)
+        : PollerBase(), wheel(wheel)
     {
-        wsa_init_once();
-        pollfds_.reserve(128);
-        headers_.reserve(128);
-        iocp_ = ::CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 0);
+        this->iocp_handle = ::CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 0);
+        if (!this->iocp_handle)
+        {
+#if UVENT_DEBUG
+            spdlog::error("IocpPoller ctor: CreateIoCompletionPort failed err={}", GetLastError());
+#endif
+            throw std::system_error(GetLastError(), std::system_category(), "CreateIoCompletionPort");
+        }
+        this->events.resize(1024);
+#if UVENT_DEBUG
+        spdlog::info("IocpPoller ctor: handle={}, events_cap={}",
+                     (void*)this->iocp_handle,
+                     this->events.size());
+#endif
     }
 
     IocpPoller::~IocpPoller()
     {
-        pollfds_.clear();
-        headers_.clear();
-        index_by_fd_.clear();
-        if (iocp_ != nullptr)
-        {
-            ::CloseHandle(iocp_);
-            iocp_ = nullptr;
-        }
+#if UVENT_DEBUG
+        spdlog::info("IocpPoller dtor: handle={}", (void*)this->iocp_handle);
+#endif
+        if (this->iocp_handle)
+            ::CloseHandle(this->iocp_handle);
     }
 
-    void IocpPoller::set_events_for_op(WSAPOLLFD& pfd, OperationType op)
+    void IocpPoller::addEvent(net::SocketHeader* header, OperationType)
     {
-        short ev = 0;
-        switch (op)
-        {
-        case OperationType::READ:
-            ev = POLLIN | POLLRDNORM | POLLERR | POLLHUP;
-            break;
-        case OperationType::WRITE:
-            ev = POLLOUT | POLLWRNORM | POLLERR | POLLHUP;
-            break;
-        case OperationType::ALL:
-        default:
-            ev = POLLIN | POLLRDNORM | POLLOUT | POLLWRNORM | POLLERR | POLLHUP;
-            break;
-        }
-        pfd.events = ev;
-    }
-
-    void IocpPoller::addEvent(SocketHeader* header, OperationType op)
-    {
-        if (!header) return;
-        if (header->fd == INVALID_FD) return;
-
-        SOCKET s = static_cast<SOCKET>(header->fd);
-
-        if (iocp_ != nullptr)
-        {
-            ::CreateIoCompletionPort(reinterpret_cast<HANDLE>(s),
-                                     iocp_,
-                                     reinterpret_cast<ULONG_PTR>(header),
-                                     0);
-        }
-
-        auto it = index_by_fd_.find(s);
-        if (it != index_by_fd_.end())
-        {
-            auto idx = it->second;
-            set_events_for_op(pollfds_[idx], op);
+#if UVENT_DEBUG
+        spdlog::debug("IocpPoller::addEvent: header={}, fd={}",
+                      static_cast<void*>(header),
+                      header ? static_cast<std::uint64_t>(header->fd) : 0ull);
+#endif
+        if (!header || header->fd == INVALID_FD)
             return;
+
+        HANDLE h = ::CreateIoCompletionPort(
+            reinterpret_cast<HANDLE>(header->fd),
+            this->iocp_handle,
+            reinterpret_cast<ULONG_PTR>(header),
+            0);
+#if UVENT_DEBUG
+        if (!h)
+        {
+            spdlog::error("IocpPoller::addEvent: CreateIoCompletionPort(fd={}) failed err={}",
+                          (std::uint64_t)header->fd,
+                          GetLastError());
         }
-
-        WSAPOLLFD pfd{};
-        pfd.fd = s;
-        set_events_for_op(pfd, op);
-
-        std::size_t idx = pollfds_.size();
-        pollfds_.push_back(pfd);
-        headers_.push_back(header);
-        index_by_fd_[s] = idx;
+        else
+        {
+            spdlog::debug("IocpPoller::addEvent: associated fd={} with IOCP handle={}",
+                          (std::uint64_t)header->fd,
+                          (void*)h);
+        }
+#endif
+        (void)h;
 
 #ifndef UVENT_ENABLE_REUSEADDR
         if (header->is_tcp() && header->is_passive())
+        {
             system::this_thread::detail::is_started.store(true, std::memory_order_relaxed);
+#if UVENT_DEBUG
+            spdlog::info("IocpPoller::addEvent: passive TCP socket registered, is_started=true fd={}",
+                         (std::uint64_t)header->fd);
+#endif
+        }
 #else
         if (header->is_tcp() && header->is_passive())
+        {
             system::this_thread::detail::is_started = true;
+#if UVENT_DEBUG
+            spdlog::info("IocpPoller::addEvent: passive TCP socket registered, is_started=true fd={}",
+                         (std::uint64_t)header->fd);
+#endif
+        }
 #endif
     }
 
-    void IocpPoller::updateEvent(SocketHeader* header, OperationType op)
+    void IocpPoller::updateEvent(net::SocketHeader* header, OperationType op)
     {
-        if (!header) return;
-        if (header->fd == INVALID_FD) return;
-
-        SOCKET s = static_cast<SOCKET>(header->fd);
-        auto it = index_by_fd_.find(s);
-        if (it == index_by_fd_.end())
-        {
-            addEvent(header, op);
-            return;
-        }
-
-        auto idx = it->second;
-        set_events_for_op(pollfds_[idx], op);
+#if UVENT_DEBUG
+        spdlog::trace("IocpPoller::updateEvent: header={}, fd={}, op_mask={}",
+                      static_cast<void*>(header),
+                      header ? static_cast<std::uint64_t>(header->fd) : 0ull,
+                      (int)op);
+#endif
+        (void)header;
+        (void)op;
     }
 
-    void IocpPoller::removeEvent(SocketHeader* header, OperationType)
+    void IocpPoller::removeEvent(net::SocketHeader* header, OperationType)
     {
+#if UVENT_DEBUG
+        spdlog::debug("IocpPoller::removeEvent: header={}, fd={}",
+                      static_cast<void*>(header),
+                      header ? static_cast<std::uint64_t>(header->fd) : 0ull);
+#endif
         if (!header) return;
-        if (header->fd == INVALID_FD) return;
 
-        SOCKET s = static_cast<SOCKET>(header->fd);
-        auto it = index_by_fd_.find(s);
-        if (it != index_by_fd_.end())
+        if (header->fd != INVALID_FD)
         {
-            std::size_t idx = it->second;
-            std::size_t last = pollfds_.size() - 1;
-
-            if (idx != last)
-            {
-                std::swap(pollfds_[idx], pollfds_[last]);
-                std::swap(headers_[idx], headers_[last]);
-
-                if (headers_[idx])
-                {
-                    SOCKET moved_fd = static_cast<SOCKET>(headers_[idx]->fd);
-                    index_by_fd_[moved_fd] = idx;
-                }
-            }
-
-            pollfds_.pop_back();
-            headers_.pop_back();
-            index_by_fd_.erase(it);
-        }
-
-        if (header->fd != -1)
-        {
-            ::closesocket(static_cast<SOCKET>(header->fd));
-            header->fd = -1;
+#if UVENT_DEBUG
+            spdlog::info("IocpPoller::removeEvent: closesocket fd={}",
+                         (std::uint64_t)header->fd);
+#endif
+            ::closesocket(header->fd);
+            header->fd = INVALID_FD;
         }
     }
 
     bool IocpPoller::poll(int timeout_ms)
     {
+        DWORD timeout = (timeout_ms < 0) ? 0 : static_cast<DWORD>(timeout_ms);
+        ULONG n = 0;
+
 #ifndef UVENT_ENABLE_REUSEADDR
         system::this_thread::detail::g_qsbr.enter();
 #endif
 
-        int n = 0;
+        BOOL ok = ::GetQueuedCompletionStatusEx(
+            this->iocp_handle,
+            this->events.data(),
+            static_cast<ULONG>(this->events.size()),
+            &n,
+            timeout,
+            FALSE);
 
-        if (!pollfds_.empty())
+        if (!ok)
         {
-            int timeout = (timeout_ms < 0) ? -1 : timeout_ms;
-            n = ::WSAPoll(pollfds_.data(),
-                          static_cast<ULONG>(pollfds_.size()),
-                          timeout);
-        }
-        else
-        {
-            if (timeout_ms > 0)
-                ::Sleep(static_cast<DWORD>(timeout_ms));
-        }
-
-        int ready_left = n;
-
-        if (n > 0)
-        {
-            for (std::size_t i = 0; i < pollfds_.size() && ready_left > 0; ++i)
+            DWORD err = GetLastError();
+            if (err == WAIT_TIMEOUT)
             {
-                auto& p = pollfds_[i];
-                if (p.revents == 0)
-                    continue;
-
-                --ready_left;
-
-                auto* sock = headers_[i];
-                if (!sock)
-                    continue;
-
+#if UVENT_DEBUG
+                // spdlog::trace("IocpPoller::poll: WAIT_TIMEOUT");
+#endif
 #ifndef UVENT_ENABLE_REUSEADDR
-                if (sock->is_disconnected_now())
-                    continue;
-                if (!sock->try_mark_busy())
-                    continue;
+                system::this_thread::detail::g_qsbr.leave();
+#endif
+                return false;
+            }
+#if UVENT_DEBUG
+            spdlog::debug("IocpPoller::poll: GetQueuedCompletionStatusEx error={} n={}", err, n);
+#endif
+        }
+
+        for (ULONG i = 0; i < n; ++i)
+        {
+            auto& e = this->events[i];
+            auto* header = reinterpret_cast<net::SocketHeader*>(e.lpCompletionKey);
+            auto* ov = reinterpret_cast<net::IocpOverlapped*>(e.lpOverlapped);
+
+#if UVENT_DEBUG
+            spdlog::trace("IocpPoller::poll: event[{}]: header={}, ov={}, bytes={}, status={}",
+                          i,
+                          static_cast<void*>(header),
+                          static_cast<void*>(ov),
+                          e.dwNumberOfBytesTransferred,
+                          e.Internal);
 #endif
 
-                const bool has_read =
-                    (p.revents & (POLLIN | POLLRDNORM | POLLERR | POLLHUP)) != 0;
-                const bool has_write =
-                    (p.revents & (POLLOUT | POLLWRNORM | POLLERR | POLLHUP)) != 0;
+            if (!header || !ov)
+                continue;
 
-                if (p.revents & (POLLERR | POLLHUP))
-                {
-                    sock->mark_disconnected();
-                }
+#ifndef UVENT_ENABLE_REUSEADDR
+            if (header->is_busy_now() || header->is_disconnected_now())
+            {
+#if UVENT_DEBUG
+                spdlog::trace("IocpPoller::poll: skip event, busy={} disconnected={} fd={}",
+                              header->is_busy_now(),
+                              header->is_disconnected_now(),
+                              (std::uint64_t)header->fd);
+#endif
+                continue;
+            }
 
-                if (has_read && sock->first)
+            header->try_mark_busy();
+#endif
+
+            bool hup = false;
+            DWORD transferred = e.dwNumberOfBytesTransferred;
+            ov->bytes_transferred = transferred;
+
+            if (transferred == 0 &&
+                (ov->op == net::IocpOp::READ || ov->op == net::IocpOp::WRITE))
+            {
+                hup = true;
+                header->mark_disconnected();
+#if UVENT_DEBUG
+                spdlog::info("IocpPoller::poll: HUP detected fd={} op={}",
+                             (std::uint64_t)header->fd,
+                             (int)ov->op);
+#endif
+            }
+
+            if (ov->op == net::IocpOp::READ || ov->op == net::IocpOp::ACCEPT)
+            {
+#if UVENT_DEBUG
+                spdlog::info("IOCP READ/ACCEPT fd={} op={} bytes={}",
+                             (std::uint64_t)header->fd,
+                             (int)ov->op,
+                             transferred);
+#endif
+                if (header->first)
                 {
-                    auto c = std::exchange(sock->first, nullptr);
+                    auto c = std::exchange(header->first, nullptr);
+#if UVENT_DEBUG
+                    spdlog::trace("IocpPoller::poll: enqueue FIRST continuation fd={}",
+                                  (std::uint64_t)header->fd);
+#endif
                     system::this_thread::detail::q->enqueue(c);
                 }
-
-                if (has_write && sock->second)
+            }
+            else if (ov->op == net::IocpOp::WRITE || ov->op == net::IocpOp::CONNECT)
+            {
+#if UVENT_DEBUG
+                spdlog::info("IOCP WRITE/CONNECT fd={} op={} bytes={}",
+                             (std::uint64_t)header->fd,
+                             (int)ov->op,
+                             transferred);
+#endif
+                if (header->socket_info &
+                    static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING))
                 {
-                    auto c = std::exchange(sock->second, nullptr);
-                    system::this_thread::detail::q->enqueue(c);
+                    int err_code = 0;
+                    int optlen = sizeof(err_code);
+                    ::getsockopt(header->fd,
+                                 SOL_SOCKET,
+                                 SO_ERROR,
+                                 reinterpret_cast<char*>(&err_code),
+                                 &optlen);
+                    header->socket_info &=
+                        ~static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING);
+#if UVENT_DEBUG
+                    spdlog::debug("IocpPoller::poll: connect completion fd={} err_code={}",
+                                  (std::uint64_t)header->fd,
+                                  err_code);
+#endif
+                    if (err_code != 0)
+                        header->socket_info |= static_cast<uint8_t>(net::AdditionalState::CONNECTION_FAILED);
                 }
 
-#ifndef UVENT_ENABLE_REUSEADDR
-                sock->clear_busy();
+                if (header->second)
+                {
+                    auto c = std::exchange(header->second, nullptr);
+#if UVENT_DEBUG
+                    spdlog::trace("IocpPoller::poll: enqueue SECOND continuation fd={}",
+                                  (std::uint64_t)header->fd);
 #endif
+                    system::this_thread::detail::q->enqueue(c);
+                }
             }
 
-            if (static_cast<std::size_t>(n) == pollfds_.size())
+            if (hup)
             {
-                pollfds_.reserve(pollfds_.size() << 1);
-                headers_.reserve(headers_.size() << 1);
+                this->removeEvent(header, ALL);
+#if UVENT_DEBUG
+                spdlog::debug("Socket hup/err fd={}", (std::uint64_t)header->fd);
+#endif
             }
         }
 
-        int completed = 0;
-
-        if (iocp_ != nullptr)
+        if (n == static_cast<ULONG>(this->events.size()))
         {
-            for (;;)
-            {
-                DWORD bytes = 0;
-                ULONG_PTR key = 0;
-                LPOVERLAPPED pov = nullptr;
-
-                BOOL ok = ::GetQueuedCompletionStatus(iocp_, &bytes, &key, &pov, 0);
-                if (!ok && pov == nullptr)
-                {
-                    break;
-                }
-
-                if (pov == nullptr)
-                {
-                    break;
-                }
-
-                auto* header = reinterpret_cast<SocketHeader*>(key);
-                if (!header)
-                    continue;
-
-#ifndef UVENT_ENABLE_REUSEADDR
-                if (!header->try_mark_busy())
-                    continue;
+            this->events.resize(this->events.size() << 1);
+#if UVENT_DEBUG
+            spdlog::debug("IocpPoller::poll: events buffer grown to {}", this->events.size());
 #endif
-
-                auto* ext = reinterpret_cast<usub::uvent::net::IocpOverlapped*>(
-                    reinterpret_cast<char*>(pov) -
-                    offsetof(usub::uvent::net::IocpOverlapped, ov));
-                ext->bytes_transferred = bytes;
-
-                if (!ok || bytes == 0)
-                {
-                    header->mark_disconnected();
-                }
-
-                switch (ext->op)
-                {
-                case usub::uvent::net::IocpOp::READ:
-                    if (header->first)
-                    {
-                        auto c = std::exchange(header->first, nullptr);
-                        system::this_thread::detail::q->enqueue(c);
-                    }
-                    break;
-                case usub::uvent::net::IocpOp::WRITE:
-                    if (header->second)
-                    {
-                        auto c = std::exchange(header->second, nullptr);
-                        system::this_thread::detail::q->enqueue(c);
-                    }
-                    break;
-                case usub::uvent::net::IocpOp::ACCEPT:
-                    if (header->first)
-                    {
-                        auto c = std::exchange(header->first, nullptr);
-                        system::this_thread::detail::q->enqueue(c);
-                    }
-                    break;
-                case usub::uvent::net::IocpOp::CONNECT:
-                    if (header->second)
-                    {
-                        auto c = std::exchange(header->second, nullptr);
-                        system::this_thread::detail::q->enqueue(c);
-                    }
-                    break;
-                }
-
-#ifndef UVENT_ENABLE_REUSEADDR
-                header->clear_busy();
-#endif
-                ++completed;
-            }
         }
 
 #ifndef UVENT_ENABLE_REUSEADDR
         system::this_thread::detail::g_qsbr.leave();
 #endif
-        return (n > 0) || (completed > 0);
+
+#if UVENT_DEBUG
+        spdlog::trace("IocpPoller::poll: leave, n={}", n);
+#endif
+        return n > 0;
     }
 
     bool IocpPoller::try_lock()
@@ -315,19 +291,31 @@ namespace usub::uvent::core
         if (this->lock.try_acquire())
         {
             this->is_locked.store(true, std::memory_order_release);
+#if UVENT_DEBUG
+            spdlog::trace("IocpPoller::try_lock: success");
+#endif
             return true;
         }
+#if UVENT_DEBUG
+        spdlog::trace("IocpPoller::try_lock: fail");
+#endif
         return false;
     }
 
     void IocpPoller::unlock()
     {
+#if UVENT_DEBUG
+        spdlog::trace("IocpPoller::unlock");
+#endif
         this->is_locked.store(false, std::memory_order_release);
         this->lock.release();
     }
 
     void IocpPoller::lock_poll(int timeout_ms)
     {
+#if UVENT_DEBUG
+        spdlog::trace("IocpPoller::lock_poll: timeout_ms={}", timeout_ms);
+#endif
         this->lock.acquire();
         this->is_locked.store(true, std::memory_order_release);
         this->poll(timeout_ms);

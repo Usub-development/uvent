@@ -232,26 +232,26 @@ int main()
     });
 
     system::co_spawn(sendingCoro());
-    system::co_spawn(consumer());
-    system::co_spawn(critical_task(1));
-    system::co_spawn(critical_task(2));
-    system::co_spawn(critical_task(3));
-
-    g_wg.add(4);
-    system::co_spawn(semaphore_task(0));
-    system::co_spawn(semaphore_task(1));
-    system::co_spawn(semaphore_task(2));
-    system::co_spawn(semaphore_task(3));
-
-    system::co_spawn(event_waiter(1));
-    system::co_spawn(event_waiter(2));
-    system::co_spawn(set_event_after_1s());
-
-    auto tok = g_cancel_src.token();
-    system::co_spawn(cancellation_task(tok));
-    system::co_spawn(cancel_after_1500ms());
-
-    system::co_spawn(wg_waiter());
+    // system::co_spawn(consumer());
+    // system::co_spawn(critical_task(1));
+    // system::co_spawn(critical_task(2));
+    // system::co_spawn(critical_task(3));
+    //
+    // g_wg.add(4);
+    // system::co_spawn(semaphore_task(0));
+    // system::co_spawn(semaphore_task(1));
+    // system::co_spawn(semaphore_task(2));
+    // system::co_spawn(semaphore_task(3));
+    //
+    // system::co_spawn(event_waiter(1));
+    // system::co_spawn(event_waiter(2));
+    // system::co_spawn(set_event_after_1s());
+    //
+    // auto tok = g_cancel_src.token();
+    // system::co_spawn(cancellation_task(tok));
+    // system::co_spawn(cancel_after_1500ms());
+    //
+    // system::co_spawn(wg_waiter());
 
     uvent.run();
     return 0;
