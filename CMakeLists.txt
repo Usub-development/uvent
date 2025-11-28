@@ -23,18 +23,35 @@ if (APPLE OR BSD)
     # Pollers
     list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/EPoller\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/EPoller\\.cpp$")
+    list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/IocpPoller\\.h$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/IocpPoller\\.cpp$")
     # Sockets
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinux\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinux\\.cpp$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketWindows\\.h$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketWindows\\.cpp$")
 elseif (UNIX) # Linux
     # Pollers
     list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/KPoller\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/KPoller\\.cpp$")
+    list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/IocpPoller\\.h$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/IocpPoller\\.cpp$")
     # Sockets
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketBSD\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketBSD\\.cpp$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketWindows\\.h$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketWindows\\.cpp$")
 elseif (WIN32)
-    message(FATAL_ERROR "Uvent does not support Windows.")
+    # Pollers
+    list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/KPoller\\.h$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/KPoller\\.cpp$")
+    list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/EPoller\\.h$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/EPoller\\.cpp$")
+    # Sockets
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketBSD\\.h$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketBSD\\.cpp$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinux\\.h$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinux\\.cpp$")
 endif ()
 
 foreach (header ${UVENT_HEADERS})

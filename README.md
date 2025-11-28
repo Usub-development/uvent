@@ -1,21 +1,34 @@
 # Uvent
 
+Cross-platform async I/O engine with native backends for:
+
+| OS / family                                    | Backend primitives                                                       | Implementation                |
+|------------------------------------------------|--------------------------------------------------------------------------|-------------------------------|
+| Linux                                          | `epoll` (edge-triggered), non-blocking sockets                           | `SocketLinux`, `EPoller`      |
+| macOS, FreeBSD, OpenBSD, NetBSD, DragonFly BSD | `kqueue`, non-blocking sockets (`accept` + `fcntl`)                      | `SocketBSD`, `EPoller`        |
+| Windows 10+ / Windows Server 2016+             | IOCP (`WSARecv` / `WSASend` / `AcceptEx` / `ConnectEx` / `TransmitFile`) | `SocketWindows`, `IocpPoller` |
+
+A single high-level API (`TCPServerSocket`, `TCPClientSocket`, `UDPSocket`) is used across all platforms.
+
 ### Requests per second (RPS)
 
-| Threads | uvent       | Boost.Asio  | libuv   |
-|---------|-------------|-------------|---------|
-| 1       | 88,929      | 97,219      |    116  |
-| 2       | 172,986     | 185,813     |    828  |
-| 4       | 298,269     | 330,374     |    830  |
-| 8       | 409,388     | 423,409     |    827  |
+| Threads | uvent   | Boost.Asio | libuv |
+|---------|---------|------------|-------|
+| 1       | 88,929  | 97,219     | 116   |
+| 2       | 172,986 | 185,813    | 828   |
+| 4       | 298,269 | 330,374    | 830   |
+| 8       | 409,388 | 423,409    | 827   |
 
-⚡ **Conclusion:** `uvent` delivers performance nearly on par with Boost.Asio and significantly outperforms libuv, while keeping low latency (p99 around 2–3 ms).
+⚡ **Conclusion:** `uvent` delivers performance nearly on par with Boost.Asio and significantly outperforms libuv, while
+keeping low latency (p99 around 2–3 ms).
 
-👉 For more detailed and up-to-date benchmark results, see the dedicated repository: [Usub-development/io_perfomance](https://github.com/Usub-development/io_perfomance)
+👉 For more detailed and up-to-date benchmark results, see the dedicated
+repository: [Usub-development/io_perfomance](https://github.com/Usub-development/io_perfomance)
 
 # Quick start
 
 Minimal TCP echo server:
+
 ```cpp
 #include <uvent/Uvent.h>
 #include <uvent/net/Socket.h>
@@ -81,6 +94,7 @@ settings::timeout_duration_ms = 5000;
 ```
 
 # Documentation
+
 - [Getting started (installation)](https://usub-development.github.io/uvent/getting-started/)
 - [Quick start](https://usub-development.github.io/uvent/quick-start/)
 - [System primitives](https://usub-development.github.io/uvent/system_primitives/)
@@ -89,5 +103,7 @@ settings::timeout_duration_ms = 5000;
 - [Socket](https://usub-development.github.io/uvent/socket/)
 
 ---
+
 # Licence
+
 Uvent is distributed under the [MIT license](LICENSE)

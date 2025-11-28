@@ -12,7 +12,7 @@
 #elif OS_BSD || OS_APPLE
 #include "uvent/poll/KPoller.h"
 #else
-#error "Windows isn't supported yet"
+#include "uvent/poll/IocpPoller.h"
 #endif
 
 
@@ -39,7 +39,7 @@ namespace usub::uvent::system {
 #elif OS_BSD || OS_APPLE
                 std::make_unique<core::KQueuePoller>(wh.get());
 #else
-#error "Windows isn't supported yet"
+                std::make_unique<core::IocpPoller>(wh.get());
 #endif
 #endif
         std::unique_ptr<task::SharedTasks> st = std::make_unique<task::SharedTasks>();
