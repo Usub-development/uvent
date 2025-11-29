@@ -17,6 +17,7 @@
 #include "uvent/utils/errors/IOErrors.h"
 #include "uvent/utils/net/net.h"
 #include "uvent/utils/net/socket.h"
+#include <uvent/poll/EPoller.h>
 
 namespace usub::uvent::net
 {
@@ -299,7 +300,7 @@ namespace usub::uvent::net
             .state = (1 & usub::utils::sync::refc::COUNT_MASK) |
             (false ? usub::utils::sync::refc::CLOSED_MASK : 0)
         };
-        system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::ALL);
+        system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::ALL);
     }
 
     template <Proto p, Role r>
@@ -317,7 +318,7 @@ namespace usub::uvent::net
 #endif
         };
         utils::socket::makeSocketNonBlocking(this->header_->fd);
-        system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::READ);
+        system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::READ);
     }
 
     template <Proto p, Role r>
@@ -335,7 +336,7 @@ namespace usub::uvent::net
 #endif
         };
         utils::socket::makeSocketNonBlocking(this->header_->fd);
-        system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::READ);
+        system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::READ);
     }
 
     template <Proto p, Role r>
@@ -417,7 +418,7 @@ namespace usub::uvent::net
                         .socket_info = uint8_t(Proto::TCP) | uint8_t(Role::ACTIVE),
                         .state = (1ull & usub::utils::sync::refc::COUNT_MASK)
                     };
-                system::this_thread::detail::pl->addEvent(h, core::OperationType::READ);
+                system::this_thread::detail::pl.addEvent(h, core::OperationType::READ);
 
                 TCPClientSocket sc(h);
                 if (ss.ss_family == AF_INET)
@@ -925,7 +926,7 @@ namespace usub::uvent::net
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
 
-        system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::ALL);
+        system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::ALL);
 
         co_await detail::AwaiterWrite{this->header_};
 
@@ -980,7 +981,7 @@ namespace usub::uvent::net
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
 
-        system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::ALL);
+        system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::ALL);
 
         co_await detail::AwaiterWrite{this->header_};
 
@@ -1172,7 +1173,7 @@ namespace usub::uvent::net
     template <Proto p, Role r>
     void Socket<p, r>::update_timeout(timer_duration_t new_duration) const
     {
-        system::this_thread::detail::wh->updateTimer(this->header_->timer_id, new_duration);
+        system::this_thread::detail::wh.updateTimer(this->header_->timer_id, new_duration);
     }
 
     template <Proto p, Role r>
@@ -1221,26 +1222,26 @@ namespace usub::uvent::net
 #endif
         auto* timer = new utils::Timer(timeout, utils::TIMEOUT);
         timer->addFunction(detail::processSocketTimeout, this->header_);
-        this->header_->timer_id = system::this_thread::detail::wh->addTimer(timer);
+        this->header_->timer_id = system::this_thread::detail::wh.addTimer(timer);
     }
 
     template <Proto p, Role r>
     void Socket<p, r>::destroy() noexcept
     {
         this->header_->close_for_new_refs();
-        system::this_thread::detail::pl->removeEvent(this->header_, core::OperationType::ALL);
+        system::this_thread::detail::pl.removeEvent(this->header_);
 #ifndef UVENT_ENABLE_REUSEADDR
         system::this_thread::detail::g_qsbr.retire(static_cast<void*>(this->header_),
                                                    &delete_header);
 #else
-        system::this_thread::detail::q_sh->enqueue(this->header_);
+        system::this_thread::detail::q_sh.enqueue(this->header_);
 #endif
     }
 
     template <Proto p, Role r>
     void Socket<p, r>::remove()
     {
-        system::this_thread::detail::pl->removeEvent(this->header_, core::OperationType::ALL);
+        system::this_thread::detail::pl.removeEvent(this->header_);
         this->header_->close_for_new_refs();
     }
 

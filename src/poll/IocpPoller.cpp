@@ -4,8 +4,8 @@
 #include "uvent/net/SocketWindows.h"
 
 namespace usub::uvent::core {
-    IocpPoller::IocpPoller(utils::TimerWheel *wheel)
-        : PollerBase(), wheel(wheel) {
+    IocpPoller::IocpPoller(utils::TimerWheel &wheel)
+        : wheel(wheel) {
         this->iocp_handle = ::CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 0);
         if (!this->iocp_handle) {
 #if UVENT_DEBUG

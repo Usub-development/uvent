@@ -11,6 +11,13 @@
 
 namespace usub::uvent::core
 {
+#ifdef OS_LINUX
+    using PollerImpl = core::EPoller;
+#elif defined(OS_BSD) || defined(OS_APPLE)
+    using PollerImpl = core::KQueuePoller;
+#else
+    using PollerImpl = core::IocpPoller;
+#endif
     enum OperationType
     {
         READ = 1 << 0,
@@ -22,39 +29,6 @@ namespace usub::uvent::core
     {
         SINGLE_THREAD,
         MULTI_THREAD
-    };
-
-    class PollerBase
-    {
-    public:
-        explicit PollerBase();
-
-        virtual ~PollerBase() = default;
-
-        virtual void addEvent(net::SocketHeader* socket, OperationType initialState) = 0;
-
-        virtual void updateEvent(net::SocketHeader* socket, OperationType initialState) = 0;
-
-        virtual void
-        removeEvent(net::SocketHeader* header, OperationType op) = 0;
-
-        virtual bool poll(int timeout) = 0;
-
-        virtual bool try_lock() = 0;
-
-        virtual void unlock() = 0;
-
-        virtual void lock_poll(int timeout) = 0;
-
-        int get_poll_fd();
-
-    public:
-        std::binary_semaphore lock{1};
-
-    protected:
-        int poll_fd{-1};
-        uint64_t timeoutDuration_ms{5000};
-        std::atomic_bool is_locked{false};
     };
 }
 

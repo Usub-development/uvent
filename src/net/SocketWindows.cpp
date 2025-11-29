@@ -37,7 +37,7 @@ namespace usub::uvent::net::detail {
         header->clear_busy();
 #endif
 
-        ::closesocket(static_cast<SOCKET>(header->fd));
+        system::this_thread::detail::pl.removeEvent(header, core::OperationType::ALL);
 
 #if UVENT_DEBUG
         spdlog::warn("Socket counter in timeout (WIN): {}", header->get_counter());

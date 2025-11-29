@@ -14,29 +14,39 @@
 #include "PollerBase.h"
 #include "uvent/tasks/AwaitableFrame.h"
 
-namespace usub::uvent::core {
+namespace usub::uvent::core
+{
     /**
     * \brief Used on Linux systems. Wrapper over epoll.
     */
-    class EPoller : public PollerBase {
+    class EPoller
+    {
     public:
-        explicit EPoller(utils::TimerWheel *wheel);
+        explicit EPoller(utils::TimerWheel& wheel);
 
-        ~EPoller() override = default;
+        ~EPoller() = default;
 
-        void addEvent(net::SocketHeader *header, OperationType initialState) override;
+        void addEvent(net::SocketHeader* header, OperationType initialState);
 
-        void updateEvent(net::SocketHeader *header, OperationType initialState) override;
+        void updateEvent(net::SocketHeader* header, OperationType initialState);
 
-        void removeEvent(net::SocketHeader* header, OperationType op) override;
+        void removeEvent(net::SocketHeader* header);
 
-        bool poll(int timeout) override;
+        bool poll(int timeout);
 
-        bool try_lock() override;
+        bool try_lock();
 
-        void unlock() override;
+        void unlock();
 
-        void lock_poll(int timeout) override;
+        void lock_poll(int timeout);
+
+        int get_poll_fd();
+
+    private:
+        std::binary_semaphore lock{1};
+        int poll_fd{-1};
+        uint64_t timeoutDuration_ms{5000};
+        std::atomic_bool is_locked{false};
 
     private:
         /// @brief events returned by epoll
@@ -44,7 +54,7 @@ namespace usub::uvent::core {
         /// @brief used to ignore signal like: SIGPIPE etc.
         sigset_t sigmask{};
         /// @brief used to store all timers
-        utils::TimerWheel *wheel;
+        utils::TimerWheel& wheel;
     };
 }
 

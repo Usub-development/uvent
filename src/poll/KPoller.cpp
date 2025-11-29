@@ -9,8 +9,8 @@
 #include <cerrno>
 
 namespace usub::uvent::core {
-    KQueuePoller::KQueuePoller(utils::TimerWheel *wheel)
-        : PollerBase(), wheel(wheel) {
+    KQueuePoller::KQueuePoller(utils::TimerWheel &wheel)
+        : wheel(wheel) {
         this->poll_fd = ::kqueue();
         if (this->poll_fd == -1)
             throw std::system_error(errno, std::generic_category(), "kqueue()");
@@ -178,5 +178,10 @@ namespace usub::uvent::core {
         this->is_locked.store(true, std::memory_order_release);
         this->poll(timeout_ms);
         this->unlock();
+    }
+
+    int KQueuePoller::get_poll_fd() const
+    {
+        return this->poll_fd;
     }
 } // namespace usub::uvent::core

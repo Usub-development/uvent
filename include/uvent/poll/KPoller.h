@@ -20,29 +20,34 @@
 #include "PollerBase.h"
 #include "uvent/tasks/AwaitableFrame.h"
 
-namespace usub::uvent::core {
-    class KQueuePoller : public PollerBase {
+namespace usub::uvent::core
+{
+    class KQueuePoller
+    {
     public:
-        explicit KQueuePoller(utils::TimerWheel *wheel);
+        explicit KQueuePoller(utils::TimerWheel& wheel);
 
-        ~KQueuePoller() override = default;
+        ~KQueuePoller() = default;
 
-        void addEvent(net::SocketHeader *header, OperationType initialState) override;
+        void addEvent(net::SocketHeader* header, OperationType initialState);
 
-        void updateEvent(net::SocketHeader *header, OperationType initialState) override;
+        void updateEvent(net::SocketHeader* header, OperationType initialState);
 
-        void removeEvent(net::SocketHeader *header, OperationType op) override;
+        void removeEvent(net::SocketHeader* header, OperationType op);
 
-        bool poll(int timeout_ms) override;
+        bool poll(int timeout_ms);
 
-        bool try_lock() override;
+        bool try_lock();
 
-        void unlock() override;
+        void unlock();
 
-        void lock_poll(int timeout_ms) override;
+        void lock_poll(int timeout_ms);
+
+        int get_poll_fd() const;
 
     private:
-        inline void enable_read(net::SocketHeader *h, bool enable, bool clear_edge) {
+        inline void enable_read(net::SocketHeader* h, bool enable, bool clear_edge) const
+        {
             uint16_t flags = (enable ? (EV_ADD | EV_ENABLE) : (EV_ADD | EV_DISABLE));
             if (clear_edge) flags |= EV_CLEAR;
             struct kevent ev{};
@@ -51,7 +56,8 @@ namespace usub::uvent::core {
                 throw std::system_error(errno, std::generic_category(), "kevent(change)");
         }
 
-        inline void enable_write(net::SocketHeader *h, bool enable, bool clear_edge) {
+        inline void enable_write(net::SocketHeader* h, bool enable, bool clear_edge) const
+        {
             uint16_t flags = (enable ? (EV_ADD | EV_ENABLE) : (EV_ADD | EV_DISABLE));
             if (clear_edge) flags |= EV_CLEAR;
             struct kevent ev{};
@@ -60,12 +66,19 @@ namespace usub::uvent::core {
                 throw std::system_error(errno, std::generic_category(), "kevent(change)");
         }
 
+    private:
+        std::binary_semaphore lock{1};
+        int poll_fd{-1};
+        uint64_t timeoutDuration_ms{5000};
+        std::atomic_bool is_locked{false};
+
+    private:
         /// events returned by kevent
         std::vector<struct kevent> events;
         /// mask for signals (держим для совместимости, kqueue сам по себе их не фильтрует)
         sigset_t sigmask{};
         /// timers storage
-        utils::TimerWheel *wheel;
+        utils::TimerWheel& wheel;
     };
 } // namespace usub::uvent::core
 

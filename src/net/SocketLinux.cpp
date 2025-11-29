@@ -4,9 +4,11 @@
 
 #include "uvent/net/Socket.h"
 
-namespace usub::uvent::net::detail {
-    void processSocketTimeout(std::any arg) {
-        auto header = std::any_cast<SocketHeader *>(arg);
+namespace usub::uvent::net::detail
+{
+    void processSocketTimeout(std::any arg)
+    {
+        auto header = std::any_cast<SocketHeader*>(arg);
         auto socket = Socket<Proto::TCP, Role::ACTIVE>::from_existing(header);
 
 #if UVENT_DEBUG
@@ -31,8 +33,7 @@ namespace usub::uvent::net::detail {
 #ifndef UVENT_ENABLE_REUSEADDR
         header->clear_busy();
 #endif
-        epoll_ctl(system::this_thread::detail::pl->get_poll_fd(), EPOLL_CTL_DEL, header->fd, nullptr);
-        ::close(header->fd);
+        system::this_thread::detail::pl.removeEvent(header);
 #if UVENT_DEBUG
         spdlog::warn("Socket counter in timeout: {}", header->get_counter());
 #endif
