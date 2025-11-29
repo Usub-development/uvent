@@ -50,7 +50,7 @@ namespace usub::uvent::net {
          * \brief Constructs a passive TCP socket bound to given address/port (lvalue ip).
          * Used for listening sockets (bind + listen).
          */
-        explicit Socket(std::string &ip_addr, int port = 8080, int backlog = 50,
+        explicit Socket(std::string& ip_addr, int port = 8080, int backlog = 50,
                         utils::net::IPV ipv = utils::net::IPV4,
                         utils::net::SocketAddressType socketAddressType = utils::net::TCP) noexcept
             requires(p == Proto::TCP && r == Role::PASSIVE);
@@ -59,35 +59,35 @@ namespace usub::uvent::net {
          * \brief Constructs a passive TCP socket bound to given address/port (rvalue ip).
          * Used for listening sockets (bind + listen).
          */
-        explicit Socket(std::string &&ip_addr, int port = 8080, int backlog = 50,
+        explicit Socket(std::string&& ip_addr, int port = 8080, int backlog = 50,
                         utils::net::IPV ipv = utils::net::IPV4,
                         utils::net::SocketAddressType socketAddressType = utils::net::TCP) noexcept
             requires(p == Proto::TCP && r == Role::PASSIVE);
 
-        explicit Socket(SocketHeader *header) noexcept;
+        explicit Socket(SocketHeader* header) noexcept;
 
         /**
          * \brief Copy constructor.
          * Duplicates the socket object header (but not the underlying FD).
          */
-        Socket(const Socket &o) noexcept;
+        Socket(const Socket& o) noexcept;
 
         /**
          * \brief Move constructor.
          * Transfers ownership of the socket header and FD from another socket.
          */
-        Socket(Socket &&o) noexcept;
+        Socket(Socket&& o) noexcept;
 
         /**
          * \brief Copy assignment operator.
          */
-        Socket &operator=(const Socket &o) noexcept;
+        Socket& operator=(const Socket& o) noexcept;
 
         /**
          * \brief Move assignment operator.
          * Transfers ownership of the socket header and FD.
          */
-        Socket &operator=(Socket &&o) noexcept;
+        Socket& operator=(Socket&& o) noexcept;
 
         /**
          * \brief Destructor.
@@ -99,55 +99,55 @@ namespace usub::uvent::net {
          * \brief Wraps an existing SocketHeader into a Socket object.
          * Used for constructing Socket from raw header pointer.
          */
-        static Socket from_existing(SocketHeader *header);
+        static Socket from_existing(SocketHeader* header);
 
         /**
          * \brief Returns the raw header pointer associated with this socket.
          */
-        SocketHeader *get_raw_header();
+        SocketHeader* get_raw_header();
 
         [[nodiscard]] task::Awaitable<
             std::optional<TCPClientSocket>,
-            uvent::detail::AwaitableIOFrame<std::optional<TCPClientSocket> > >
+            uvent::detail::AwaitableIOFrame<std::optional<TCPClientSocket>>>
         async_accept()
             requires(p == Proto::TCP && r == Role::PASSIVE);
 
         /**
          * \brief Asynchronously reads data into the buffer.
-         * ET-friendly: сначала вычитываем всё, только потом ждём события.
+         * Waits for EPOLLIN event and reads up to max_read_size bytes into the given buffer.
          */
-        [[nodiscard]] task::Awaitable<ssize_t, uvent::detail::AwaitableIOFrame<ssize_t> > async_read(
-            utils::DynamicBuffer &buffer, size_t max_read_size)
+        [[nodiscard]] task::Awaitable<ssize_t, uvent::detail::AwaitableIOFrame<ssize_t>> async_read(
+            utils::DynamicBuffer& buffer, size_t max_read_size)
             requires((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP));
 
         /**
-         * \brief Asynchronously reads data into the raw buffer.
-         * ET-friendly: сначала вычитываем всё, только потом ждём события.
+         * \brief Asynchronously reads data into the buffer.
+         * Waits for EPOLLIN event and reads up to max_read_size bytes into the given buffer.
          */
-        [[nodiscard]] task::Awaitable<ssize_t, uvent::detail::AwaitableIOFrame<ssize_t> > async_read(
-            uint8_t *buffer, size_t max_read_size)
+        [[nodiscard]] task::Awaitable<ssize_t, uvent::detail::AwaitableIOFrame<ssize_t>> async_read(
+            uint8_t* buffer, size_t max_read_size)
             requires((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP));
 
         /**
          * \brief Asynchronously writes data from the buffer.
-         * Waits for EVFILT_WRITE event and attempts to write sz bytes from buf.
+         * Waits for EPOLLOUT event and attempts to write sz bytes from buf.
          */
-        [[nodiscard]] task::Awaitable<ssize_t, uvent::detail::AwaitableIOFrame<ssize_t> >
-        async_write(uint8_t *buf, size_t sz)
+        [[nodiscard]] task::Awaitable<ssize_t, uvent::detail::AwaitableIOFrame<ssize_t>>
+        async_write(uint8_t* buf, size_t sz)
             requires((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP));
 
         /**
          * \brief Synchronously reads data into the buffer.
-         * Performs a nonblocking read up to max_read_size bytes.
+         * Performs a blocking read up to max_read_size bytes.
          */
-        [[nodiscard]] ssize_t read(utils::DynamicBuffer &buffer, size_t max_read_size)
+        [[nodiscard]] ssize_t read(utils::DynamicBuffer& buffer, size_t max_read_size)
             requires((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP));
 
         /**
          * \brief Synchronously writes data from the buffer.
-         * Performs a nonblocking write of sz bytes from buf.
+         * Performs a blocking write of sz bytes from buf.
          */
-        [[nodiscard]] ssize_t write(uint8_t *buf, size_t sz)
+        [[nodiscard]] ssize_t write(uint8_t* buf, size_t sz)
             requires((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP));
 
         /**
@@ -156,46 +156,51 @@ namespace usub::uvent::net {
          */
         [[nodiscard]] task::Awaitable<
             std::optional<usub::utils::errors::ConnectError>,
-            uvent::detail::AwaitableIOFrame<std::optional<usub::utils::errors::ConnectError> > >
-        async_connect(std::string &host, std::string &port)
+            uvent::detail::AwaitableIOFrame<std::optional<usub::utils::errors::ConnectError>>>
+        async_connect(std::string& host, std::string& port)
             requires(p == Proto::TCP && r == Role::ACTIVE);
 
         /**
-         * \brief Asynchronously connects to the specified host and port (rvalue refs).
+         * \brief Asynchronously connects to the specified host and port (lvalue refs).
+         * Waits for the socket to become writable and checks for connection success. Move strings.
          */
         [[nodiscard]] task::Awaitable<
             std::optional<usub::utils::errors::ConnectError>,
-            uvent::detail::AwaitableIOFrame<std::optional<usub::utils::errors::ConnectError> > >
-        async_connect(std::string &&host, std::string &&port)
+            uvent::detail::AwaitableIOFrame<std::optional<usub::utils::errors::ConnectError>>>
+        async_connect(std::string&& host, std::string&& port)
             requires(p == Proto::TCP && r == Role::ACTIVE);
 
         /**
          * \brief Asynchronously sends data with chunking.
+         * Sends data in chunks of chunkSize up to maxSize total. Waits for EPOLLOUT readiness.
          */
         task::Awaitable<
             std::expected<size_t, usub::utils::errors::SendError>,
-            uvent::detail::AwaitableIOFrame<std::expected<size_t, usub::utils::errors::SendError> > >
-        async_send(uint8_t *buf, size_t sz)
+            uvent::detail::AwaitableIOFrame<std::expected<size_t, usub::utils::errors::SendError>>>
+        async_send(uint8_t* buf, size_t sz)
             requires((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP));
 
         /**
          * \brief Synchronously sends data with chunking.
+         * Sends data in chunks of chunkSize up to maxSize total.
          */
         [[nodiscard]] std::expected<std::string, usub::utils::errors::SendError> send(
-            uint8_t *buf, size_t sz, size_t chunkSize = 16384, size_t maxSize = 65536)
+            uint8_t* buf, size_t sz, size_t chunkSize = 16384, size_t maxSize = 65536)
             requires((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP));
 
         /**
          * \brief Asynchronously sends file contents over the socket.
+         * Waits for EPOLLOUT readiness, then sends data from in_fd using sendfile.
          */
-        [[nodiscard]] task::Awaitable<ssize_t, uvent::detail::AwaitableIOFrame<ssize_t> >
-        async_sendfile(int in_fd, off_t *offset, size_t count)
+        [[nodiscard]] task::Awaitable<ssize_t, uvent::detail::AwaitableIOFrame<ssize_t>>
+        async_sendfile(int in_fd, off_t* offset, size_t count)
             requires((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP));
 
         /**
          * \brief Synchronously sends file contents over the socket.
+         * Wrapper over the sendfile syscall.
          */
-        [[nodiscard]] ssize_t sendfile(int in_fd, off_t *offset, size_t count)
+        [[nodiscard]] ssize_t sendfile(int in_fd, off_t* offset, size_t count)
             requires((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP));
 
         /**
@@ -211,6 +216,8 @@ namespace usub::uvent::net {
 
         /**
          * \brief Sets timeout to associated socket.
+         * \warning Method doesn't check if socket was initialized. Please use it only after socket
+         * initialisation.
          */
         void set_timeout_ms(timeout_t timeout = settings::timeout_duration_ms) const
             requires(p == Proto::TCP && r == Role::ACTIVE);
@@ -218,12 +225,38 @@ namespace usub::uvent::net {
         std::expected<std::string, usub::utils::errors::SendError> receive(size_t chunk_size,
                                                                            size_t maxSize);
 
+        /**
+         * \brief Returns the client network address (IPv4 or IPv6) associated with this socket.
+         *
+         * The type alias \c client_addr_t is defined as:
+         * \code
+         * typedef std::variant<sockaddr_in, sockaddr_in6> client_addr_t;
+         * \endcode
+         * allowing the caller to handle both IPv4 and IPv6 endpoints transparently.
+         *
+         * \return The client address variant.
+         */
         [[nodiscard]] client_addr_t get_client_addr() const
             requires(p == Proto::TCP && r == Role::ACTIVE);
 
+        /**
+         * \brief Returns the client network address (IPv4 or IPv6) associated with this socket.
+         *
+         * Non-const overload allowing modifications to the returned structure if necessary.
+         *
+         * \return The client address variant.
+         */
         [[nodiscard]] client_addr_t get_client_addr()
             requires(p == Proto::TCP && r == Role::ACTIVE);
 
+        /**
+         * \brief Returns the IP version (IPv4 or IPv6) of the connected peer.
+         *
+         * Determines whether the underlying active TCP socket is using an IPv4 or IPv6 address
+         * family.
+         *
+         * \return utils::net::IPV enum value indicating the IP version.
+         */
         [[nodiscard]] utils::net::IPV get_client_ipv() const
             requires(p == Proto::TCP && r == Role::ACTIVE);
 
