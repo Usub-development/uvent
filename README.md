@@ -5,7 +5,7 @@ Cross-platform async I/O engine with native backends for:
 | OS / family                                    | Backend primitives                                                           | Implementation                                                  |
 |------------------------------------------------|------------------------------------------------------------------------------|-----------------------------------------------------------------|
 | Linux                                          | `epoll` (edge-triggered), non-blocking sockets / **`io_uring` (optional)**   | `SocketLinux`, `SocketLinuxIOUring`, `EPoller`, `IOUringPoller` |
-| macOS, FreeBSD, OpenBSD, NetBSD, DragonFly BSD | `kqueue`, non-blocking sockets (`accept` + `fcntl`)                          | `SocketBSD`, `EPoller`                                          |
+| macOS, FreeBSD, OpenBSD, NetBSD, DragonFly BSD | `kqueue`, non-blocking sockets (`accept` + `fcntl`)                          | `SocketBSD`, `KQueuePoller`                                     |
 | Windows 10+ / Windows Server 2016+             | **IOCP** (`WSARecv` / `WSASend` / `AcceptEx` / `ConnectEx` / `TransmitFile`) | `SocketWindows`, `IocpPoller`                                   |
 
 A single high-level API (`TCPServerSocket`, `TCPClientSocket`, `UDPSocket`) is used across all platforms.
@@ -102,7 +102,9 @@ Uvent automatically selects the best backend for your OS:
 - **BSD / macOS** → `kqueue`
 
 #### **io_uring**
+
 To enable `io_uring` on Linux during build:
+
 ```bash
 cmake -DUVENT_ENABLE_IO_URING=ON ..
 make -j
