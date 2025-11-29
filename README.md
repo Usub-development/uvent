@@ -2,11 +2,11 @@
 
 Cross-platform async I/O engine with native backends for:
 
-| OS / family                                    | Backend primitives                                                       | Implementation                |
-|------------------------------------------------|--------------------------------------------------------------------------|-------------------------------|
-| Linux                                          | `epoll` (edge-triggered), non-blocking sockets                           | `SocketLinux`, `EPoller`      |
-| macOS, FreeBSD, OpenBSD, NetBSD, DragonFly BSD | `kqueue`, non-blocking sockets (`accept` + `fcntl`)                      | `SocketBSD`, `EPoller`        |
-| Windows 10+ / Windows Server 2016+             | IOCP (`WSARecv` / `WSASend` / `AcceptEx` / `ConnectEx` / `TransmitFile`) | `SocketWindows`, `IocpPoller` |
+| OS / family                                    | Backend primitives                                                           | Implementation                                                  |
+|------------------------------------------------|------------------------------------------------------------------------------|-----------------------------------------------------------------|
+| Linux                                          | `epoll` (edge-triggered), non-blocking sockets / **`io_uring` (optional)**   | `SocketLinux`, `SocketLinuxIOUring`, `EPoller`, `IOUringPoller` |
+| macOS, FreeBSD, OpenBSD, NetBSD, DragonFly BSD | `kqueue`, non-blocking sockets (`accept` + `fcntl`)                          | `SocketBSD`, `EPoller`                                          |
+| Windows 10+ / Windows Server 2016+             | **IOCP** (`WSARecv` / `WSASend` / `AcceptEx` / `ConnectEx` / `TransmitFile`) | `SocketWindows`, `IocpPoller`                                   |
 
 A single high-level API (`TCPServerSocket`, `TCPClientSocket`, `UDPSocket`) is used across all platforms.
 
@@ -92,6 +92,29 @@ settings::timeout_duration_ms = 5000;
     return 0;
 }
 ```
+
+### Backend selection
+
+Uvent automatically selects the best backend for your OS:
+
+- **Linux** → `epoll` by default, or **io_uring** when explicitly enabled
+- **Windows** → **IOCP** (always enabled, no flags required)
+- **BSD / macOS** → `kqueue`
+
+#### **io_uring**
+To enable `io_uring` on Linux during build:
+```bash
+cmake -DUVENT_ENABLE_IO_URING=ON ..
+make -j
+```
+
+or via CMake FetchContent:
+
+```cmake
+set(UVENT_ENABLE_IO_URING ON)
+```
+
+Requires Linux kernel **5.1+** and [liburing](https://github.com/axboe/liburing).
 
 # Documentation
 

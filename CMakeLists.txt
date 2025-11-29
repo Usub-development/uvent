@@ -1,13 +1,15 @@
-
 cmake_minimum_required(VERSION 3.22..3.29)
 project(uvent)
 
 set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -rdynamic -fPIC" CACHE STRING "Debug flags" FORCE)
-set(CMAKE_C_FLAGS_DEBUG "-g -O0 -rdynamic -fPIC" CACHE STRING "Debug flags" FORCE)
+set(CMAKE_C_FLAGS_DEBUG   "-g -O0 -rdynamic -fPIC" CACHE STRING "Debug flags" FORCE)
 
 option(UVENT_ENABLE_REUSEADDR "Use SO_REUSEADDR (portable)" ON)
-option(UVENT_PIN_THREADS "Use thread PINNING" ON)
+option(UVENT_PIN_THREADS     "Use thread PINNING"           ON)
+option(UVENT_ENABLE_IO_URING "Use io_uring backend on Linux" OFF)
 
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
@@ -25,33 +27,57 @@ if (APPLE OR BSD)
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/EPoller\\.cpp$")
     list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/IocpPoller\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/IocpPoller\\.cpp$")
+    list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/IOUringPoller\\.h$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/IOUringPoller\\.cpp$")
+
     # Sockets
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinux\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinux\\.cpp$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinuxIOUring\\.h$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinuxIOUring\\.cpp$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketWindows\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketWindows\\.cpp$")
+
 elseif (UNIX) # Linux
     # Pollers
     list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/KPoller\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/KPoller\\.cpp$")
     list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/IocpPoller\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/IocpPoller\\.cpp$")
-    # Sockets
+
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketBSD\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketBSD\\.cpp$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketWindows\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketWindows\\.cpp$")
+
+    if (UVENT_ENABLE_IO_URING)
+        list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/EPoller\\.h$")
+        list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/EPoller\\.cpp$")
+        list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinux\\.h$")
+        list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinux\\.cpp$")
+    else()
+        list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/IOUringPoller\\.h$")
+        list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/IOUringPoller\\.cpp$")
+        list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinuxIOUring\\.h$")
+        list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinuxIOUring\\.cpp$")
+    endif ()
+
 elseif (WIN32)
     # Pollers
     list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/KPoller\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/KPoller\\.cpp$")
     list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/EPoller\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/EPoller\\.cpp$")
+    list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/IOUringPoller\\.h$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/IOUringPoller\\.cpp$")
+
     # Sockets
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketBSD\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketBSD\\.cpp$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinux\\.h$")
     list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinux\\.cpp$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinuxIOUring\\.h$")
+    list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinuxIOUring\\.cpp$")
 endif ()
 
 foreach (header ${UVENT_HEADERS})
@@ -68,21 +94,6 @@ endforeach()
 add_library(uvent ${UVENT_SOURCES})
 add_library(usub::uvent ALIAS uvent)
 
-configure_package_config_file(
-        cmake/uventConfig.cmake.in
-        ${CMAKE_CURRENT_BINARY_DIR}/uventConfig.cmake
-        INSTALL_DESTINATION lib/cmake/uvent
-)
-
-install(TARGETS uvent
-        EXPORT uventTargets
-        #LIBRARY DESTINATION lib
-        #ARCHIVE DESTINATION lib
-        #RUNTIME DESTINATION bin
-        PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/uvent
-        INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/uvent
-)
-
 target_include_directories(uvent
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -94,6 +105,35 @@ target_include_directories(uvent
 target_compile_definitions(uvent PUBLIC
         $<$<BOOL:${UVENT_PIN_THREADS}>:UVENT_PIN_THREADS>
         $<$<BOOL:${UVENT_ENABLE_REUSEADDR}>:UVENT_ENABLE_REUSEADDR>
+        $<$<BOOL:${UVENT_ENABLE_IO_URING}>:UVENT_ENABLE_IO_URING>
+)
+
+if (UNIX AND NOT APPLE AND UVENT_ENABLE_IO_URING)
+    find_library(URING_LIB
+            NAMES uring liburing
+            PATHS
+            /usr/lib
+            /usr/lib/x86_64-linux-gnu
+            /usr/local/lib
+    )
+
+    if (NOT URING_LIB)
+        message(FATAL_ERROR "liburing not found. Install liburing-dev or set URING_LIB manually")
+    endif()
+
+    target_link_libraries(uvent PUBLIC ${URING_LIB})
+endif()
+
+configure_package_config_file(
+        cmake/uventConfig.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/uventConfig.cmake
+        INSTALL_DESTINATION lib/cmake/uvent
+)
+
+install(TARGETS uvent
+        EXPORT uventTargets
+        PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/uvent
+        INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/uvent
 )
 
 foreach (header ${UVENT_HEADERS})
@@ -108,8 +148,8 @@ install(EXPORT uventTargets
         DESTINATION lib/cmake/uvent
 )
 
-option(BUILD_MAIN "Buld main executable for testing" ON)
-option(ENABLE_SANITIZERS "Buld main executable for testing" OFF)
+option(BUILD_MAIN "Build main executable for testing" ON)
+option(ENABLE_SANITIZERS "Build sanitizer executables" OFF)
 
 if (BUILD_MAIN)
     if (CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -123,18 +163,28 @@ if (BUILD_MAIN)
         FetchContent_MakeAvailable(spdlog)
     endif ()
 
+    add_executable(uvent_exe examples/main.cpp)
+
+    target_compile_definitions(uvent_exe PRIVATE
+            $<$<CONFIG:Debug>:UVENT_DEBUG>
+    )
+
+    target_include_directories(uvent_exe
+            PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+
+    target_link_libraries(uvent_exe PRIVATE
+            uvent
+            $<$<CONFIG:Debug>:spdlog::spdlog>
+    )
+
     if (ENABLE_SANITIZERS)
-        add_executable(uvent_asan_ubsan ${UVENT_SOURCES} examples/main.cpp)
+        add_executable(uvent_asan_ubsan examples/main.cpp)
+        target_link_libraries(uvent_asan_ubsan PRIVATE uvent $<$<CONFIG:Debug>:spdlog::spdlog>)
         target_compile_definitions(uvent_asan_ubsan PRIVATE
                 $<$<CONFIG:Debug>:UVENT_DEBUG>
-                $<$<BOOL:${UVENT_PIN_THREADS}>:UVENT_PIN_THREADS>
-                $<$<BOOL:${UVENT_ENABLE_REUSEADDR}>:UVENT_ENABLE_REUSEADDR>
         )
-        target_include_directories(uvent_asan_ubsan
-                PRIVATE
-                ${CMAKE_CURRENT_SOURCE_DIR}/include
-        )
-        target_link_libraries(uvent_asan_ubsan PRIVATE $<$<CONFIG:Debug>:spdlog::spdlog>)
         target_compile_options(uvent_asan_ubsan PRIVATE
                 -fsanitize=address,undefined
                 -fno-sanitize-recover=all
@@ -145,33 +195,20 @@ if (BUILD_MAIN)
                 -fsanitize=address,undefined
         )
 
-        add_executable(uvent_tsan ${UVENT_SOURCES} examples/main.cpp)
+        add_executable(uvent_tsan examples/main.cpp)
+        target_link_libraries(uvent_tsan PRIVATE uvent $<$<CONFIG:Debug>:spdlog::spdlog>)
         target_compile_definitions(uvent_tsan PRIVATE
                 $<$<CONFIG:Debug>:UVENT_DEBUG>
-                $<$<BOOL:${UVENT_PIN_THREADS}>:UVENT_PIN_THREADS>
-                $<$<BOOL:${UVENT_ENABLE_REUSEADDR}>:UVENT_ENABLE_REUSEADDR>
         )
-        target_include_directories(uvent_tsan
-                PRIVATE
-                ${CMAKE_CURRENT_SOURCE_DIR}/include
-        )
-        target_link_libraries(uvent_tsan PRIVATE $<$<CONFIG:Debug>:spdlog::spdlog>)
         target_compile_options(uvent_tsan PRIVATE -fsanitize=thread -g)
         target_link_options(uvent_tsan PRIVATE -fsanitize=thread)
 
-
         if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-            add_executable(uvent_msan_ubsan ${UVENT_SOURCES} examples/main.cpp)
+            add_executable(uvent_msan_ubsan examples/main.cpp)
+            target_link_libraries(uvent_msan_ubsan PRIVATE uvent $<$<CONFIG:Debug>:spdlog::spdlog>)
             target_compile_definitions(uvent_msan_ubsan PRIVATE
                     $<$<CONFIG:Debug>:UVENT_DEBUG>
-                    $<$<BOOL:${UVENT_PIN_THREADS}>:UVENT_PIN_THREADS>
-                    $<$<BOOL:${UVENT_ENABLE_REUSEADDR}>:UVENT_ENABLE_REUSEADDR>
             )
-            target_include_directories(uvent_msan_ubsan
-                    PRIVATE
-                    ${CMAKE_CURRENT_SOURCE_DIR}/include
-            )
-            target_link_libraries(uvent_msan_ubsan PRIVATE $<$<CONFIG:Debug>:spdlog::spdlog>)
             target_compile_options(uvent_msan_ubsan PRIVATE
                     -fsanitize=memory,undefined
                     -fsanitize-memory-track-origins=2
@@ -184,19 +221,4 @@ if (BUILD_MAIN)
             )
         endif ()
     endif ()
-
-    add_executable(uvent_exe ${UVENT_SOURCES} examples/main.cpp)
-    target_compile_definitions(uvent_exe PRIVATE
-            $<$<CONFIG:Debug>:UVENT_DEBUG>
-    )
-    target_compile_definitions(uvent_exe PUBLIC
-            $<$<BOOL:${UVENT_PIN_THREADS}>:UVENT_PIN_THREADS>
-            $<$<BOOL:${UVENT_ENABLE_REUSEADDR}>:UVENT_ENABLE_REUSEADDR>
-    )
-    target_include_directories(uvent_exe
-            PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/include
-    )
-    target_link_libraries(uvent_exe PRIVATE $<$<CONFIG:Debug>:spdlog::spdlog>)
-
 endif ()
