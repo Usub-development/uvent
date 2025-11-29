@@ -180,7 +180,7 @@ namespace usub::uvent::core {
         this->unlock();
     }
 
-    int KQueuePoller::get_poll_fd()
+    int KQueuePoller::get_poll_fd() const
     {
         return this->poll_fd;
     }

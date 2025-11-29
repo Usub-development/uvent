@@ -43,10 +43,10 @@ namespace usub::uvent::core
 
         void lock_poll(int timeout_ms);
 
-        int get_poll_fd();
+        int get_poll_fd() const;
 
     private:
-        inline void enable_read(net::SocketHeader* h, bool enable, bool clear_edge)
+        inline void enable_read(net::SocketHeader* h, bool enable, bool clear_edge) const
         {
             uint16_t flags = (enable ? (EV_ADD | EV_ENABLE) : (EV_ADD | EV_DISABLE));
             if (clear_edge) flags |= EV_CLEAR;
@@ -56,7 +56,7 @@ namespace usub::uvent::core
                 throw std::system_error(errno, std::generic_category(), "kevent(change)");
         }
 
-        inline void enable_write(net::SocketHeader* h, bool enable, bool clear_edge)
+        inline void enable_write(net::SocketHeader* h, bool enable, bool clear_edge) const
         {
             uint16_t flags = (enable ? (EV_ADD | EV_ENABLE) : (EV_ADD | EV_DISABLE));
             if (clear_edge) flags |= EV_CLEAR;

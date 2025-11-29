@@ -33,7 +33,7 @@ namespace usub::uvent::net::detail
 #ifndef UVENT_ENABLE_REUSEADDR
         header->clear_busy();
 #endif
-        system::this_thread::detail::pl.removeEvent(header);
+        system::this_thread::detail::pl.removeEvent(header, core::ALL);
 #if UVENT_DEBUG
         spdlog::warn("Socket counter in timeout: {}", header->get_counter());
 #endif
