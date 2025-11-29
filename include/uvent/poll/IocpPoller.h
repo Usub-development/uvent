@@ -51,7 +51,7 @@ namespace usub::uvent::core
 
     private:
         HANDLE iocp_handle{nullptr};
-        utils::TimerWheel& wheel{nullptr};
+        utils::TimerWheel& wheel;
         std::vector<OVERLAPPED_ENTRY> events;
     };
 } // namespace usub::uvent::core
