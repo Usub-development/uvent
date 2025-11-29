@@ -12,7 +12,11 @@
 namespace usub::uvent::core
 {
 #ifdef OS_LINUX
+#ifdef UVENT_ENABLE_IO_URING
+    using PollerImpl = core::IOUringPoller;
+#else
     using PollerImpl = core::EPoller;
+#endif
 #elif defined(OS_BSD) || defined(OS_APPLE)
     using PollerImpl = core::KQueuePoller;
 #else

@@ -10,6 +10,8 @@ High-performance asynchronous I/O library for C++23.
 
 - **C++23**: modern standard with coroutines and atomic primitives.
 - **Event loop**: non-blocking, scalable, based on `epoll/kqueue`.
+- **Linux io_uring support** (optional): full async accept/read/write backend.
+- **Windows IOCP support**: automatically selected when building on Windows.
 - **Sockets**: TCP/UDP (client and server).
 - **Timers**: custom `TimerWheel` with minimal overhead.
 - **Queues & synchronization**: lock-free data structures, QSBR, and reference counting.

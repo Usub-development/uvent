@@ -68,7 +68,7 @@ namespace usub::uvent::task {
 
         Awaitable() = default;
 
-        ~Awaitable() = default;
+        virtual ~Awaitable() = default;
 
         [[nodiscard]] bool await_ready() const noexcept;
 
