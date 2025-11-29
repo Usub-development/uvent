@@ -16,6 +16,7 @@ namespace usub
         {
             class PollerBase;
             class EPoller;
+            class IocpPoller;
         }
 
         namespace system

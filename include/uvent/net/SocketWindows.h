@@ -21,6 +21,7 @@
 #include "uvent/utils/errors/IOErrors.h"
 #include "uvent/utils/net/net.h"
 #include "uvent/utils/net/socket.h"
+#include <uvent/poll/IocpPoller.h>
 
 namespace usub::uvent::net {
     enum class IocpOp : uint8_t { READ, WRITE, ACCEPT, CONNECT };
@@ -257,7 +258,7 @@ namespace usub::uvent::net {
                       static_cast<void *>(this->header_),
                       static_cast<std::uint64_t>(this->header_->fd));
 #endif
-        system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::ALL);
+        system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::ALL);
 #if UVENT_DEBUG
         spdlog::debug("Socket(fd) ctor(win): addEvent(ALL) done fd={}",
                       static_cast<std::uint64_t>(this->header_->fd));
@@ -288,7 +289,7 @@ namespace usub::uvent::net {
                      port);
 #endif
 
-        system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::READ);
+        system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::READ);
 #if UVENT_DEBUG
         spdlog::debug("Socket(passive) ctor(win): addEvent(READ) done fd={}",
                       static_cast<std::uint64_t>(this->header_->fd));
@@ -1315,7 +1316,7 @@ namespace usub::uvent::net {
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
 
-        system::this_thread::detail::pl->addEvent(this->header_, core::OperationType::ALL);
+        system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::ALL);
 #if UVENT_DEBUG
         spdlog::debug("async_connect(win): addEvent(ALL) fd={}", (socket_fd_t) this->header_->fd);
 #endif
@@ -1766,7 +1767,7 @@ namespace usub::uvent::net {
                      this->header_ ? static_cast<std::uint64_t>(this->header_->fd) : 0ull);
 #endif
         this->header_->close_for_new_refs();
-        system::this_thread::detail::pl->removeEvent(this->header_, core::OperationType::ALL);
+        system::this_thread::detail::pl.removeEvent(this->header_, core::OperationType::ALL);
 #ifndef UVENT_ENABLE_REUSEADDR
         system::this_thread::detail::g_qsbr.retire(static_cast<void *>(this->header_),
                                                    &delete_header);
@@ -1782,7 +1783,7 @@ namespace usub::uvent::net {
                      static_cast<void *>(this->header_),
                      this->header_ ? static_cast<std::uint64_t>(this->header_->fd) : 0ull);
 #endif
-        system::this_thread::detail::pl->removeEvent(this->header_, core::OperationType::ALL);
+        system::this_thread::detail::pl.removeEvent(this->header_, core::OperationType::ALL);
         this->header_->close_for_new_refs();
     }
 

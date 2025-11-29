@@ -16,44 +16,29 @@
 #endif
 
 
-namespace usub::uvent::system {
-    namespace global::detail {
-    }
-
-    namespace this_thread::detail {
+namespace usub::uvent::system
+{
+    namespace this_thread::detail
+    {
 #ifndef UVENT_ENABLE_REUSEADDR
-        std::unique_ptr<utils::TimerWheel> wh = std::make_unique<utils::TimerWheel>();
-        std::unique_ptr<core::PollerBase> pl =
-#ifdef OS_LINUX
-        std::make_unique<core::EPoller> (wh.get());
-#elif OS_BSD
-        new core::KPoller (3);
+        utils::TimerWheel wh = utils::TimerWheel();
+        core::PollerImpl pl = core::PollerImpl{wh};
 #else
-#error "Windows isn't supported yet"
-#endif
-#else
-        thread_local std::unique_ptr<utils::TimerWheel> wh = std::make_unique<utils::TimerWheel>();
-        thread_local std::unique_ptr<core::PollerBase> pl =
-#ifdef OS_LINUX
-                std::make_unique<core::EPoller>(wh.get());
-#elif OS_BSD || OS_APPLE
-                std::make_unique<core::KQueuePoller>(wh.get());
-#else
-                std::make_unique<core::IocpPoller>(wh.get());
-#endif
+        thread_local utils::TimerWheel wh = utils::TimerWheel();
+        thread_local core::PollerImpl pl = core::PollerImpl{wh};
 #endif
         std::unique_ptr<task::SharedTasks> st = std::make_unique<task::SharedTasks>();
         thread_local std::coroutine_handle<> cec{nullptr};
-        thread_local std::unique_ptr<queue::single_thread::Queue<std::coroutine_handle<> > > q = std::make_unique<
-            queue::single_thread::Queue<std::coroutine_handle<> > >();
+        thread_local std::unique_ptr<queue::single_thread::Queue<std::coroutine_handle<>>> q = std::make_unique<
+            queue::single_thread::Queue<std::coroutine_handle<>>>();
         thread_local int t_id{-1};
-        thread_local std::unique_ptr<queue::single_thread::Queue<std::coroutine_handle<> > > q_c = std::make_unique<
-            queue::single_thread::Queue<std::coroutine_handle<> > >();
+        thread_local queue::single_thread::Queue<std::coroutine_handle<>> q_c =
+            queue::single_thread::Queue<std::coroutine_handle<>>();
 #ifndef UVENT_ENABLE_REUSEADDR
         usub::utils::sync::QSBR g_qsbr;
 #else
-        thread_local std::unique_ptr<queue::single_thread::Queue<net::SocketHeader *> > q_sh = std::make_unique<
-            queue::single_thread::Queue<net::SocketHeader *> >();
+        thread_local queue::single_thread::Queue<net::SocketHeader*> q_sh =
+            queue::single_thread::Queue<net::SocketHeader*>();
 #endif
 #ifndef UVENT_ENABLE_REUSEADDR
         std::atomic<bool> is_started{false};

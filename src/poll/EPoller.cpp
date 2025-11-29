@@ -9,7 +9,7 @@
 #include "uvent/system/SystemContext.h"
 
 namespace usub::uvent::core {
-    EPoller::EPoller(utils::TimerWheel* wheel) : PollerBase(), wheel(wheel) {
+    EPoller::EPoller(utils::TimerWheel& wheel) : wheel(wheel) {
         this->poll_fd = epoll_create1(0);
         sigemptyset(&this->sigmask);
         this->events.resize(1000);
@@ -83,7 +83,7 @@ namespace usub::uvent::core {
 #endif
     }
 
-    void EPoller::removeEvent(net::SocketHeader* header, OperationType) {
+    void EPoller::removeEvent(net::SocketHeader* header) {
 #if UVENT_DEBUG
         spdlog::info("Socket removed: {}", header->fd);
 #endif
@@ -148,7 +148,7 @@ namespace usub::uvent::core {
                 }
             }
             if (hup) {
-                this->removeEvent(sock, ALL);
+                this->removeEvent(sock);
 #if UVENT_DEBUG
                 spdlog::debug("Socket hup/err fd={}", sock->fd);
 #endif
@@ -179,5 +179,10 @@ namespace usub::uvent::core {
         this->is_locked.store(true, std::memory_order_release);
         this->poll(timeout);
         this->unlock();
+    }
+
+    int EPoller::get_poll_fd()
+    {
+        return this->poll_fd;
     }
 }  // namespace usub::uvent::core

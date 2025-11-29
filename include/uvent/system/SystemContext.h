@@ -41,9 +41,9 @@ namespace usub::uvent::system
         extern std::unique_ptr<utils::TimerWheel> wh;
 #else
         /// \brief Wrapper over I/O notification mechanism provided by OS.
-        thread_local extern std::unique_ptr<core::PollerBase> pl;
+        thread_local extern core::PollerImpl pl;
         /// \brief Timer wheel used to handle multiple timers efficiently.
-        thread_local extern std::unique_ptr<utils::TimerWheel> wh;
+        thread_local extern utils::TimerWheel wh;
 #endif
         /// \brief Task queue available to all threads in the thread pool.
         /// Or available to a single thread if there is only one thread in the thread pool
@@ -53,12 +53,12 @@ namespace usub::uvent::system
         /// \brief Thread's index inside thread pool.
         thread_local extern int t_id;
         /// \brief Coroutines to be destroyed
-        thread_local extern std::unique_ptr<queue::single_thread::Queue<std::coroutine_handle<>>> q_c;
+        thread_local extern queue::single_thread::Queue<std::coroutine_handle<>> q_c;
 #ifndef UVENT_ENABLE_REUSEADDR
         extern usub::utils::sync::QSBR g_qsbr;
 #else
         /// \brief Sockets to be destroyed
-        thread_local extern std::unique_ptr<queue::single_thread::Queue<net::SocketHeader*>> q_sh;
+        thread_local extern queue::single_thread::Queue<net::SocketHeader*> q_sh;
 #endif
 
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -85,7 +85,7 @@ namespace usub::uvent::system
                 void await_suspend(std::coroutine_handle<> h) const noexcept
                 {
                     t->bind(h);
-                    this_thread::detail::wh->addTimer(t);
+                    this_thread::detail::wh.addTimer(t);
                 }
 
                 void await_resume() const noexcept
@@ -167,7 +167,7 @@ namespace usub::uvent::system
      */
     inline void spawn_timer(utils::Timer* timer)
     {
-        this_thread::detail::wh->addTimer(timer);
+        this_thread::detail::wh.addTimer(timer);
     }
 }
 

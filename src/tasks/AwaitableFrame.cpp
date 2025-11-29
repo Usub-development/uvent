@@ -62,7 +62,7 @@ namespace usub::uvent::detail
 
     void AwaitableFrameBase::push_frame_to_be_destroyed()
     {
-        system::this_thread::detail::q_c->enqueue(this->coro_);
+        system::this_thread::detail::q_c.enqueue(this->coro_);
     }
 
     void AwaitableFrameBase::set_next_coroutine(std::coroutine_handle<> h)

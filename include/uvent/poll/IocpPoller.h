@@ -22,30 +22,36 @@
 #include "uvent/utils/timer/TimerWheel.h"
 #include "uvent/net/SocketMetadata.h"
 
-namespace usub::uvent::core {
-    class IocpPoller : public PollerBase {
+namespace usub::uvent::core
+{
+    class IocpPoller
+    {
     public:
-        explicit IocpPoller(utils::TimerWheel *wheel);
+        explicit IocpPoller(utils::TimerWheel& wheel);
 
-        ~IocpPoller() override;
+        ~IocpPoller();
 
-        void addEvent(net::SocketHeader *header, OperationType op) override;
+        void addEvent(net::SocketHeader* header, OperationType op);
 
-        void updateEvent(net::SocketHeader *header, OperationType op) override;
+        void updateEvent(net::SocketHeader* header, OperationType op);
 
-        void removeEvent(net::SocketHeader *header, OperationType op) override;
+        void removeEvent(net::SocketHeader* header, OperationType op);
 
-        bool poll(int timeout_ms) override;
+        bool poll(int timeout_ms);
 
-        bool try_lock() override;
+        bool try_lock();
 
-        void unlock() override;
+        void unlock();
 
-        void lock_poll(int timeout_ms) override;
+        void lock_poll(int timeout_ms);
+
+    private:
+        std::binary_semaphore lock{1};
+        std::atomic_bool is_locked{false};
 
     private:
         HANDLE iocp_handle{nullptr};
-        utils::TimerWheel *wheel{nullptr};
+        utils::TimerWheel& wheel{nullptr};
         std::vector<OVERLAPPED_ENTRY> events;
     };
 } // namespace usub::uvent::core

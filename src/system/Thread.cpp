@@ -51,28 +51,28 @@ namespace usub::uvent::system
         while (!token.stop_requested())
         {
 #ifndef UVENT_ENABLE_REUSEADDR
-            if (local_pl->try_lock())
+            if (local_pl.try_lock())
             {
-                auto next_timeout = local_wh->getNextTimeout();
-                local_pl->poll((local_q->empty() && system::this_thread::detail::is_started.load(std::memory_order_relaxed))
+                auto next_timeout = local_wh.getNextTimeout();
+                local_pl.poll((local_q->empty() && system::this_thread::detail::is_started.load(std::memory_order_relaxed))
                              ? (next_timeout > 0)
                                    ? next_timeout
                                    : settings::idle_fallback_ms
                              : 0);
-                local_pl->unlock();
+                local_pl.unlock();
             }
-            else if (local_q->empty() && local_q_c->empty())
+            else if (local_q->empty() && local_q_c.empty())
             {
-                auto next_timeout = local_wh->getNextTimeout();
-                local_pl->lock_poll((local_q->empty() && system::this_thread::detail::is_started.load(std::memory_order_relaxed))
+                auto next_timeout = local_wh.getNextTimeout();
+                local_pl.lock_poll((local_q->empty() && system::this_thread::detail::is_started.load(std::memory_order_relaxed))
                                   ? (next_timeout > 0)
                                         ? next_timeout
                                         : settings::idle_fallback_ms
                                   : 0);
             }
 #else
-            auto next_timeout = local_wh->getNextTimeout();
-            local_pl->poll((local_q->empty() && system::this_thread::detail::is_started)
+            auto next_timeout = local_wh.getNextTimeout();
+            local_pl.poll((local_q->empty() && system::this_thread::detail::is_started)
                                ? (next_timeout > 0)
                                      ? next_timeout
                                      : settings::idle_fallback_ms
@@ -109,20 +109,20 @@ namespace usub::uvent::system
                 }
             }
 #ifndef UVENT_ENABLE_REUSEADDR
-            if (local_wh->mtx.try_lock())
+            if (local_wh.mtx.try_lock())
             {
-                local_wh->tick();
-                local_wh->mtx.unlock();
+                local_wh.tick();
+                local_wh.mtx.unlock();
             }
 #else
-            local_wh->tick();
+            local_wh.tick();
 #endif
             if (st->getSize() > 0)
             {
                 std::coroutine_handle<> task;
                 if (st->dequeue(task)) local_q->enqueue(task);
             }
-            const size_t n_coroutines = local_q_c->dequeue_bulk(this->tmp_coroutines_.data(),
+            const size_t n_coroutines = local_q_c.dequeue_bulk(this->tmp_coroutines_.data(),
                                                                 this->tmp_coroutines_.size());
             for (size_t i = 0; i < n_coroutines; i++)
             {
@@ -136,7 +136,7 @@ namespace usub::uvent::system
 #ifndef UVENT_ENABLE_REUSEADDR
             local_g_qsbr.quiesce_tick();
 #else
-            const size_t n_sockets = local_q_sh->dequeue_bulk(
+            const size_t n_sockets = local_q_sh.dequeue_bulk(
                 this->tmp_sockets_.data(), this->tmp_sockets_.size());
             for (size_t i = 0; i < n_sockets; ++i)
                 delete this->tmp_sockets_[i];
