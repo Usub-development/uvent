@@ -39,6 +39,7 @@ namespace usub::uvent::net
         using core::detail::SendOp;
         using core::detail::AcceptOp;
         using core::detail::SendFileOp;
+        using core::detail::ConnectOp;
 
         struct RecvAwaiter
         {
@@ -146,6 +147,32 @@ namespace usub::uvent::net
 
             void await_resume() noexcept
             {
+            }
+        };
+
+        struct ConnectAwaiter
+        {
+            ConnectOp op{};
+            SocketHeader* header{nullptr};
+
+            bool await_ready() const noexcept { return false; }
+
+            template <class Promise>
+            void await_suspend(std::coroutine_handle<Promise> h)
+            {
+                op.kind = IoOpKind::Connect;
+                op.header = header;
+                op.coro = h;
+
+                auto& pl = static_cast<IOUringPoller&>(system::this_thread::detail::pl);
+                pl.submit_connect(&op, header->fd);
+            }
+
+            int await_resume() noexcept
+            {
+                if (op.res < 0)
+                    return -op.err;
+                return 0;
             }
         };
     } // namespace detail
@@ -743,26 +770,30 @@ namespace usub::uvent::net
         else
             this->address = *reinterpret_cast<sockaddr_in6*>(res->ai_addr);
 
-        int ret = ::connect(this->header_->fd, res->ai_addr, res->ai_addrlen);
-        if (ret < 0 && errno != EINPROGRESS)
+        detail::ConnectAwaiter aw{
+            .op = {},
+            .header = this->header_,
+        };
+        std::memcpy(&aw.op.addr, res->ai_addr, res->ai_addrlen);
+        aw.op.addrlen = res->ai_addrlen;
+
+        int c = co_await aw;
+        freeaddrinfo(res);
+
+        if (c < 0)
         {
+            int err = -c;
             ::close(this->header_->fd);
             this->header_->fd = -1;
-            freeaddrinfo(res);
+
+            if (err == ETIMEDOUT)
+                co_return usub::utils::errors::ConnectError::Timeout;
+
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
 
-        system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::ALL);
-
-        co_await detail::AwaiterWrite{this->header_};
-
-        freeaddrinfo(res);
-
-        if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
-            co_return usub::utils::errors::ConnectError::Timeout;
-
 #ifndef UVENT_ENABLE_REUSEADDR
-        this->header_->timeout_epoch_bump();
+    this->header_->timeout_epoch_bump();
 #endif
         this->update_timeout(settings::timeout_duration_ms);
 
@@ -813,26 +844,30 @@ namespace usub::uvent::net
         else
             this->address = *reinterpret_cast<sockaddr_in6*>(res->ai_addr);
 
-        int ret = ::connect(this->header_->fd, res->ai_addr, res->ai_addrlen);
-        if (ret < 0 && errno != EINPROGRESS)
+        detail::ConnectAwaiter aw{
+            .op = {},
+            .header = this->header_,
+        };
+        std::memcpy(&aw.op.addr, res->ai_addr, res->ai_addrlen);
+        aw.op.addrlen = res->ai_addrlen;
+
+        int c = co_await aw;
+        freeaddrinfo(res);
+
+        if (c < 0)
         {
+            int err = -c;
             ::close(this->header_->fd);
             this->header_->fd = -1;
-            freeaddrinfo(res);
+
+            if (err == ETIMEDOUT)
+                co_return usub::utils::errors::ConnectError::Timeout;
+
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
 
-        system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::ALL);
-
-        co_await detail::AwaiterWrite{this->header_};
-
-        freeaddrinfo(res);
-
-        if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
-            co_return usub::utils::errors::ConnectError::Timeout;
-
 #ifndef UVENT_ENABLE_REUSEADDR
-        this->header_->timeout_epoch_bump();
+    this->header_->timeout_epoch_bump();
 #endif
         this->update_timeout(settings::timeout_duration_ms);
 

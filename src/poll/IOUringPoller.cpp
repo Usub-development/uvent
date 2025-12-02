@@ -112,6 +112,22 @@ namespace usub::uvent::core
         ::io_uring_sqe_set_data(sqe, op);
     }
 
+    void IOUringPoller::submit_connect(detail::ConnectOp* op, int fd)
+    {
+        if (!op || fd < 0) return;
+
+        auto* sqe = ::io_uring_get_sqe(&this->ring);
+        if (!sqe) return;
+
+        ::io_uring_prep_connect(
+            sqe,
+            fd,
+            reinterpret_cast<sockaddr*>(&op->addr),
+            op->addrlen
+        );
+        ::io_uring_sqe_set_data(sqe, op);
+    }
+
     void IOUringPoller::handle_cqe(struct io_uring_cqe* cqe)
     {
         auto* base = static_cast<IoOpBase*>(::io_uring_cqe_get_data(cqe));
