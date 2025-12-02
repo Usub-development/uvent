@@ -5,9 +5,10 @@
 #include "uvent/net/SocketWindows.h"
 #include "uvent/system/Defines.h"
 
-namespace usub::uvent::net::detail {
-
-    void processSocketTimeout(std::any arg) {
+namespace usub::uvent::net::detail
+{
+    void processSocketTimeout(std::any arg)
+    {
         auto header = std::any_cast<SocketHeader*>(arg);
         auto socket = Socket<Proto::TCP, Role::ACTIVE>::from_existing(header);
 
@@ -42,7 +43,7 @@ namespace usub::uvent::net::detail {
 #if UVENT_DEBUG
         spdlog::warn("Socket counter in timeout (WIN): {}", header->get_counter());
 #endif
-
+        header->socket_info |= static_cast<uint8_t>(AdditionalState::TIMEOUT);
         if (!header->is_done_client_coroutine_with_timeout() && r)
             system::this_thread::detail::q->enqueue(r);
         if (!header->is_done_client_coroutine_with_timeout() && w)
@@ -52,5 +53,4 @@ namespace usub::uvent::net::detail {
         header->state.fetch_sub(1, std::memory_order_acq_rel);
 #endif
     }
-
 } // namespace usub::uvent::net::detail

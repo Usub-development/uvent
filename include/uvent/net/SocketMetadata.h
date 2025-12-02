@@ -25,7 +25,7 @@ namespace usub::uvent::net
 
     enum class AdditionalState : uint8_t
     {
-        CONNECTION_PENDING = 1 << 4, CONNECTION_FAILED = 1 << 5, DISCONNECTED = 1 << 6
+        CONNECTION_PENDING = 1 << 4, CONNECTION_FAILED = 1 << 5, DISCONNECTED = 1 << 6, TIMEOUT = 1 << 7
     };
 
     struct alignas(32) SocketHeader

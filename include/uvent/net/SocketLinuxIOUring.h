@@ -1,7 +1,3 @@
-//
-// SocketLinuxIOUring.h — Linux TCP/UDP socket using io_uring completion model
-//
-
 #ifndef SOCKETLINUX_IOURING_H
 #define SOCKETLINUX_IOURING_H
 
@@ -16,6 +12,7 @@
 #include <netdb.h>
 #include <sys/sendfile.h>
 #include <sys/socket.h>
+#include <netinet/tcp.h>
 #include <unistd.h>
 
 #include "AwaiterOperations.h"
@@ -215,16 +212,28 @@ namespace usub::uvent::net
         [[nodiscard]] ssize_t write(uint8_t* buf, size_t sz)
             requires((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP));
 
+        /**
+         * \brief Asynchronously connects to the specified host and port (lvalue refs).
+         * Waits for the socket to become writable and checks for connection success.
+         */
         [[nodiscard]] task::Awaitable<
             std::optional<usub::utils::errors::ConnectError>,
             uvent::detail::AwaitableIOFrame<std::optional<usub::utils::errors::ConnectError>>>
-        async_connect(std::string& host, std::string& port)
+        async_connect(std::string& host,
+                      std::string& port,
+                      std::chrono::milliseconds connect_timeout = std::chrono::milliseconds{0})
             requires(p == Proto::TCP && r == Role::ACTIVE);
 
+        /**
+         * \brief Asynchronously connects to the specified host and port (lvalue refs).
+         * Waits for the socket to become writable and checks for connection success. Move strings.
+         */
         [[nodiscard]] task::Awaitable<
             std::optional<usub::utils::errors::ConnectError>,
             uvent::detail::AwaitableIOFrame<std::optional<usub::utils::errors::ConnectError>>>
-        async_connect(std::string&& host, std::string&& port)
+        async_connect(std::string&& host,
+                      std::string&& port,
+                      std::chrono::milliseconds connect_timeout = std::chrono::milliseconds{0})
             requires(p == Proto::TCP && r == Role::ACTIVE);
 
         task::Awaitable<
@@ -358,7 +367,7 @@ namespace usub::uvent::net
         {
 #if UVENT_DEBUG
             const auto cnt = (this->header_->state & usub::utils::sync::refc::COUNT_MASK);
-            const auto fd  = this->header_->fd;
+            const auto fd = this->header_->fd;
 #endif
 
             this->release();
@@ -694,7 +703,9 @@ namespace usub::uvent::net
     task::Awaitable<
         std::optional<usub::utils::errors::ConnectError>,
         uvent::detail::AwaitableIOFrame<std::optional<usub::utils::errors::ConnectError>>>
-    Socket<p, r>::async_connect(std::string& host, std::string& port)
+    Socket<p, r>::async_connect(std::string& host,
+                                std::string& port,
+                                std::chrono::milliseconds connect_timeout)
         requires(p == Proto::TCP && r == Role::ACTIVE)
     {
         addrinfo hints{}, *res = nullptr;
@@ -715,6 +726,15 @@ namespace usub::uvent::net
             co_return usub::utils::errors::ConnectError::SocketCreationFailed;
         }
 
+        if (connect_timeout.count() > 0)
+        {
+            int ms = static_cast<int>(connect_timeout.count());
+            ::setsockopt(this->header_->fd, IPPROTO_TCP, TCP_USER_TIMEOUT,
+                         &ms, static_cast<socklen_t>(sizeof(ms)));
+
+            this->set_timeout_ms(static_cast<timeout_t>(ms));
+        }
+
         int s_flags = ::fcntl(this->header_->fd, F_GETFL, 0);
         ::fcntl(this->header_->fd, F_SETFL, s_flags | O_NONBLOCK);
 
@@ -732,12 +752,20 @@ namespace usub::uvent::net
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
 
+        system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::ALL);
+
+        co_await detail::AwaiterWrite{this->header_};
+
         freeaddrinfo(res);
 
-        this->header_->socket_info &=
-            ~static_cast<uint8_t>(AdditionalState::CONNECTION_PENDING);
+        if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
+            co_return usub::utils::errors::ConnectError::Timeout;
 
+#ifndef UVENT_ENABLE_REUSEADDR
         this->header_->timeout_epoch_bump();
+#endif
+        this->update_timeout(settings::timeout_duration_ms);
+
         co_return std::nullopt;
     }
 
@@ -745,12 +773,70 @@ namespace usub::uvent::net
     task::Awaitable<
         std::optional<usub::utils::errors::ConnectError>,
         uvent::detail::AwaitableIOFrame<std::optional<usub::utils::errors::ConnectError>>>
-    Socket<p, r>::async_connect(std::string&& host, std::string&& port)
-        requires(p == Proto::TCP && r == Role::ACTIVE)
+    Socket<p, r>::async_connect(std::string&& host,
+                                std::string&& port,
+                                std::chrono::milliseconds connect_timeout) requires(p == Proto::TCP && r ==
+        Role::ACTIVE)
     {
-        std::string h = std::move(host);
-        std::string pstr = std::move(port);
-        co_return co_await async_connect(h, pstr);
+        addrinfo hints{}, *res = nullptr;
+        hints.ai_family = (this->ipv == utils::net::IPV::IPV4) ? AF_INET : AF_INET6;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_protocol = 0;
+
+        if (getaddrinfo(host.c_str(), port.c_str(), &hints, &res) != 0 || !res)
+        {
+            this->header_->fd = -1;
+            co_return usub::utils::errors::ConnectError::GetAddrInfoFailed;
+        }
+
+        this->header_->fd = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+        if (this->header_->fd < 0)
+        {
+            freeaddrinfo(res);
+            co_return usub::utils::errors::ConnectError::SocketCreationFailed;
+        }
+
+        if (connect_timeout.count() > 0)
+        {
+            int ms = static_cast<int>(connect_timeout.count());
+            ::setsockopt(this->header_->fd, IPPROTO_TCP, TCP_USER_TIMEOUT,
+                         &ms, static_cast<socklen_t>(sizeof(ms)));
+
+            this->set_timeout_ms(static_cast<timeout_t>(ms));
+        }
+
+        int s_flags = ::fcntl(this->header_->fd, F_GETFL, 0);
+        ::fcntl(this->header_->fd, F_SETFL, s_flags | O_NONBLOCK);
+
+        if (res->ai_family == AF_INET)
+            this->address = *reinterpret_cast<sockaddr_in*>(res->ai_addr);
+        else
+            this->address = *reinterpret_cast<sockaddr_in6*>(res->ai_addr);
+
+        int ret = ::connect(this->header_->fd, res->ai_addr, res->ai_addrlen);
+        if (ret < 0 && errno != EINPROGRESS)
+        {
+            ::close(this->header_->fd);
+            this->header_->fd = -1;
+            freeaddrinfo(res);
+            co_return usub::utils::errors::ConnectError::ConnectFailed;
+        }
+
+        system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::ALL);
+
+        co_await detail::AwaiterWrite{this->header_};
+
+        freeaddrinfo(res);
+
+        if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
+            co_return usub::utils::errors::ConnectError::Timeout;
+
+#ifndef UVENT_ENABLE_REUSEADDR
+        this->header_->timeout_epoch_bump();
+#endif
+        this->update_timeout(settings::timeout_duration_ms);
+
+        co_return std::nullopt;
     }
 
     template <Proto p, Role r>
