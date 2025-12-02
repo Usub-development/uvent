@@ -9,7 +9,7 @@ set(CMAKE_C_FLAGS_DEBUG   "-g -O0 -rdynamic -fPIC" CACHE STRING "Debug flags" FO
 
 option(UVENT_ENABLE_REUSEADDR "Use SO_REUSEADDR (portable)" ON)
 option(UVENT_PIN_THREADS     "Use thread PINNING"           ON)
-option(UVENT_ENABLE_IO_URING "Use io_uring backend on Linux" ON)
+option(UVENT_ENABLE_IO_URING "Use io_uring backend on Linux" OFF)
 
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
