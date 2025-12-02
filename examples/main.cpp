@@ -82,7 +82,15 @@ task::Awaitable<void> sendingCoro()
 #endif
     auto socket = net::TCPClientSocket{};
     auto res = co_await socket.async_connect("example.com", "80");
-    if (res.has_value()) co_return;
+    if (res.has_value()) {
+        if (*res == usub::utils::errors::ConnectError::Timeout)
+        {
+#if UVENT_DEBUG
+            spdlog::warn("sendingCoro: got expected ConnectError::Timeout");
+#endif
+        }
+        co_return;
+    }
 
 #if UVENT_DEBUG
     spdlog::warn("connect success");
@@ -126,7 +134,7 @@ task::Awaitable<void> sendingCoroTimeout()
     using namespace std::chrono_literals;
 
 #if UVENT_DEBUG
-    spdlog::warn("sendingCoro: expect ConnectError::Timeout");
+    spdlog::warn("sendingCoroTimeout: expect ConnectError::Timeout");
 #endif
 
     net::TCPClientSocket socket;
@@ -139,7 +147,7 @@ task::Awaitable<void> sendingCoroTimeout()
     if (!res.has_value())
     {
 #if UVENT_DEBUG
-        spdlog::error("sendingCoro: connect unexpectedly succeeded (no timeout)");
+        spdlog::error("sendingCoroTimeout: connect unexpectedly succeeded (no timeout)");
 #endif
         co_return;
     }
@@ -147,13 +155,13 @@ task::Awaitable<void> sendingCoroTimeout()
     if (*res == usub::utils::errors::ConnectError::Timeout)
     {
 #if UVENT_DEBUG
-        spdlog::warn("sendingCoro: got expected ConnectError::Timeout");
+        spdlog::warn("sendingCoroTimeout: got expected ConnectError::Timeout");
 #endif
         co_return;
     }
 
 #if UVENT_DEBUG
-    spdlog::error("sendingCoro: connect failed with unexpected error={}",
+    spdlog::error("sendingCoroTimeout: connect failed with unexpected error={}",
                   static_cast<int>(*res));
 #endif
     co_return;
