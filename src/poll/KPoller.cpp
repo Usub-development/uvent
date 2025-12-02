@@ -83,9 +83,11 @@ namespace usub::uvent::core {
             ts.tv_sec = timeout_ms / 1000;
             ts.tv_nsec = (timeout_ms % 1000) * 1000000LL;
         }
+
 #ifndef UVENT_ENABLE_REUSEADDR
         system::this_thread::detail::g_qsbr.enter();
 #endif
+
         int n = kevent(this->poll_fd,
                        nullptr, 0,
                        this->events.data(), static_cast<int>(this->events.size()),
@@ -108,7 +110,15 @@ namespace usub::uvent::core {
             bool is_err = (ev.flags & EV_ERROR) && ev.data != 0;
             bool is_eof = (ev.flags & EV_EOF);
             bool hup = !(sock->is_tcp() && sock->is_passive()) && (is_err || is_eof);
-            if (hup) sock->mark_disconnected();
+
+            if (hup) {
+                // помечаем как разорванный, но НЕ закрываем fd.
+                sock->mark_disconnected();
+#if UVENT_DEBUG
+                spdlog::debug("Socket hup/err fd={}, eof={}, err={}, data={}",
+                              sock->fd, is_eof, is_err, (long long) ev.data);
+#endif
+            }
 
 #ifndef UVENT_ENABLE_REUSEADDR
             sock->try_mark_busy();
@@ -126,28 +136,27 @@ namespace usub::uvent::core {
 #if UVENT_DEBUG
                 spdlog::info("Socket #{} triggered as OUT", sock->fd);
 #endif
-                if (!(sock->socket_info & static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING))) {
+                if (!(sock->socket_info &
+                      static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING))) {
                     auto c = std::exchange(sock->second, nullptr);
                     system::this_thread::detail::q->enqueue(c);
                 } else {
                     int err = 0;
                     socklen_t len = sizeof(err);
                     getsockopt(sock->fd, SOL_SOCKET, SO_ERROR, &err, &len);
-                    sock->socket_info &= ~static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING);
-                    if (err != 0)
-                        sock->socket_info |= static_cast<uint8_t>(net::AdditionalState::CONNECTION_FAILED);
-                    else {
+                    sock->socket_info &=
+                            ~static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING);
+                    if (err != 0) {
+                        sock->socket_info |=
+                                static_cast<uint8_t>(net::AdditionalState::CONNECTION_FAILED);
+#if UVENT_DEBUG
+                        spdlog::debug("Connect failed on fd={} err={}", sock->fd, err);
+#endif
+                    } else {
                         auto c = std::exchange(sock->second, nullptr);
                         system::this_thread::detail::q->enqueue(c);
                     }
                 }
-            }
-
-            if (hup) {
-                this->removeEvent(sock, ALL);
-#if UVENT_DEBUG
-                spdlog::debug("Socket hup/err fd={}", sock->fd);
-#endif
             }
         }
 
@@ -159,6 +168,7 @@ namespace usub::uvent::core {
 #endif
         return n > 0;
     }
+
 
     bool KQueuePoller::try_lock() {
         if (this->lock.try_acquire()) {
@@ -180,8 +190,7 @@ namespace usub::uvent::core {
         this->unlock();
     }
 
-    int KQueuePoller::get_poll_fd() const
-    {
+    int KQueuePoller::get_poll_fd() const {
         return this->poll_fd;
     }
 } // namespace usub::uvent::core

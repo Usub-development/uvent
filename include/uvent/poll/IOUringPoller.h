@@ -23,7 +23,8 @@ namespace usub::uvent::core
             Recv,
             Send,
             Accept,
-            SendFile
+            SendFile,
+            Connect
         };
 
         struct IoOpBase
@@ -63,6 +64,12 @@ namespace usub::uvent::core
             off_t* offset{nullptr};
             size_t count{0};
         };
+
+        struct ConnectOp : IoOpBase
+        {
+            sockaddr_storage addr{};
+            socklen_t addrlen{0};
+        };
     } // namespace detail
 
     class IOUringPoller
@@ -85,6 +92,7 @@ namespace usub::uvent::core
         void submit_send(detail::SendOp* op, int fd);
         void submit_accept(detail::AcceptOp* op, int fd);
         void submit_sendfile(detail::SendFileOp* op, int out_fd);
+        void submit_connect(detail::ConnectOp* op, int fd);
 
     private:
         void handle_cqe(struct io_uring_cqe* cqe);

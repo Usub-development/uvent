@@ -6,9 +6,11 @@
 #include "uvent/tasks/AwaitableFrame.h"
 
 #ifdef OS_LINUX
-
+#ifndef UVENT_ENABLE_IO_URING
 #include "uvent/poll/EPoller.h"
-
+#else
+#include "uvent/poll/IOUringPoller.h"
+#endif
 #elif OS_BSD || OS_APPLE
 #include "uvent/poll/KPoller.h"
 #else

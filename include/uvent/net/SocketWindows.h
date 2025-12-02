@@ -114,7 +114,7 @@ namespace usub::uvent::net {
          * Initializes the socket object to wrap the given file descriptor.
          * The descriptor must be valid and owned by the caller.
          */
-        explicit Socket(int fd) noexcept;
+        explicit Socket(socket_fd_t fd) noexcept;
 
         /**
          * \brief Constructs a passive TCP socket bound to given address/port (lvalue ip).
@@ -227,7 +227,9 @@ namespace usub::uvent::net {
         [[nodiscard]] task::Awaitable<
             std::optional<usub::utils::errors::ConnectError>,
             uvent::detail::AwaitableIOFrame<std::optional<usub::utils::errors::ConnectError> > >
-        async_connect(std::string &host, std::string &port)
+        async_connect(std::string &host,
+                      std::string &port,
+                      std::chrono::milliseconds connect_timeout = std::chrono::milliseconds{0})
             requires(p == Proto::TCP && r == Role::ACTIVE);
 
         /**
@@ -237,7 +239,9 @@ namespace usub::uvent::net {
         [[nodiscard]] task::Awaitable<
             std::optional<usub::utils::errors::ConnectError>,
             uvent::detail::AwaitableIOFrame<std::optional<usub::utils::errors::ConnectError> > >
-        async_connect(std::string &&host, std::string &&port)
+        async_connect(std::string &&host,
+                      std::string &&port,
+                      std::chrono::milliseconds connect_timeout = std::chrono::milliseconds{0})
             requires(p == Proto::TCP && r == Role::ACTIVE);
 
         /**
@@ -458,7 +462,8 @@ namespace usub::uvent::net {
 #endif
         }
 #if UVENT_DEBUG
-        else {
+        else
+        {
             spdlog::debug("~Socket(win): header_ is nullptr");
         }
 #endif
@@ -834,6 +839,7 @@ namespace usub::uvent::net {
             auto ov = std::make_unique<IocpOverlapped>();
             ov->header = this->header_;
             ov->op = IocpOp::READ;
+            std::memset(&ov->ov, 0, sizeof(ov->ov));
 
             auto tmp = std::make_unique<uint8_t[]>(remaining);
             WSABUF wbuf;
@@ -888,23 +894,20 @@ namespace usub::uvent::net {
 #endif
             co_await detail::AwaiterRead{this->header_};
 
-            flags = 0;
-            if (!::WSAGetOverlappedResult(this->header_->fd, &ov->ov, &bytes, FALSE, &flags)) {
-                int err = WSAGetLastError();
-#if UVENT_DEBUG
-                spdlog::error("async_read(tcp)(win): WSAGetOverlappedResult error={} fd={}",
-                              err,
-                              (std::uint64_t) this->header_->fd);
-#endif
-                this->remove();
-                co_return -1;
-            }
+            bytes = ov->bytes_transferred;
 
 #if UVENT_DEBUG
             spdlog::trace("async_read(tcp)(win): overlapped completed bytes={} fd={}",
                           bytes,
-                          (std::uint64_t) this->header_->fd);
+                          this->header_ ? (std::uint64_t) this->header_->fd : 0ull);
 #endif
+
+            if (!this->header_ || this->header_->fd == INVALID_FD) {
+#if UVENT_DEBUG
+                spdlog::info("async_read(tcp)(win): header/fd invalid after completion");
+#endif
+                co_return -1;
+            }
 
             if (bytes == 0) {
 #if UVENT_DEBUG
@@ -927,6 +930,7 @@ namespace usub::uvent::net {
             co_return static_cast<ssize_t>(bytes);
         }
     }
+
 
     template<Proto p, Role r>
     task::Awaitable<ssize_t, uvent::detail::AwaitableIOFrame<ssize_t> >
@@ -1005,6 +1009,7 @@ namespace usub::uvent::net {
             auto ov = std::make_unique<IocpOverlapped>();
             ov->header = this->header_;
             ov->op = IocpOp::READ;
+            std::memset(&ov->ov, 0, sizeof(ov->ov));
 
             WSABUF wbuf;
             wbuf.buf = reinterpret_cast<char *>(dst);
@@ -1057,15 +1062,18 @@ namespace usub::uvent::net {
 #endif
             co_await detail::AwaiterRead{this->header_};
 
-            flags = 0;
-            if (!::WSAGetOverlappedResult(this->header_->fd, &ov->ov, &bytes, FALSE, &flags)) {
-                int err = WSAGetLastError();
+            bytes = ov->bytes_transferred;
+
 #if UVENT_DEBUG
-                spdlog::error("async_read(raw-tcp)(win): overlapped result error={} fd={}",
-                              err,
-                              (std::uint64_t) this->header_->fd);
+            spdlog::trace("async_read(raw-tcp)(win): overlapped completed bytes={} fd={}",
+                          bytes,
+                          this->header_ ? (std::uint64_t) this->header_->fd : 0ull);
 #endif
-                this->remove();
+
+            if (!this->header_ || this->header_->fd == INVALID_FD) {
+#if UVENT_DEBUG
+                spdlog::info("async_read(raw-tcp)(win): header/fd invalid after completion");
+#endif
                 co_return -1;
             }
 
@@ -1077,6 +1085,7 @@ namespace usub::uvent::net {
                 this->remove();
                 co_return 0;
             }
+
 #ifndef UVENT_ENABLE_REUSEADDR
             if (bytes > 0) this->header_->timeout_epoch_bump();
 #endif
@@ -1142,6 +1151,7 @@ namespace usub::uvent::net {
             auto ov = std::make_unique<IocpOverlapped>();
             ov->header = this->header_;
             ov->op = IocpOp::WRITE;
+            std::memset(&ov->ov, 0, sizeof(ov->ov));
 
             while (total_written < static_cast<ssize_t>(sz)) {
                 std::memset(&ov->ov, 0, sizeof(ov->ov));
@@ -1194,13 +1204,11 @@ namespace usub::uvent::net {
 #endif
                 co_await detail::AwaiterWrite{this->header_};
 
-                DWORD flags = 0;
-                if (!::WSAGetOverlappedResult(this->header_->fd, &ov->ov, &bytes, FALSE, &flags)) {
-                    int err = WSAGetLastError();
+                bytes = ov->bytes_transferred;
+
+                if (!this->header_ || this->header_->fd == INVALID_FD) {
 #if UVENT_DEBUG
-                    spdlog::error("async_write(tcp)(win): overlapped result error={} fd={}",
-                                  err,
-                                  (std::uint64_t) this->header_->fd);
+                    spdlog::info("async_write(tcp)(win): header/fd invalid after completion");
 #endif
                     co_return -1;
                 }
@@ -1361,13 +1369,15 @@ namespace usub::uvent::net {
     }
 
     template<Proto p, Role r>
-    task::Awaitable<
+    [[nodiscard]] task::Awaitable<
         std::optional<usub::utils::errors::ConnectError>,
         uvent::detail::AwaitableIOFrame<std::optional<usub::utils::errors::ConnectError> > >
-    Socket<p, r>::async_connect(std::string &host, std::string &port)
+    Socket<p, r>::async_connect(std::string &host,
+                                std::string &port,
+                                std::chrono::milliseconds connect_timeout)
         requires(p == Proto::TCP && r == Role::ACTIVE) {
 #if UVENT_DEBUG
-        spdlog::info("async_connect(win): host='{}' port='{}'", host, port);
+        spdlog::info("async_connect(win,lvalue): host='{}' port='{}'", host, port);
 #endif
 
         addrinfo hints{}, *res = nullptr;
@@ -1377,7 +1387,7 @@ namespace usub::uvent::net {
 
         if (::getaddrinfo(host.c_str(), port.c_str(), &hints, &res) != 0 || !res) {
 #if UVENT_DEBUG
-            spdlog::error("async_connect(win): getaddrinfo failed");
+            spdlog::error("async_connect(win,lvalue): getaddrinfo failed");
 #endif
             this->header_->fd = INVALID_FD;
             co_return usub::utils::errors::ConnectError::GetAddrInfoFailed;
@@ -1389,11 +1399,10 @@ namespace usub::uvent::net {
             res->ai_protocol,
             nullptr,
             0,
-            WSA_FLAG_OVERLAPPED
-        );
+            WSA_FLAG_OVERLAPPED);
         if (s == INVALID_SOCKET) {
 #if UVENT_DEBUG
-            spdlog::error("async_connect(win): WSASocket failed, err={}", WSAGetLastError());
+            spdlog::error("async_connect(win,lvalue): WSASocket failed, err={}", WSAGetLastError());
 #endif
             ::freeaddrinfo(res);
             co_return usub::utils::errors::ConnectError::SocketCreationFailed;
@@ -1411,6 +1420,12 @@ namespace usub::uvent::net {
             this->ipv = utils::net::IPV::IPV6;
         }
 
+        const bool has_timeout = (connect_timeout > std::chrono::milliseconds{0});
+        if (has_timeout) {
+            auto ms = connect_timeout.count();
+            this->set_timeout_ms(static_cast<timeout_t>(ms));
+        }
+
         int brc = 0;
         if (res->ai_family == AF_INET) {
             sockaddr_in local{};
@@ -1418,23 +1433,19 @@ namespace usub::uvent::net {
             local.sin_addr.s_addr = htonl(INADDR_ANY);
             local.sin_port = 0;
 
-            brc = ::bind(s,
-                         reinterpret_cast<sockaddr *>(&local),
-                         sizeof(local));
+            brc = ::bind(s, reinterpret_cast<sockaddr *>(&local), sizeof(local));
         } else {
             sockaddr_in6 local6{};
             local6.sin6_family = AF_INET6;
             local6.sin6_addr = in6addr_any;
             local6.sin6_port = 0;
 
-            brc = ::bind(s,
-                         reinterpret_cast<sockaddr *>(&local6),
-                         sizeof(local6));
+            brc = ::bind(s, reinterpret_cast<sockaddr *>(&local6), sizeof(local6));
         }
 
         if (brc == SOCKET_ERROR) {
 #if UVENT_DEBUG
-            spdlog::error("async_connect(win): bind(any) failed, err={}", WSAGetLastError());
+            spdlog::error("async_connect(win,lvalue): bind(any) failed, err={}", WSAGetLastError());
 #endif
             ::closesocket(s);
             this->header_->fd = INVALID_FD;
@@ -1444,13 +1455,13 @@ namespace usub::uvent::net {
 
         system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::ALL);
 #if UVENT_DEBUG
-        spdlog::debug("async_connect(win): addEvent(ALL) fd={}", (socket_fd_t) this->header_->fd);
+        spdlog::debug("async_connect(win,lvalue): addEvent(ALL) fd={}", (socket_fd_t) this->header_->fd);
 #endif
 
         LPFN_CONNECTEX connect_ex = detail::get_connect_ex(s);
         if (!connect_ex) {
 #if UVENT_DEBUG
-            spdlog::error("async_connect(win): get_connect_ex failed");
+            spdlog::error("async_connect(win,lvalue): get_connect_ex failed");
 #endif
             ::closesocket(s);
             this->header_->fd = INVALID_FD;
@@ -1458,9 +1469,7 @@ namespace usub::uvent::net {
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
 
-        this->header_->socket_info |= static_cast<uint8_t>(
-            net::AdditionalState::CONNECTION_PENDING
-        );
+        this->header_->socket_info |= static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING);
 
         auto ov = std::make_unique<IocpOverlapped>();
         ov->header = this->header_;
@@ -1470,7 +1479,7 @@ namespace usub::uvent::net {
         DWORD bytes_sent = 0;
 
 #if UVENT_DEBUG
-        spdlog::trace("async_connect(win): calling ConnectEx fd={}", (socket_fd_t) this->header_->fd);
+        spdlog::trace("async_connect(win,lvalue): calling ConnectEx fd={}", (socket_fd_t) this->header_->fd);
 #endif
 
         BOOL ok = connect_ex(
@@ -1480,14 +1489,13 @@ namespace usub::uvent::net {
             nullptr,
             0,
             &bytes_sent,
-            &ov->ov
-        );
+            &ov->ov);
 
         if (!ok) {
             int err = WSAGetLastError();
             if (err != ERROR_IO_PENDING) {
 #if UVENT_DEBUG
-                spdlog::error("async_connect(win): ConnectEx failed immediately, err={}", err);
+                spdlog::error("async_connect(win,lvalue): ConnectEx failed immediately, err={}", err);
 #endif
                 ::closesocket(s);
                 this->header_->fd = INVALID_FD;
@@ -1495,17 +1503,19 @@ namespace usub::uvent::net {
                 co_return usub::utils::errors::ConnectError::ConnectFailed;
             }
 #if UVENT_DEBUG
-            spdlog::trace("async_connect(win): ConnectEx pending, err=ERROR_IO_PENDING");
+            spdlog::trace("async_connect(win,lvalue): ConnectEx pending, err=ERROR_IO_PENDING");
 #endif
         } else {
 #if UVENT_DEBUG
-            spdlog::trace("async_connect(win): ConnectEx completed synchronously, bytes_sent={}",
-                          bytes_sent);
+            spdlog::trace(
+                "async_connect(win,lvalue): ConnectEx completed synchronously, bytes_sent={}",
+                bytes_sent);
 #endif
         }
 
 #if UVENT_DEBUG
-        spdlog::trace("async_connect(win): await AwaiterWrite fd={}", (socket_fd_t) this->header_->fd);
+        spdlog::trace("async_connect(win,lvalue): await AwaiterWrite fd={}",
+                      (socket_fd_t) this->header_->fd);
 #endif
         co_await detail::AwaiterWrite{this->header_};
 
@@ -1513,13 +1523,18 @@ namespace usub::uvent::net {
 
         if (this->header_->socket_info &
             static_cast<uint8_t>(net::AdditionalState::CONNECTION_FAILED)) {
+            auto err = has_timeout
+                           ? usub::utils::errors::ConnectError::Timeout
+                           : usub::utils::errors::ConnectError::ConnectFailed;
+
 #if UVENT_DEBUG
-            spdlog::error("async_connect(win): IOCP reported CONNECTION_FAILED fd={}",
-                          (socket_fd_t) this->header_->fd);
+            spdlog::error("async_connect(win,lvalue): CONNECTION_FAILED fd={} (err={})",
+                          (socket_fd_t) this->header_->fd,
+                          static_cast<int>(err));
 #endif
             ::closesocket(this->header_->fd);
             this->header_->fd = INVALID_FD;
-            co_return usub::utils::errors::ConnectError::ConnectFailed;
+            co_return err;
         }
 
         int opt_rc = ::setsockopt(
@@ -1527,11 +1542,10 @@ namespace usub::uvent::net {
             SOL_SOCKET,
             SO_UPDATE_CONNECT_CONTEXT,
             nullptr,
-            0
-        );
+            0);
         if (opt_rc == SOCKET_ERROR) {
 #if UVENT_DEBUG
-            spdlog::error("async_connect(win): SO_UPDATE_CONNECT_CONTEXT failed, err={}",
+            spdlog::error("async_connect(win,lvalue): SO_UPDATE_CONNECT_CONTEXT failed, err={}",
                           WSAGetLastError());
 #endif
             ::closesocket(this->header_->fd);
@@ -1543,22 +1557,216 @@ namespace usub::uvent::net {
         this->header_->timeout_epoch_bump();
 #endif
 
+        if (has_timeout) {
+            this->update_timeout(settings::timeout_duration_ms);
+        }
+
 #if UVENT_DEBUG
-        spdlog::info("async_connect(win): connected fd={}", (socket_fd_t) this->header_->fd);
+        spdlog::info("async_connect(win,lvalue): connected fd={}", (socket_fd_t) this->header_->fd);
 #endif
 
         co_return std::nullopt;
     }
 
     template<Proto p, Role r>
-    task::Awaitable<
+    [[nodiscard]] task::Awaitable<
         std::optional<usub::utils::errors::ConnectError>,
         uvent::detail::AwaitableIOFrame<std::optional<usub::utils::errors::ConnectError> > >
-    Socket<p, r>::async_connect(std::string &&host, std::string &&port)
+    Socket<p, r>::async_connect(std::string &&host,
+                                std::string &&port,
+                                std::chrono::milliseconds connect_timeout)
         requires(p == Proto::TCP && r == Role::ACTIVE) {
-        std::string host_copy = std::move(host);
-        std::string port_copy = std::move(port);
-        co_return co_await async_connect(host_copy, port_copy);
+#if UVENT_DEBUG
+        spdlog::info("async_connect(win,rvalue): host='{}' port='{}'", host, port);
+#endif
+
+        addrinfo hints{}, *res = nullptr;
+        hints.ai_family = (this->ipv == utils::net::IPV::IPV4) ? AF_INET : AF_INET6;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_protocol = IPPROTO_TCP;
+
+        if (::getaddrinfo(host.c_str(), port.c_str(), &hints, &res) != 0 || !res) {
+#if UVENT_DEBUG
+            spdlog::error("async_connect(win,rvalue): getaddrinfo failed");
+#endif
+            this->header_->fd = INVALID_FD;
+            co_return usub::utils::errors::ConnectError::GetAddrInfoFailed;
+        }
+
+        SOCKET s = ::WSASocket(
+            res->ai_family,
+            res->ai_socktype,
+            res->ai_protocol,
+            nullptr,
+            0,
+            WSA_FLAG_OVERLAPPED);
+        if (s == INVALID_SOCKET) {
+#if UVENT_DEBUG
+            spdlog::error("async_connect(win,rvalue): WSASocket failed, err={}", WSAGetLastError());
+#endif
+            ::freeaddrinfo(res);
+            co_return usub::utils::errors::ConnectError::SocketCreationFailed;
+        }
+
+        this->header_->fd = s;
+
+        u_long mode = 1;
+        ::ioctlsocket(s, FIONBIO, &mode);
+
+        if (res->ai_family == AF_INET) {
+            this->address = *reinterpret_cast<sockaddr_in *>(res->ai_addr);
+        } else {
+            this->address = *reinterpret_cast<sockaddr_in6 *>(res->ai_addr);
+            this->ipv = utils::net::IPV::IPV6;
+        }
+
+        const bool has_timeout = (connect_timeout > std::chrono::milliseconds{0});
+        if (has_timeout) {
+            auto ms = connect_timeout.count();
+            this->set_timeout_ms(static_cast<timeout_t>(ms));
+        }
+
+        int brc = 0;
+        if (res->ai_family == AF_INET) {
+            sockaddr_in local{};
+            local.sin_family = AF_INET;
+            local.sin_addr.s_addr = htonl(INADDR_ANY);
+            local.sin_port = 0;
+
+            brc = ::bind(s, reinterpret_cast<sockaddr *>(&local), sizeof(local));
+        } else {
+            sockaddr_in6 local6{};
+            local6.sin6_family = AF_INET6;
+            local6.sin6_addr = in6addr_any;
+            local6.sin6_port = 0;
+
+            brc = ::bind(s, reinterpret_cast<sockaddr *>(&local6), sizeof(local6));
+        }
+
+        if (brc == SOCKET_ERROR) {
+#if UVENT_DEBUG
+            spdlog::error("async_connect(win,rvalue): bind(any) failed, err={}", WSAGetLastError());
+#endif
+            ::closesocket(s);
+            this->header_->fd = INVALID_FD;
+            ::freeaddrinfo(res);
+            co_return usub::utils::errors::ConnectError::ConnectFailed;
+        }
+
+        system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::ALL);
+#if UVENT_DEBUG
+        spdlog::debug("async_connect(win,rvalue): addEvent(ALL) fd={}", (socket_fd_t) this->header_->fd);
+#endif
+
+        LPFN_CONNECTEX connect_ex = detail::get_connect_ex(s);
+        if (!connect_ex) {
+#if UVENT_DEBUG
+            spdlog::error("async_connect(win,rvalue): get_connect_ex failed");
+#endif
+            ::closesocket(s);
+            this->header_->fd = INVALID_FD;
+            ::freeaddrinfo(res);
+            co_return usub::utils::errors::ConnectError::ConnectFailed;
+        }
+
+        this->header_->socket_info |= static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING);
+
+        auto ov = std::make_unique<IocpOverlapped>();
+        ov->header = this->header_;
+        ov->op = IocpOp::CONNECT;
+        std::memset(&ov->ov, 0, sizeof(ov->ov));
+
+        DWORD bytes_sent = 0;
+
+#if UVENT_DEBUG
+        spdlog::trace("async_connect(win,rvalue): calling ConnectEx fd={}",
+                      (socket_fd_t) this->header_->fd);
+#endif
+
+        BOOL ok = connect_ex(
+            s,
+            res->ai_addr,
+            static_cast<int>(res->ai_addrlen),
+            nullptr,
+            0,
+            &bytes_sent,
+            &ov->ov);
+
+        if (!ok) {
+            int err = WSAGetLastError();
+            if (err != ERROR_IO_PENDING) {
+#if UVENT_DEBUG
+                spdlog::error("async_connect(win,rvalue): ConnectEx failed immediately, err={}", err);
+#endif
+                ::closesocket(s);
+                this->header_->fd = INVALID_FD;
+                ::freeaddrinfo(res);
+                co_return usub::utils::errors::ConnectError::ConnectFailed;
+            }
+#if UVENT_DEBUG
+            spdlog::trace("async_connect(win,rvalue): ConnectEx pending, err=ERROR_IO_PENDING");
+#endif
+        } else {
+#if UVENT_DEBUG
+            spdlog::trace(
+                "async_connect(win,rvalue): ConnectEx completed synchronously, bytes_sent={}",
+                bytes_sent);
+#endif
+        }
+
+#if UVENT_DEBUG
+        spdlog::trace("async_connect(win,rvalue): await AwaiterWrite fd={}",
+                      (socket_fd_t) this->header_->fd);
+#endif
+        co_await detail::AwaiterWrite{this->header_};
+
+        ::freeaddrinfo(res);
+
+        if (this->header_->socket_info &
+            static_cast<uint8_t>(net::AdditionalState::CONNECTION_FAILED)) {
+            auto err = has_timeout
+                           ? usub::utils::errors::ConnectError::Timeout
+                           : usub::utils::errors::ConnectError::ConnectFailed;
+
+#if UVENT_DEBUG
+            spdlog::error("async_connect(win,rvalue): CONNECTION_FAILED fd={} (err={})",
+                          (socket_fd_t) this->header_->fd,
+                          static_cast<int>(err));
+#endif
+            ::closesocket(this->header_->fd);
+            this->header_->fd = INVALID_FD;
+            co_return err;
+        }
+
+        int opt_rc = ::setsockopt(
+            s,
+            SOL_SOCKET,
+            SO_UPDATE_CONNECT_CONTEXT,
+            nullptr,
+            0);
+        if (opt_rc == SOCKET_ERROR) {
+#if UVENT_DEBUG
+            spdlog::error("async_connect(win,rvalue): SO_UPDATE_CONNECT_CONTEXT failed, err={}",
+                          WSAGetLastError());
+#endif
+            ::closesocket(this->header_->fd);
+            this->header_->fd = INVALID_FD;
+            co_return usub::utils::errors::ConnectError::ConnectFailed;
+        }
+
+#ifndef UVENT_ENABLE_REUSEADDR
+        this->header_->timeout_epoch_bump();
+#endif
+
+        if (has_timeout) {
+            this->update_timeout(settings::timeout_duration_ms);
+        }
+
+#if UVENT_DEBUG
+        spdlog::info("async_connect(win,rvalue): connected fd={}", (socket_fd_t) this->header_->fd);
+#endif
+
+        co_return std::nullopt;
     }
 
     template<Proto p, Role r>
