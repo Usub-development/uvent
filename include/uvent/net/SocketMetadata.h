@@ -65,7 +65,6 @@ namespace usub::uvent::net
 #else
             this->state |= CLOSED_MASK;
 #endif
-
         }
 
         UVENT_ALWAYS_INLINE_FN bool try_mark_busy() noexcept
@@ -96,7 +95,6 @@ namespace usub::uvent::net
 #else
             this->state &= ~BUSY_MASK;
 #endif
-
         }
 
         [[nodiscard]] UVENT_ALWAYS_INLINE_FN bool is_busy_now() const noexcept
@@ -191,7 +189,6 @@ namespace usub::uvent::net
 #else
             return this->state & WRITING_MASK;
 #endif
-
         }
 
         UVENT_ALWAYS_INLINE_FN void mark_disconnected() noexcept

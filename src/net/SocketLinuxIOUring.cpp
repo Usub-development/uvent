@@ -38,8 +38,14 @@ namespace usub::uvent::net::detail
         spdlog::warn("Socket counter in timeout: {}", header->get_counter());
 #endif
         header->socket_info |= static_cast<uint8_t>(AdditionalState::TIMEOUT);
+#ifndef UVENT_ENABLE_REUSEADDR
         if (!header->is_done_client_coroutine_with_timeout() && r) system::this_thread::detail::q->enqueue(r);
-        if (!header->is_done_client_coroutine_with_timeout() && r) system::this_thread::detail::q->enqueue(w);
+        if (!header->is_done_client_coroutine_with_timeout() && w) system::this_thread::detail::q->enqueue(w);
+#else
+        if (r) system::this_thread::detail::q->enqueue(r);
+        if (w) system::this_thread::detail::q->enqueue(w);
+#endif
+
 
 #ifndef UVENT_ENABLE_REUSEADDR
         header->state.fetch_sub(1, std::memory_order_acq_rel);
