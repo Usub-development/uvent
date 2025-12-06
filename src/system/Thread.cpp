@@ -27,7 +27,6 @@ namespace usub::uvent::system
 
     void Thread::threadFunction(std::stop_token& token)
     {
-        this->processInboxQueue();
         auto& local_pl = system::this_thread::detail::pl;
         auto& local_wh = system::this_thread::detail::wh;
         auto& local_q = system::this_thread::detail::q;
@@ -44,6 +43,7 @@ namespace usub::uvent::system
 #endif
         usub::utils::HighPerfTimer highPerfTimer;
         this->barrier->arrive_and_wait();
+        this->processInboxQueue();
         using namespace system::this_thread::detail;
 #ifndef UVENT_ENABLE_REUSEADDR
         local_g_qsbr.attach_current_thread();
