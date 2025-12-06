@@ -2088,7 +2088,7 @@ namespace usub::uvent::net {
                       timeout,
                       this->header_->get_counter());
 #endif
-        auto *timer = new utils::Timer(timeout, utils::TIMEOUT);
+        auto *timer = new utils::Timer(timeout);
         timer->addFunction(detail::processSocketTimeout, this->header_);
         this->header_->timer_id = system::this_thread::detail::wh.addTimer(timer);
     }

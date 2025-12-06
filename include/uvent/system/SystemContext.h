@@ -94,8 +94,7 @@ namespace usub::uvent::system
             };
 
             co_await SleepAwaiter{
-                new utils::Timer(static_cast<timer_duration_t>(ms_count),
-                                 utils::TimerType::TIMEOUT)
+                new utils::Timer(static_cast<timer_duration_t>(ms_count))
             };
         }
     }

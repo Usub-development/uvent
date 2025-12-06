@@ -6,9 +6,10 @@
 
 namespace usub::uvent::utils
 {
-    Timer::Timer(timer_duration_t duration, TimerType type) : duration_ms(duration), type(type),
-                                                              expiryTime(0),
-                                                              active(true), id(0)
+    Timer::Timer(timer_duration_t duration) :
+        duration_ms(duration),
+        expiryTime(0),
+        active(true), id(0)
     {
     }
 

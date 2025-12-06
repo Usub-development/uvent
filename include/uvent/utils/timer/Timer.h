@@ -10,6 +10,8 @@
 #include <functional>
 #include <coroutine>
 #include <any>
+#include <type_traits>
+#include <cstdlib>
 
 #include "uvent/base/Predefines.h"
 #include "uvent/system/Defines.h"
@@ -20,12 +22,6 @@ typedef uint64_t timeout_t;
 
 namespace usub::uvent::utils
 {
-    enum TimerType
-    {
-        TIMEOUT,
-        INTERVAL
-    };
-
     task::Awaitable<void> timeout_coroutine(std::function<void(std::any&)> f, std::any arg);
 
     class alignas(32) Timer
@@ -34,7 +30,7 @@ namespace usub::uvent::utils
         friend class core::EPoller;
         friend class TimerWheel;
 
-        explicit Timer(timer_duration_t duration, TimerType type = TIMEOUT);
+        explicit Timer(timer_duration_t duration);
 
         Timer(const Timer&) = delete;
 
@@ -48,12 +44,25 @@ namespace usub::uvent::utils
 
         void addFunction(std::function<void(std::any&)> f, std::any& arg);
 
+        template <class AwaitableT>
+        void addCoroutine(AwaitableT&& aw)
+        {
+            using A = std::remove_reference_t<AwaitableT>;
+
+            static_assert(
+                requires(A a) { a.get_promise(); },
+                "Timer::addCoroutine expects usub::uvent::task::Awaitable<>-like type");
+
+            auto* p = aw.get_promise();
+            this->coro = p->get_coroutine_handle();
+            this->active = true;
+        }
+
         void bind(std::coroutine_handle<> h) noexcept;
 
     public:
         timeout_t expiryTime;
         timer_duration_t duration_ms;
-        TimerType type;
 
     private:
         std::coroutine_handle<> coro;

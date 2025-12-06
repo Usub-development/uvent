@@ -1,41 +1,54 @@
 # Timer API
 
-Timers in **uvent** are managed by the internal **TimerWheel**, providing high-performance scheduling for both one-shot
-and repeating events.  
-Each timer is lightweight and coroutine-safe, integrating seamlessly into the event loop.
+Timers in **uvent** provide lightweight, coroutine-compatible one-shot scheduling.  
+Each timer fires exactly **once**, after the configured delay, and integrates directly into the event loop.
 
----
-
-## TimerType
-
-```cpp
-enum TimerType {
-    TIMEOUT,   // fires once
-    INTERVAL   // fires repeatedly
-};
-```
+Timers are managed by the internal **TimerWheel**, which efficiently tracks large numbers of timeouts.
 
 ---
 
 ## Timer class
 
 ```cpp
-class alignas(32) Timer {
+class alignas(32) Timer
+{
 public:
-    explicit Timer(timer_duration_t duration, TimerType type = TIMEOUT);
+    friend class core::EPoller;
+    friend class TimerWheel;
+
+    explicit Timer(timer_duration_t duration);
 
     Timer(const Timer&) = delete;
     Timer& operator=(const Timer&) = delete;
     Timer(Timer&&) = delete;
     Timer& operator=(Timer&&) = delete;
 
+    // Bind a callback executed when the timer expires
     void addFunction(std::function<void(std::any&)> f, std::any arg);
     void addFunction(std::function<void(std::any&)> f, std::any& arg);
 
+    // Bind an Awaitable coroutine which will be resumed once
+    template <class AwaitableT>
+    void addCoroutine(AwaitableT&& aw)
+    {
+        using A = std::remove_reference_t<AwaitableT>;
+
+        static_assert(
+            requires(A a) { a.get_promise(); },
+            "Timer::addCoroutine expects usub::uvent::task::Awaitable<>-like type"
+        );
+
+        auto* p = aw.get_promise();
+        this->coro = p->get_coroutine_handle();
+        this->active = true;
+    }
+
+    // Directly bind an existing coroutine handle
+    void bind(std::coroutine_handle<> h) noexcept;
+
 public:
-    timeout_t expiryTime;
+    timeout_t      expiryTime;
     timer_duration_t duration_ms;
-    TimerType type;
 
 private:
     std::coroutine_handle<> coro;
@@ -48,12 +61,11 @@ private:
 
 ### Notes
 
-* `duration_ms` — timer period in milliseconds.
-* `type` — `TIMEOUT` (one-shot) or `INTERVAL` (repeating).
-* `addFunction` — binds a callback taking a `std::any&` parameter.
-  This allows type-safe callback payloads without manual casts.
+* `duration_ms` — delay before the timer fires.
+* `addFunction` — attach a callback that receives a `std::any&` payload.
+* `addCoroutine` — attaches a uvent coroutine; it is resumed exactly once.
 * Timers cannot be copied or moved.
-* Internally scheduled into the thread-local `TimerWheel`.
+* Timers are scheduled into the thread-local `TimerWheel`.
 
 ---
 
@@ -61,52 +73,46 @@ private:
 
 ```cpp
 /**
- * @brief Schedules a timer in timer wheel.
+ * @brief Schedules a timer in the timer wheel.
  *
- * Adds the given timer instance into timer wheel handler,
- * allowing it to be triggered after its configured expiry.
+ * Inserts the timer into the timer subsystem so it will fire once
+ * after its configured duration.
  *
- * @param timer Pointer to a valid timer object.
+ * @param timer Pointer to a valid Timer instance.
  *
- * @note If the timer type is set to TIMEOUT, it will fire once;
- *       otherwise, it will repeat indefinitely.
- *
- * @warning This method does not check whether the timer is initialized
- *          or already active. Use only with properly constructed and inactive timers.
+ * @warning This function does not validate whether the timer is already active.
+ *          Only schedule freshly constructed timers.
  */
 inline void spawn_timer(utils::Timer* timer);
 ```
 
 ---
 
-## Timeout coroutine
+## Timeout callbacks
 
 ```cpp
 void addFunction(std::function<void(std::any&)> f, std::any arg);
-
 void addFunction(std::function<void(std::any&)> f, std::any& arg);
 ```
 
-Executes a coroutine that invokes the provided callback after the specified timeout expires.
+The callback is executed **once** after the timer expires.
+The stored `std::any` value is passed to the function at execution time.
 
 ---
 
 ## Examples
 
-### TIMEOUT (one-shot)
-
-A `TIMEOUT` timer fires **once** after its duration and is then automatically destroyed.
-Use it for delayed actions such as timeouts, retries, or deferred tasks.
+### One-shot timeout with a callback
 
 ```cpp
 task::Awaitable<void> demo() {
-    auto* t = new utils::Timer(2000, TimerType::TIMEOUT);
+    auto* t = new utils::Timer(2000); // 2 seconds
 
     std::string payload = "hello timer";
 
     t->addFunction([](std::any& value) {
-        auto& str = std::any_cast<std::string&>(value);
-        std::cout << "Timer fired: " << str << std::endl;
+        auto& s = std::any_cast<std::string&>(value);
+        std::cout << "Timer fired: " << s << std::endl;
     }, payload);
 
     spawn_timer(t);
@@ -114,21 +120,18 @@ task::Awaitable<void> demo() {
 }
 ```
 
-### INTERVAL (repeating)
+---
 
-An `INTERVAL` timer fires repeatedly at a fixed rate until stopped or until the runtime shuts down.
-Keep the payload object alive for as long as the timer is active.
+### One-shot resume of a coroutine
 
 ```cpp
-task::Awaitable<void> demo() {
-    auto* t = new utils::Timer(1000, TimerType::INTERVAL);
+task::Awaitable<void> delayed() {
+    auto* t = new utils::Timer(1500);
 
-    auto payload = std::make_shared<std::string>("tick");
-
-    t->addFunction([](std::any& value) {
-        auto& msg = std::any_cast<std::shared_ptr<std::string>&>(value);
-        std::cout << "Timer fired: " << *msg << std::endl;
-    }, payload);
+    t->addCoroutine([]() -> task::Awaitable<void> {
+        std::cout << "Timer resumed coroutine" << std::endl;
+        co_return;
+    }());
 
     spawn_timer(t);
     co_return;
@@ -140,26 +143,26 @@ task::Awaitable<void> demo() {
 ## Typical mistakes
 
 !!! warning "Uninitialized timers"
-Always construct a `Timer` with a valid duration before calling `spawn_timer()`.
+Always construct a `Timer` using a valid duration.
 
 !!! warning "Active timers"
-Do not re-use a timer that is already active inside the TimerWheel.
+A timer must not be reused after scheduling; allocate a new one instead.
 
 !!! warning "Callback misuse"
-Ensure that the `std::any` argument passed to `addFunction()` remains valid until the timer fires.
+Ensure the `std::any` payload remains valid until firing (for example, avoid passing references to locals).
 
 !!! warning "Lifetime"
-Do **not** manually delete the `Timer` object — it is automatically cleaned up by the runtime when it expires or is
-cancelled.
+Do **not** manually delete a `Timer`.
+The runtime cleans it up after completion.
 
 ---
 
 ### Summary
 
-| Feature            | Description                                   |
-|--------------------|-----------------------------------------------|
-| `TIMEOUT`          | Fires once, then destroyed automatically      |
-| `INTERVAL`         | Fires repeatedly until runtime shutdown       |
-| `std::any` payload | Allows passing arbitrary typed data safely    |
-| `spawn_timer()`    | Inserts timer into the internal wheel         |
-| Thread-safe        | Works inside per-thread `TimerWheel` contexts |
+| Feature           | Description                                  |
+|-------------------|----------------------------------------------|
+| One-shot fire     | Timer always triggers exactly once           |
+| Callback support  | `addFunction(std::any&)`                     |
+| Coroutine support | `addCoroutine(Awaitable)` and `bind(handle)` |
+| `spawn_timer()`   | Schedules timer in thread-local wheel        |
+| Lightweight       | Designed for high-throughput timeout usage   |

@@ -382,8 +382,8 @@ namespace usub::uvent::net
     }
 
     template <Proto p, Role r>
-    Socket<p, r>::Socket(SocketHeader* header) noexcept
-        : header_(header)
+    Socket<p, r>::Socket(SocketHeader* header) noexcept :
+        header_(header)
     {
     }
 
@@ -406,15 +406,16 @@ namespace usub::uvent::net
     }
 
     template <Proto p, Role r>
-    Socket<p, r>::Socket(const Socket& o) noexcept
-        : header_(o.header_)
+    Socket<p, r>::Socket(const Socket& o) noexcept :
+        header_(o.header_)
     {
-        if (this->header_) this->add_ref();
+        if (this->header_)
+            this->add_ref();
     }
 
     template <Proto p, Role r>
-    Socket<p, r>::Socket(Socket&& o) noexcept
-        : header_(o.header_)
+    Socket<p, r>::Socket(Socket&& o) noexcept :
+        header_(o.header_)
     {
         o.header_ = nullptr;
     }
@@ -422,7 +423,8 @@ namespace usub::uvent::net
     template <Proto p, Role r>
     Socket<p, r>& Socket<p, r>::operator=(const Socket& o) noexcept
     {
-        if (this == &o) return *this;
+        if (this == &o)
+            return *this;
         Socket tmp(o);
         std::swap(this->header_, tmp.header_);
         return *this;
@@ -431,7 +433,8 @@ namespace usub::uvent::net
     template <Proto p, Role r>
     Socket<p, r>& Socket<p, r>::operator=(Socket&& o) noexcept
     {
-        if (this == &o) return *this;
+        if (this == &o)
+            return *this;
         Socket tmp(std::move(o));
         std::swap(this->header_, tmp.header_);
         return *this;
@@ -903,7 +906,8 @@ namespace usub::uvent::net
             std::unique_ptr<uint8_t[]>(new uint8_t[sz], std::default_delete<uint8_t[]>());
         std::copy_n(buf, sz, buf_internal.get());
         auto sendRes = this->send_aux(buf_internal.get(), sz);
-        if (sendRes != -1) return std::move(this->receive(chunkSize, maxSize));
+        if (sendRes != -1)
+            return std::move(this->receive(chunkSize, maxSize));
         return std::unexpected(usub::utils::errors::SendError::InvalidSocketFd);
     }
 
@@ -919,7 +923,8 @@ namespace usub::uvent::net
 
         co_await aw;
 
-        if (this->is_disconnected_now()) co_return -3;
+        if (this->is_disconnected_now())
+            co_return -3;
 
         ssize_t res = ::sendfile(this->header_->fd, in_fd, offset, count);
         if (res == -1)
@@ -934,7 +939,8 @@ namespace usub::uvent::net
             }
             co_return -1;
         }
-        if (res > 0) this->header_->timeout_epoch_bump();
+        if (res > 0)
+            this->header_->timeout_epoch_bump();
         co_return res;
     }
 
@@ -1009,7 +1015,7 @@ namespace usub::uvent::net
 #if UVENT_DEBUG
         spdlog::debug("set_timeout_ms(io_uring): {}", this->header_->get_counter());
 #endif
-        auto* timer = new utils::Timer(timeout, utils::TIMEOUT);
+        auto* timer = new utils::Timer(timeout);
         timer->addFunction(detail::processSocketTimeout, this->header_);
         this->header_->timer_id = system::this_thread::detail::wh.addTimer(timer);
     }
@@ -1069,15 +1075,19 @@ namespace usub::uvent::net
             {
                 ssize_t received = recv_fn(buffer, chunk_size);
                 totalReceive += received;
-                if (totalReceive >= maxSize) break;
+                if (totalReceive >= maxSize)
+                    break;
                 if (received < 0)
                 {
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                    if (errno == EAGAIN || errno == EWOULDBLOCK)
+                        break;
                     return std::unexpected(usub::utils::errors::SendError::RecvFailed);
                 }
-                if (received == 0) break;
+                if (received == 0)
+                    break;
                 result.append(buffer, received);
-                if (received < static_cast<ssize_t>(chunk_size)) break;
+                if (received < static_cast<ssize_t>(chunk_size))
+                    break;
             }
             return result;
         };
@@ -1137,7 +1147,8 @@ namespace usub::uvent::net
     template <Proto p, Role r>
     size_t Socket<p, r>::send_aux(uint8_t* buf, size_t size)
     {
-        if (this->header_->fd < 0) return -1;
+        if (this->header_->fd < 0)
+            return -1;
 
         if constexpr (p == Proto::TCP)
             return ::send(this->header_->fd, buf, size, 0);

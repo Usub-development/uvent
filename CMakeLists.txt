@@ -164,17 +164,27 @@ if (BUILD_MAIN)
     endif ()
 
     add_executable(uvent_exe examples/main.cpp)
-
     target_compile_definitions(uvent_exe PRIVATE
             $<$<CONFIG:Debug>:UVENT_DEBUG>
     )
-
     target_include_directories(uvent_exe
             PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
-
     target_link_libraries(uvent_exe PRIVATE
+            uvent
+            $<$<CONFIG:Debug>:spdlog::spdlog>
+    )
+
+    add_executable(uvent_example_timers examples/main_timers.cpp)
+    target_compile_definitions(uvent_example_timers PRIVATE
+            $<$<CONFIG:Debug>:UVENT_DEBUG>
+    )
+    target_include_directories(uvent_example_timers
+            PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(uvent_example_timers PRIVATE
             uvent
             $<$<CONFIG:Debug>:spdlog::spdlog>
     )
