@@ -5,10 +5,10 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -rdynamic -fPIC" CACHE STRING "Debug flags" FORCE)
-set(CMAKE_C_FLAGS_DEBUG   "-g -O0 -rdynamic -fPIC" CACHE STRING "Debug flags" FORCE)
+set(CMAKE_C_FLAGS_DEBUG "-g -O0 -rdynamic -fPIC" CACHE STRING "Debug flags" FORCE)
 
 option(UVENT_ENABLE_REUSEADDR "Use SO_REUSEADDR (portable)" ON)
-option(UVENT_PIN_THREADS     "Use thread PINNING"           ON)
+option(UVENT_PIN_THREADS "Use thread PINNING" ON)
 option(UVENT_ENABLE_IO_URING "Use io_uring backend on Linux" OFF)
 
 include(CMakePackageConfigHelpers)
@@ -55,7 +55,7 @@ elseif (UNIX) # Linux
         list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/EPoller\\.cpp$")
         list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinux\\.h$")
         list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinux\\.cpp$")
-    else()
+    else ()
         list(FILTER UVENT_HEADERS EXCLUDE REGEX ".*/IOUringPoller\\.h$")
         list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/IOUringPoller\\.cpp$")
         list(FILTER UVENT_SOURCES EXCLUDE REGEX ".*/SocketLinuxIOUring\\.h$")
@@ -87,9 +87,9 @@ foreach (header ${UVENT_HEADERS})
 endforeach ()
 
 message(STATUS "UVENT sources:")
-foreach(src ${UVENT_SOURCES})
+foreach (src ${UVENT_SOURCES})
     message(STATUS "  ${src}")
-endforeach()
+endforeach ()
 
 add_library(uvent ${UVENT_SOURCES})
 add_library(usub::uvent ALIAS uvent)
@@ -119,10 +119,10 @@ if (UNIX AND NOT APPLE AND UVENT_ENABLE_IO_URING)
 
     if (NOT URING_LIB)
         message(FATAL_ERROR "liburing not found. Install liburing-dev or set URING_LIB manually")
-    endif()
+    endif ()
 
     target_link_libraries(uvent PUBLIC ${URING_LIB})
-endif()
+endif ()
 
 configure_package_config_file(
         cmake/uventConfig.cmake.in
@@ -148,20 +148,17 @@ install(EXPORT uventTargets
         DESTINATION lib/cmake/uvent
 )
 
-option(BUILD_MAIN "Build main executable for testing" ON)
-option(ENABLE_SANITIZERS "Build sanitizer executables" OFF)
+option(UVENT_BUILD_EXAMPLES "Uvent build main executable for testing" OFF)
+option(UVENT_ENABLE_SANITIZERS "Uvent build sanitizer executables" OFF)
 
-if (BUILD_MAIN)
-    if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-        message(STATUS "Debug mode enabled")
-        include(FetchContent)
-        FetchContent_Declare(
-                spdlog
-                GIT_REPOSITORY https://github.com/gabime/spdlog.git
-                GIT_TAG v1.14.1
-        )
-        FetchContent_MakeAvailable(spdlog)
-    endif ()
+if (UVENT_BUILD_EXAMPLES)
+    include(FetchContent)
+    FetchContent_Declare(
+            spdlog
+            GIT_REPOSITORY https://github.com/gabime/spdlog.git
+            GIT_TAG v1.14.1
+    )
+    FetchContent_MakeAvailable(spdlog)
 
     add_executable(uvent_exe examples/main.cpp)
     target_compile_definitions(uvent_exe PRIVATE
@@ -189,7 +186,7 @@ if (BUILD_MAIN)
             $<$<CONFIG:Debug>:spdlog::spdlog>
     )
 
-    if (ENABLE_SANITIZERS)
+    if (UVENT_ENABLE_SANITIZERS)
         add_executable(uvent_asan_ubsan examples/main.cpp)
         target_link_libraries(uvent_asan_ubsan PRIVATE uvent $<$<CONFIG:Debug>:spdlog::spdlog>)
         target_compile_definitions(uvent_asan_ubsan PRIVATE
