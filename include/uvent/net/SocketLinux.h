@@ -359,13 +359,16 @@ namespace usub::uvent::net
     }
 
     template <Proto p, Role r>
-    Socket<p, r>::Socket(const Socket& o) noexcept : header_(o.header_)
+    Socket<p, r>::Socket(const Socket& o) noexcept :
+        header_(o.header_)
     {
-        if (this->header_) this->add_ref();
+        if (this->header_)
+            this->add_ref();
     }
 
     template <Proto p, Role r>
-    Socket<p, r>::Socket(Socket&& o) noexcept : header_(o.header_)
+    Socket<p, r>::Socket(Socket&& o) noexcept :
+        header_(o.header_)
     {
         o.header_ = nullptr;
     }
@@ -373,7 +376,8 @@ namespace usub::uvent::net
     template <Proto p, Role r>
     Socket<p, r>& Socket<p, r>::operator=(const Socket& o) noexcept
     {
-        if (this == &o) return *this;
+        if (this == &o)
+            return *this;
         Socket tmp(o);
         std::swap(this->header_, tmp.header_);
         return *this;
@@ -382,7 +386,8 @@ namespace usub::uvent::net
     template <Proto p, Role r>
     Socket<p, r>& Socket<p, r>::operator=(Socket&& o) noexcept
     {
-        if (this == &o) return *this;
+        if (this == &o)
+            return *this;
         Socket tmp(std::move(o));
         std::swap(this->header_, tmp.header_);
         return *this;
@@ -737,7 +742,8 @@ namespace usub::uvent::net
                 }
                 if (errno == EINTR)
                 {
-                    if (++retries >= settings::max_write_retries) co_return -1;
+                    if (++retries >= settings::max_write_retries)
+                        co_return -1;
                     continue;
                 }
                 if (errno == EAGAIN || errno == EWOULDBLOCK)
@@ -949,12 +955,35 @@ namespace usub::uvent::net
         freeaddrinfo(res);
 
         if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
+        {
+            ::close(this->header_->fd);
+            this->header_->fd = -1;
             co_return usub::utils::errors::ConnectError::Timeout;
+        }
+
+        int err = 0;
+        socklen_t len = sizeof(err);
+        if (::getsockopt(this->header_->fd, SOL_SOCKET, SO_ERROR, &err, &len) < 0)
+        {
+            ::close(this->header_->fd);
+            this->header_->fd = -1;
+            co_return usub::utils::errors::ConnectError::ConnectFailed;
+        }
+
+        if (err != 0)
+        {
+            ::close(this->header_->fd);
+            this->header_->fd = -1;
+            if (err == ETIMEDOUT)
+                co_return usub::utils::errors::ConnectError::Timeout;
+            co_return usub::utils::errors::ConnectError::ConnectFailed;
+        }
+
+        system::this_thread::detail::wh.removeTimer(this->header_->timer_id);
 
 #ifndef UVENT_ENABLE_REUSEADDR
-        this->header_->timeout_epoch_bump();
+    this->header_->timeout_epoch_bump();
 #endif
-        this->update_timeout(settings::timeout_duration_ms);
 
         co_return std::nullopt;
     }
@@ -965,8 +994,8 @@ namespace usub::uvent::net
         uvent::detail::AwaitableIOFrame<std::optional<usub::utils::errors::ConnectError>>>
     Socket<p, r>::async_connect(std::string&& host,
                                 std::string&& port,
-                                std::chrono::milliseconds connect_timeout) requires(p == Proto::TCP && r ==
-        Role::ACTIVE)
+                                std::chrono::milliseconds connect_timeout)
+        requires(p == Proto::TCP && r == Role::ACTIVE)
     {
         addrinfo hints{}, *res = nullptr;
         hints.ai_family = (this->ipv == utils::net::IPV::IPV4) ? AF_INET : AF_INET6;
@@ -1019,14 +1048,37 @@ namespace usub::uvent::net
         freeaddrinfo(res);
 
         if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
+        {
+            ::close(this->header_->fd);
+            this->header_->fd = -1;
             co_return usub::utils::errors::ConnectError::Timeout;
+        }
+
+        int err = 0;
+        socklen_t len = sizeof(err);
+        if (::getsockopt(this->header_->fd, SOL_SOCKET, SO_ERROR, &err, &len) < 0)
+        {
+            ::close(this->header_->fd);
+            this->header_->fd = -1;
+            co_return usub::utils::errors::ConnectError::ConnectFailed;
+        }
+
+        if (err != 0)
+        {
+            ::close(this->header_->fd);
+            this->header_->fd = -1;
+            if (err == ETIMEDOUT)
+                co_return usub::utils::errors::ConnectError::Timeout;
+            co_return usub::utils::errors::ConnectError::ConnectFailed;
+        }
+
+        system::this_thread::detail::wh.removeTimer(this->header_->timer_id);
 
 #ifndef UVENT_ENABLE_REUSEADDR
-        this->header_->timeout_epoch_bump();
+    this->header_->timeout_epoch_bump();
 #endif
-        this->update_timeout(settings::timeout_duration_ms);
 
-        co_return std::nullopt;;
+        co_return std::nullopt;
     }
 
     template <Proto p, Role r>
@@ -1156,7 +1208,8 @@ namespace usub::uvent::net
             std::unique_ptr<uint8_t[]>(new uint8_t[sz], std::default_delete<uint8_t[]>());
         std::copy_n(buf, sz, buf_internal.get());
         auto sendRes = this->send_aux(buf_internal.get(), sz);
-        if (sendRes != -1) return std::move(this->receive(chunkSize, maxSize));
+        if (sendRes != -1)
+            return std::move(this->receive(chunkSize, maxSize));
         return std::unexpected(usub::utils::errors::SendError::InvalidSocketFd);
     }
 
@@ -1166,7 +1219,8 @@ namespace usub::uvent::net
         requires((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP))
     {
         co_await detail::AwaiterWrite{this->header_};
-        if (this->is_disconnected_now()) co_return -3;
+        if (this->is_disconnected_now())
+            co_return -3;
 
         ssize_t sent = -1;
 
@@ -1184,7 +1238,8 @@ namespace usub::uvent::net
             }
             co_return -1;
         }
-        if (res > 0) this->header_->timeout_epoch_bump();
+        if (res > 0)
+            this->header_->timeout_epoch_bump();
         co_return res;
     }
 
@@ -1295,15 +1350,19 @@ namespace usub::uvent::net
             {
                 ssize_t received = recv_fn(buffer, chunk_size);
                 totalReceive += received;
-                if (totalReceive >= maxSize) break;
+                if (totalReceive >= maxSize)
+                    break;
                 if (received < 0)
                 {
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                    if (errno == EAGAIN || errno == EWOULDBLOCK)
+                        break;
                     return std::unexpected(usub::utils::errors::SendError::RecvFailed);
                 }
-                if (received == 0) break;
+                if (received == 0)
+                    break;
                 result.append(buffer, received);
-                if (received < static_cast<ssize_t>(chunk_size)) break;
+                if (received < static_cast<ssize_t>(chunk_size))
+                    break;
             }
             return result;
         };
@@ -1359,9 +1418,11 @@ namespace usub::uvent::net
     template <Proto p, Role r>
     size_t Socket<p, r>::send_aux(uint8_t* buf, size_t size)
     {
-        if (this->header_->fd < 0) return -1;
+        if (this->header_->fd < 0)
+            return -1;
 
-        if constexpr (p == Proto::TCP) return ::send(this->header_->fd, buf, size, 0);
+        if constexpr (p == Proto::TCP)
+            return ::send(this->header_->fd, buf, size, 0);
 
         try
         {
@@ -1382,7 +1443,8 @@ namespace usub::uvent::net
     }
 
     template <Proto p, Role r>
-    Socket<p, r>::Socket(SocketHeader* header) noexcept : header_(header)
+    Socket<p, r>::Socket(SocketHeader* header) noexcept :
+        header_(header)
     {
     }
 } // namespace usub::uvent::net

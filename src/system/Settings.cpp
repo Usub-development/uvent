@@ -2,7 +2,7 @@
 // Created by kirill on 12/2/24.
 //
 
-#include "../include/uvent/system/Settings.h"
+#include "uvent/system/Settings.h"
 
 namespace usub::uvent::settings
 {

@@ -759,8 +759,11 @@ namespace usub::uvent::net
         if (connect_timeout.count() > 0)
         {
             int ms = static_cast<int>(connect_timeout.count());
-            ::setsockopt(this->header_->fd, IPPROTO_TCP, TCP_USER_TIMEOUT,
-                         &ms, static_cast<socklen_t>(sizeof(ms)));
+            ::setsockopt(this->header_->fd,
+                         IPPROTO_TCP,
+                         TCP_USER_TIMEOUT,
+                         &ms,
+                         static_cast<socklen_t>(sizeof(ms)));
 
             this->set_timeout_ms(static_cast<timeout_t>(ms));
         }
@@ -783,6 +786,11 @@ namespace usub::uvent::net
         int c = co_await aw;
         freeaddrinfo(res);
 
+        if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
+            co_return usub::utils::errors::ConnectError::Timeout;
+
+        system::this_thread::detail::wh.removeTimer(this->header_->timer_id);
+
         if (c < 0)
         {
             int err = -c;
@@ -795,10 +803,34 @@ namespace usub::uvent::net
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
 
+        int so_error = 0;
+        socklen_t optlen = sizeof(so_error);
+        if (::getsockopt(this->header_->fd, SOL_SOCKET, SO_ERROR, &so_error, &optlen) < 0)
+        {
+            int err = errno;
+            ::close(this->header_->fd);
+            this->header_->fd = -1;
+
+            if (err == ETIMEDOUT)
+                co_return usub::utils::errors::ConnectError::Timeout;
+
+            co_return usub::utils::errors::ConnectError::ConnectFailed;
+        }
+
+        if (so_error != 0)
+        {
+            ::close(this->header_->fd);
+            this->header_->fd = -1;
+
+            if (so_error == ETIMEDOUT)
+                co_return usub::utils::errors::ConnectError::Timeout;
+
+            co_return usub::utils::errors::ConnectError::ConnectFailed;
+        }
+
 #ifndef UVENT_ENABLE_REUSEADDR
     this->header_->timeout_epoch_bump();
 #endif
-        this->update_timeout(settings::timeout_duration_ms);
 
         co_return std::nullopt;
     }
@@ -809,8 +841,8 @@ namespace usub::uvent::net
         uvent::detail::AwaitableIOFrame<std::optional<usub::utils::errors::ConnectError>>>
     Socket<p, r>::async_connect(std::string&& host,
                                 std::string&& port,
-                                std::chrono::milliseconds connect_timeout) requires(p == Proto::TCP && r ==
-        Role::ACTIVE)
+                                std::chrono::milliseconds connect_timeout)
+        requires(p == Proto::TCP && r == Role::ACTIVE)
     {
         addrinfo hints{}, *res = nullptr;
         hints.ai_family = (this->ipv == utils::net::IPV::IPV4) ? AF_INET : AF_INET6;
@@ -833,8 +865,11 @@ namespace usub::uvent::net
         if (connect_timeout.count() > 0)
         {
             int ms = static_cast<int>(connect_timeout.count());
-            ::setsockopt(this->header_->fd, IPPROTO_TCP, TCP_USER_TIMEOUT,
-                         &ms, static_cast<socklen_t>(sizeof(ms)));
+            ::setsockopt(this->header_->fd,
+                         IPPROTO_TCP,
+                         TCP_USER_TIMEOUT,
+                         &ms,
+                         static_cast<socklen_t>(sizeof(ms)));
 
             this->set_timeout_ms(static_cast<timeout_t>(ms));
         }
@@ -857,6 +892,11 @@ namespace usub::uvent::net
         int c = co_await aw;
         freeaddrinfo(res);
 
+        if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
+            co_return usub::utils::errors::ConnectError::Timeout;
+
+        system::this_thread::detail::wh.removeTimer(this->header_->timer_id);
+
         if (c < 0)
         {
             int err = -c;
@@ -869,10 +909,34 @@ namespace usub::uvent::net
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
 
+        int so_error = 0;
+        socklen_t optlen = sizeof(so_error);
+        if (::getsockopt(this->header_->fd, SOL_SOCKET, SO_ERROR, &so_error, &optlen) < 0)
+        {
+            int err = errno;
+            ::close(this->header_->fd);
+            this->header_->fd = -1;
+
+            if (err == ETIMEDOUT)
+                co_return usub::utils::errors::ConnectError::Timeout;
+
+            co_return usub::utils::errors::ConnectError::ConnectFailed;
+        }
+
+        if (so_error != 0)
+        {
+            ::close(this->header_->fd);
+            this->header_->fd = -1;
+
+            if (so_error == ETIMEDOUT)
+                co_return usub::utils::errors::ConnectError::Timeout;
+
+            co_return usub::utils::errors::ConnectError::ConnectFailed;
+        }
+
 #ifndef UVENT_ENABLE_REUSEADDR
     this->header_->timeout_epoch_bump();
 #endif
-        this->update_timeout(settings::timeout_duration_ms);
 
         co_return std::nullopt;
     }

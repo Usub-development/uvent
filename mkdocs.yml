@@ -61,6 +61,8 @@ nav:
       - Socket: socket.md
   - Delayed tasks:
       - Timers: timers.md
+  - Settings:
+      - Basic settings: settings.md
   - Synchronization: synchronization.md
   - Contributing: contributing.md
 
