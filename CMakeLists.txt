@@ -149,7 +149,7 @@ install(EXPORT uventTargets
         DESTINATION lib/cmake/uvent
 )
 
-option(UVENT_BUILD_EXAMPLES "Uvent build main executable for testing" ON)
+option(UVENT_BUILD_EXAMPLES "Uvent build main executable for testing" OFF)
 option(UVENT_ENABLE_SANITIZERS "Uvent build sanitizer executables" OFF)
 
 if (UVENT_BUILD_EXAMPLES)
