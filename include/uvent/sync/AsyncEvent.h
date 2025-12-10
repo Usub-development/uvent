@@ -28,9 +28,15 @@ namespace usub::uvent::sync
         static void resume_one(WaitNode* n) noexcept { n->h.resume(); }
 
     public:
-        explicit AsyncEvent(Reset r = Reset::Auto, bool initially_set = false) noexcept : reset_(r), set_(initially_set)
+        explicit AsyncEvent(Reset r = Reset::Auto, bool initially_set = false) noexcept :
+            reset_(r), set_(initially_set)
         {
         }
+
+        AsyncEvent(const AsyncEvent&) = delete;
+        AsyncEvent& operator=(const AsyncEvent&) = delete;
+        AsyncEvent(AsyncEvent&&) = delete;
+        AsyncEvent& operator=(AsyncEvent&&) = delete;
 
         struct WaitAwaiter
         {

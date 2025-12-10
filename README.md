@@ -123,9 +123,11 @@ Requires Linux kernel **5.1+** and [liburing](https://github.com/axboe/liburing)
 - [Getting started (installation)](https://usub-development.github.io/uvent/getting-started/)
 - [Quick start](https://usub-development.github.io/uvent/quick-start/)
 - [System primitives](https://usub-development.github.io/uvent/system_primitives/)
+- [Settings](https://usub-development.github.io/uvent/settings/)
 - [Awaitable](https://usub-development.github.io/uvent/awaitable/)
 - [Awaitable frame](https://usub-development.github.io/uvent/awaitable_frame/)
 - [Socket](https://usub-development.github.io/uvent/socket/)
+- [Synchronization primitives & Channels](https://usub-development.github.io/uvent/synchronization/)
 
 ---
 

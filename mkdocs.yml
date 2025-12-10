@@ -63,7 +63,12 @@ nav:
       - Timers: timers.md
   - Settings:
       - Basic settings: settings.md
-  - Synchronization: synchronization.md
+  - Synchronization:
+      - Overview: synchronization.md
+      - Channels:
+          - Introduction: channels/channels.md
+          - Select: channels/select.md
+          - Examples: channels/examples.md
   - Contributing: contributing.md
 
 extra:

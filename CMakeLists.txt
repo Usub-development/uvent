@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -rdynamic -fPIC" CACHE STRING "Debug flags" FORCE)
 set(CMAKE_C_FLAGS_DEBUG "-g -O0 -rdynamic -fPIC" CACHE STRING "Debug flags" FORCE)
+set(UVENT_CHANNEL_DEBUG 1)
 
 option(UVENT_ENABLE_REUSEADDR "Use SO_REUSEADDR (portable)" ON)
 option(UVENT_PIN_THREADS "Use thread PINNING" ON)
@@ -148,7 +149,7 @@ install(EXPORT uventTargets
         DESTINATION lib/cmake/uvent
 )
 
-option(UVENT_BUILD_EXAMPLES "Uvent build main executable for testing" OFF)
+option(UVENT_BUILD_EXAMPLES "Uvent build main executable for testing" ON)
 option(UVENT_ENABLE_SANITIZERS "Uvent build sanitizer executables" OFF)
 
 if (UVENT_BUILD_EXAMPLES)
@@ -160,6 +161,7 @@ if (UVENT_BUILD_EXAMPLES)
     )
     FetchContent_MakeAvailable(spdlog)
 
+    # 1
     add_executable(uvent_exe examples/main.cpp)
     target_compile_definitions(uvent_exe PRIVATE
             $<$<CONFIG:Debug>:UVENT_DEBUG>
@@ -173,6 +175,7 @@ if (UVENT_BUILD_EXAMPLES)
             $<$<CONFIG:Debug>:spdlog::spdlog>
     )
 
+    # 2
     add_executable(uvent_example_timers examples/main_timers.cpp)
     target_compile_definitions(uvent_example_timers PRIVATE
             $<$<CONFIG:Debug>:UVENT_DEBUG>
@@ -182,6 +185,35 @@ if (UVENT_BUILD_EXAMPLES)
             ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
     target_link_libraries(uvent_example_timers PRIVATE
+            uvent
+            $<$<CONFIG:Debug>:spdlog::spdlog>
+    )
+
+    # 3
+    add_executable(uvent_example_channels examples/main_channels_example.cpp)
+    target_compile_definitions(uvent_example_channels PRIVATE
+            $<$<CONFIG:Debug>:UVENT_DEBUG>
+    )
+    target_include_directories(uvent_example_channels
+            PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(uvent_example_channels PRIVATE
+            uvent
+            $<$<CONFIG:Debug>:spdlog::spdlog>
+    )
+
+    # 4
+    add_executable(uvent_example_select examples/main_select_example.cpp)
+    target_compile_definitions(uvent_example_select PRIVATE
+            $<$<CONFIG:Debug>:UVENT_DEBUG>
+            $<$<CONFIG:Debug>:UVENT_CHANNEL_DEBUG>
+    )
+    target_include_directories(uvent_example_select
+            PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(uvent_example_select PRIVATE
             uvent
             $<$<CONFIG:Debug>:spdlog::spdlog>
     )
