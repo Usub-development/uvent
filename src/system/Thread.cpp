@@ -8,9 +8,10 @@
 
 namespace usub::uvent::system
 {
-    Thread::Thread(std::barrier<>* barrier, int index, thread::ThreadLocalStorage* thread_local_storage, ThreadLaunchMode tlm)
-        : barrier(barrier), index_(
-              index), thread_local_storage_(thread_local_storage), tlm(tlm)
+    Thread::Thread(std::barrier<>* barrier, int index, thread::ThreadLocalStorage* thread_local_storage,
+                   ThreadLaunchMode tlm) :
+        barrier(barrier), index_(
+            index), thread_local_storage_(thread_local_storage), tlm(tlm)
     {
 #if UVENT_DEBUG
         spdlog::info("Thread #{} started", index);
@@ -22,7 +23,8 @@ namespace usub::uvent::system
         if (tlm == NEW)
             this->thread_ = std::jthread(
                 [this](std::stop_token token) { this->threadFunction(token); });
-        else this->threadFunction(this->stop_token);
+        else
+            this->threadFunction(this->stop_token);
     }
 
     void Thread::threadFunction(std::stop_token& token)
@@ -41,7 +43,6 @@ namespace usub::uvent::system
         pin_thread_to_core(this->index_);
         set_thread_name(std::string("uvent_worker_" + std::to_string(this->index_)), self);
 #endif
-        usub::utils::HighPerfTimer highPerfTimer;
         this->barrier->arrive_and_wait();
         this->processInboxQueue();
         using namespace system::this_thread::detail;
@@ -73,23 +74,22 @@ namespace usub::uvent::system
 #else
             auto next_timeout = local_wh.getNextTimeout();
             local_pl.poll((local_q->empty() && system::this_thread::detail::is_started)
-                               ? (next_timeout > 0)
-                                     ? next_timeout
-                                     : settings::idle_fallback_ms
-                               : 0);
+                ? (next_timeout > 0)
+                ? next_timeout
+                : settings::idle_fallback_ms
+                : 0);
 #endif
-            highPerfTimer.reset();
             while (!local_q->empty())
             {
-                if (highPerfTimer.elapsed_ms() >= 291) break;
-
                 const size_t n = local_q->dequeue_bulk(
                     this->tmp_tasks_.data(), this->tmp_tasks_.size());
-                if (n == 0) break;
+                if (n == 0)
+                    break;
                 for (size_t i = 0; i < n; ++i)
                 {
                     auto& elem = this->tmp_tasks_[i];
-                    if (!elem) continue;
+                    if (!elem)
+                        continue;
 
                     auto c = std::coroutine_handle<detail::AwaitableFrameBase>::from_address(elem.address());
                     if (c)
@@ -120,10 +120,11 @@ namespace usub::uvent::system
             if (st->getSize() > 0)
             {
                 std::coroutine_handle<> task;
-                if (st->dequeue(task)) local_q->enqueue(task);
+                if (st->dequeue(task))
+                    local_q->enqueue(task);
             }
             const size_t n_coroutines = local_q_c.dequeue_bulk(this->tmp_coroutines_.data(),
-                                                                this->tmp_coroutines_.size());
+                                                               this->tmp_coroutines_.size());
             for (size_t i = 0; i < n_coroutines; i++)
             {
                 auto c_temp = std::coroutine_handle<detail::AwaitableFrameBase>::from_address(
@@ -152,7 +153,8 @@ namespace usub::uvent::system
         if (this->thread_local_storage_->is_added_new_.load(std::memory_order_acquire))
         {
             std::coroutine_handle<> tmp_coroutine;
-            while (this->thread_local_storage_->inbox_q_.try_dequeue(tmp_coroutine)) system::this_thread::detail::q->enqueue(tmp_coroutine);
+            while (this->thread_local_storage_->inbox_q_.try_dequeue(tmp_coroutine))
+                system::this_thread::detail::q->enqueue(tmp_coroutine);
         }
         this->thread_local_storage_->is_added_new_.store(false, std::memory_order_seq_cst);
     }

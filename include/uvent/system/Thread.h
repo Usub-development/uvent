@@ -14,7 +14,6 @@
 #include "uvent/system/SystemContext.h"
 #include "uvent/base/Predefines.h"
 #include <uvent/pool/TLSRegistry.h>
-#include <uvent/utils/timer/HighPerfomanceTimer.h>
 
 namespace usub::uvent::system
 {
