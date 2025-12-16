@@ -28,7 +28,8 @@ namespace usub::uvent::system
     public:
         friend class ThreadPool;
 
-        Thread(std::barrier<>* barrier, int index, thread::ThreadLocalStorage* thread_local_storage,  ThreadLaunchMode tlm);
+        Thread(std::barrier<>* barrier, int index, thread::ThreadLocalStorage* thread_local_storage,
+               ThreadLaunchMode tlm);
 
         Thread(Thread&&) noexcept = default;
 
@@ -46,6 +47,12 @@ namespace usub::uvent::system
         void threadFunction(std::stop_token& token);
 
         void processInboxQueue();
+
+        [[nodiscard]] inline bool inbox_changed_hint() const noexcept
+        {
+            auto& tls = *thread_local_storage_;
+            return tls.inbox_seq_.load(std::memory_order_relaxed) != tls.inbox_seq_seen_;
+        }
 
     private:
         int index_;

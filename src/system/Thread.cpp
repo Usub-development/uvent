@@ -55,7 +55,7 @@ namespace usub::uvent::system
             if (local_pl.try_lock())
             {
                 auto next_timeout = local_wh.getNextTimeout();
-                local_pl.poll((local_q->empty() && system::this_thread::detail::is_started.load(std::memory_order_relaxed))
+                local_pl.poll((local_q->empty())
                              ? (next_timeout > 0)
                                    ? next_timeout
                                    : settings::idle_fallback_ms
@@ -65,7 +65,7 @@ namespace usub::uvent::system
             else if (local_q->empty() && local_q_c.empty())
             {
                 auto next_timeout = local_wh.getNextTimeout();
-                local_pl.lock_poll((local_q->empty() && system::this_thread::detail::is_started.load(std::memory_order_relaxed))
+                local_pl.lock_poll((local_q->empty())
                                   ? (next_timeout > 0)
                                         ? next_timeout
                                         : settings::idle_fallback_ms
@@ -73,18 +73,16 @@ namespace usub::uvent::system
             }
 #else
             auto next_timeout = local_wh.getNextTimeout();
-            local_pl.poll((local_q->empty() && system::this_thread::detail::is_started)
+            local_pl.poll(local_q->empty()
                 ? (next_timeout > 0)
                 ? next_timeout
                 : settings::idle_fallback_ms
                 : 0);
 #endif
-            while (!local_q->empty())
+            size_t n;
+            while ((n = local_q->dequeue_bulk(
+                this->tmp_tasks_.data(), this->tmp_tasks_.size())) > 0)
             {
-                const size_t n = local_q->dequeue_bulk(
-                    this->tmp_tasks_.data(), this->tmp_tasks_.size());
-                if (n == 0)
-                    break;
                 for (size_t i = 0; i < n; ++i)
                 {
                     auto& elem = this->tmp_tasks_[i];
@@ -119,8 +117,7 @@ namespace usub::uvent::system
 #endif
             if (st->getSize() > 0)
             {
-                std::coroutine_handle<> task;
-                if (st->dequeue(task))
+                if (std::coroutine_handle<> task; st->dequeue(task))
                     local_q->enqueue(task);
             }
             const size_t n_coroutines = local_q_c.dequeue_bulk(this->tmp_coroutines_.data(),
@@ -150,13 +147,17 @@ namespace usub::uvent::system
 
     void Thread::processInboxQueue()
     {
-        if (this->thread_local_storage_->is_added_new_.load(std::memory_order_acquire))
-        {
-            std::coroutine_handle<> tmp_coroutine;
-            while (this->thread_local_storage_->inbox_q_.try_dequeue(tmp_coroutine))
-                system::this_thread::detail::q->enqueue(tmp_coroutine);
-        }
-        this->thread_local_storage_->is_added_new_.store(false, std::memory_order_seq_cst);
+        auto& tls = *this->thread_local_storage_;
+
+        const uint32_t s = tls.inbox_seq_.load(std::memory_order_acquire);
+        if (s == tls.inbox_seq_seen_)
+            return;
+
+        tls.inbox_seq_seen_ = s;
+
+        std::coroutine_handle<> h;
+        while (tls.inbox_q_.try_dequeue(h))
+            system::this_thread::detail::q->enqueue(h);
     }
 
     bool Thread::stop()

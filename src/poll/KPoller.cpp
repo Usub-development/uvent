@@ -8,9 +8,11 @@
 #include "uvent/net/Socket.h"
 #include <cerrno>
 
-namespace usub::uvent::core {
-    KQueuePoller::KQueuePoller(utils::TimerWheel &wheel)
-        : wheel(wheel) {
+namespace usub::uvent::core
+{
+    KQueuePoller::KQueuePoller(utils::TimerWheel& wheel) :
+        wheel(wheel)
+    {
         this->poll_fd = ::kqueue();
         if (this->poll_fd == -1)
             throw std::system_error(errno, std::generic_category(), "kqueue()");
@@ -18,53 +20,50 @@ namespace usub::uvent::core {
         this->events.resize(1024);
     }
 
-    void KQueuePoller::addEvent(net::SocketHeader *header, OperationType initialState) {
+    void KQueuePoller::addEvent(net::SocketHeader* header, OperationType initialState)
+    {
         const bool edge_like = !(header->is_tcp() && header->is_passive());
 
-        switch (initialState) {
-            case READ:
-                enable_read(header, true, edge_like);
-                enable_write(header, false, edge_like);
-                break;
-            case WRITE:
-                enable_read(header, false, edge_like);
-                enable_write(header, true, edge_like);
-                break;
-            case ALL:
-                enable_read(header, true, edge_like);
-                enable_write(header, true, edge_like);
-                break;
-        }
-
-#ifndef UVENT_ENABLE_REUSEADDR
-        if (header->is_tcp() && header->is_passive())
-            system::this_thread::detail::is_started.store(true, std::memory_order_relaxed);
-#else
-        if (header->is_tcp() && header->is_passive())
-            system::this_thread::detail::is_started = true;
-#endif
-    }
-
-    void KQueuePoller::updateEvent(net::SocketHeader *header, OperationType initialState) {
-        const bool edge_like = !(header->is_tcp() && header->is_passive());
-
-        switch (initialState) {
-            case READ:
-                enable_read(header, true, edge_like);
-                enable_write(header, false, edge_like);
-                break;
-            case WRITE:
-                enable_read(header, false, edge_like);
-                enable_write(header, true, edge_like);
-                break;
-            default:
-                enable_read(header, true, edge_like);
-                enable_write(header, true, edge_like);
-                break;
+        switch (initialState)
+        {
+        case READ:
+            enable_read(header, true, edge_like);
+            enable_write(header, false, edge_like);
+            break;
+        case WRITE:
+            enable_read(header, false, edge_like);
+            enable_write(header, true, edge_like);
+            break;
+        case ALL:
+            enable_read(header, true, edge_like);
+            enable_write(header, true, edge_like);
+            break;
         }
     }
 
-    void KQueuePoller::removeEvent(net::SocketHeader *header, OperationType) {
+    void KQueuePoller::updateEvent(net::SocketHeader* header, OperationType initialState)
+    {
+        const bool edge_like = !(header->is_tcp() && header->is_passive());
+
+        switch (initialState)
+        {
+        case READ:
+            enable_read(header, true, edge_like);
+            enable_write(header, false, edge_like);
+            break;
+        case WRITE:
+            enable_read(header, false, edge_like);
+            enable_write(header, true, edge_like);
+            break;
+        default:
+            enable_read(header, true, edge_like);
+            enable_write(header, true, edge_like);
+            break;
+        }
+    }
+
+    void KQueuePoller::removeEvent(net::SocketHeader* header, OperationType)
+    {
         struct kevent ev{};
         EV_SET(&ev, header->fd, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
         kevent(this->poll_fd, &ev, 1, nullptr, 0, nullptr);
@@ -75,11 +74,15 @@ namespace usub::uvent::core {
         header->fd = -1;
     }
 
-    bool KQueuePoller::poll(int timeout_ms) {
+    bool KQueuePoller::poll(int timeout_ms)
+    {
         struct timespec ts{};
-        if (timeout_ms < 0) {
+        if (timeout_ms < 0)
+        {
             ts = timespec{0, 0};
-        } else {
+        }
+        else
+        {
             ts.tv_sec = timeout_ms / 1000;
             ts.tv_nsec = (timeout_ms % 1000) * 1000000LL;
         }
@@ -98,10 +101,12 @@ namespace usub::uvent::core {
             throw std::system_error(errno, std::generic_category(), "kevent(poll)");
 #endif
 
-        for (int i = 0; i < n; ++i) {
-            auto &ev = this->events[i];
-            auto *sock = static_cast<net::SocketHeader *>(ev.udata);
-            if (!sock) continue;
+        for (int i = 0; i < n; ++i)
+        {
+            auto& ev = this->events[i];
+            auto* sock = static_cast<net::SocketHeader*>(ev.udata);
+            if (!sock)
+                continue;
 
 #ifndef UVENT_ENABLE_REUSEADDR
             if (sock->is_busy_now() || sock->is_disconnected_now()) continue;
@@ -111,12 +116,13 @@ namespace usub::uvent::core {
             bool is_eof = (ev.flags & EV_EOF);
             bool hup = !(sock->is_tcp() && sock->is_passive()) && (is_err || is_eof);
 
-            if (hup) {
+            if (hup)
+            {
                 // помечаем как разорванный, но НЕ закрываем fd.
                 sock->mark_disconnected();
 #if UVENT_DEBUG
                 spdlog::debug("Socket hup/err fd={}, eof={}, err={}, data={}",
-                              sock->fd, is_eof, is_err, (long long) ev.data);
+                              sock->fd, is_eof, is_err, (long long)ev.data);
 #endif
             }
 
@@ -124,7 +130,8 @@ namespace usub::uvent::core {
             sock->try_mark_busy();
 #endif
 
-            if (ev.filter == EVFILT_READ && sock->first) {
+            if (ev.filter == EVFILT_READ && sock->first)
+            {
 #if UVENT_DEBUG
                 spdlog::info("Socket #{} triggered as IN", sock->fd);
 #endif
@@ -132,27 +139,34 @@ namespace usub::uvent::core {
                 system::this_thread::detail::q->enqueue(c);
             }
 
-            if (ev.filter == EVFILT_WRITE && sock->second) {
+            if (ev.filter == EVFILT_WRITE && sock->second)
+            {
 #if UVENT_DEBUG
                 spdlog::info("Socket #{} triggered as OUT", sock->fd);
 #endif
                 if (!(sock->socket_info &
-                      static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING))) {
+                    static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING)))
+                {
                     auto c = std::exchange(sock->second, nullptr);
                     system::this_thread::detail::q->enqueue(c);
-                } else {
+                }
+                else
+                {
                     int err = 0;
                     socklen_t len = sizeof(err);
                     getsockopt(sock->fd, SOL_SOCKET, SO_ERROR, &err, &len);
                     sock->socket_info &=
-                            ~static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING);
-                    if (err != 0) {
+                        ~static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING);
+                    if (err != 0)
+                    {
                         sock->socket_info |=
-                                static_cast<uint8_t>(net::AdditionalState::CONNECTION_FAILED);
+                            static_cast<uint8_t>(net::AdditionalState::CONNECTION_FAILED);
 #if UVENT_DEBUG
                         spdlog::debug("Connect failed on fd={} err={}", sock->fd, err);
 #endif
-                    } else {
+                    }
+                    else
+                    {
                         auto c = std::exchange(sock->second, nullptr);
                         system::this_thread::detail::q->enqueue(c);
                     }
@@ -170,27 +184,32 @@ namespace usub::uvent::core {
     }
 
 
-    bool KQueuePoller::try_lock() {
-        if (this->lock.try_acquire()) {
+    bool KQueuePoller::try_lock()
+    {
+        if (this->lock.try_acquire())
+        {
             this->is_locked.store(true, std::memory_order_release);
             return true;
         }
         return false;
     }
 
-    void KQueuePoller::unlock() {
+    void KQueuePoller::unlock()
+    {
         this->is_locked.store(false, std::memory_order_release);
         this->lock.release();
     }
 
-    void KQueuePoller::lock_poll(int timeout_ms) {
+    void KQueuePoller::lock_poll(int timeout_ms)
+    {
         this->lock.acquire();
         this->is_locked.store(true, std::memory_order_release);
         this->poll(timeout_ms);
         this->unlock();
     }
 
-    int KQueuePoller::get_poll_fd() const {
+    int KQueuePoller::get_poll_fd() const
+    {
         return this->poll_fd;
     }
 } // namespace usub::uvent::core

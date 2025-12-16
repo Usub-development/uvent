@@ -8,30 +8,22 @@
 #include "uvent/system/Settings.h"
 #include "uvent/system/SystemContext.h"
 
-namespace usub::uvent::core {
-    EPoller::EPoller(utils::TimerWheel& wheel) : wheel(wheel) {
+namespace usub::uvent::core
+{
+    EPoller::EPoller(utils::TimerWheel& wheel) :
+        wheel(wheel)
+    {
         this->poll_fd = epoll_create1(0);
         sigemptyset(&this->sigmask);
         this->events.resize(1000);
     }
 
-    void EPoller::addEvent(net::SocketHeader* header, OperationType initialState) {
+    void EPoller::addEvent(net::SocketHeader* header, OperationType initialState)
+    {
         struct epoll_event event{};
         event.data.ptr = reinterpret_cast<void*>(header);
         event.events = 0;
-
-        if (header->is_tcp() && !header->is_passive())
-            event.events = (EPOLLIN | EPOLLOUT | EPOLLET);
-        else {
-            event.events = EPOLLIN;
-#ifndef UVENT_ENABLE_REUSEADDR
-            if (header->is_tcp() && header->is_passive())
-                system::this_thread::detail::is_started.store(true, std::memory_order_relaxed);
-#else
-            if (header->is_tcp() && header->is_passive())
-                system::this_thread::detail::is_started = true;
-#endif
-        }
+        event.events = (EPOLLIN | EPOLLOUT | EPOLLET);
 
 #if UVENT_DEBUG
         spdlog::info("Socket added: fd={} et={} in={} out={}", header->fd,
@@ -42,14 +34,17 @@ namespace usub::uvent::core {
         epoll_ctl(this->poll_fd, EPOLL_CTL_ADD, header->fd, &event);
     }
 
-    void EPoller::updateEvent(net::SocketHeader* header, OperationType initialState) {
+
+    void EPoller::updateEvent(net::SocketHeader* header, OperationType initialState)
+    {
         struct epoll_event event{};
         event.data.ptr = reinterpret_cast<void*>(header);
         event.events = 0;
 
         if (header->is_tcp() && !header->is_passive())
             event.events = (EPOLLIN | EPOLLOUT | EPOLLET);
-        else {
+        else
+        {
             event.events = EPOLLIN;
 #ifndef UVENT_ENABLE_REUSEADDR
             if (header->is_tcp() && header->is_passive())
@@ -83,7 +78,8 @@ namespace usub::uvent::core {
 #endif
     }
 
-    void EPoller::removeEvent(net::SocketHeader* header) {
+    void EPoller::removeEvent(net::SocketHeader* header)
+    {
 #if UVENT_DEBUG
         spdlog::info("Socket removed: {}", header->fd);
 #endif
@@ -94,7 +90,8 @@ namespace usub::uvent::core {
         header->fd = -1;
     }
 
-    bool EPoller::poll(int timeout) {
+    bool EPoller::poll(int timeout)
+    {
         int n = epoll_pwait(this->poll_fd, this->events.data(),
                             static_cast<int>(this->events.size()), timeout, &this->sigmask);
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -104,35 +101,43 @@ namespace usub::uvent::core {
         if (n < 0 && errno != EINTR)
             throw std::system_error(errno, std::generic_category(), "epoll_pwait");
 #endif
-        for (int i = 0; i < n; i++) {
+        for (int i = 0; i < n; i++)
+        {
             auto& event = this->events[i];
             auto* sock = static_cast<net::SocketHeader*>(event.data.ptr);
 #ifndef UVENT_ENABLE_REUSEADDR
             if (sock->is_busy_now() || sock->is_disconnected_now()) continue;
 #endif
             bool hup = !(sock->is_tcp() && sock->is_passive()) &&
-                       (event.events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR));
-            if (hup) sock->mark_disconnected();
+                (event.events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR));
+            if (hup)
+                sock->mark_disconnected();
 #ifndef UVENT_ENABLE_REUSEADDR
             sock->try_mark_busy();
 #endif
-            if (event.events & EPOLLIN && sock->first) {
+            if (event.events & EPOLLIN && sock->first)
+            {
 #if UVENT_DEBUG
                 spdlog::info("Socket #{} triggered as IN", sock->fd);
 #endif
                 auto c = std::exchange(sock->first, nullptr);
                 system::this_thread::detail::q->enqueue(c);
-                if (!(event.events & EPOLLOUT)) continue;
+                if (!(event.events & EPOLLOUT))
+                    continue;
             }
-            if (event.events & EPOLLOUT && sock->second) {
+            if (event.events & EPOLLOUT && sock->second)
+            {
 #if UVENT_DEBUG
                 spdlog::info("Socket #{} triggered as OUT", sock->fd);
 #endif
                 if (!(sock->socket_info &
-                      static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING))) {
+                    static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING)))
+                {
                     auto c = std::exchange(sock->second, nullptr);
                     system::this_thread::detail::q->enqueue(c);
-                } else {
+                }
+                else
+                {
                     int err = 0;
                     socklen_t len = sizeof(err);
                     getsockopt(sock->fd, SOL_SOCKET, SO_ERROR, &err, &len);
@@ -141,40 +146,47 @@ namespace usub::uvent::core {
                     if (err != 0)
                         sock->socket_info |=
                             static_cast<uint8_t>(net::AdditionalState::CONNECTION_FAILED);
-                    else {
+                    else
+                    {
                         auto c = std::exchange(sock->second, nullptr);
                         system::this_thread::detail::q->enqueue(c);
                     }
                 }
             }
-            if (hup) {
+            if (hup)
+            {
                 this->removeEvent(sock);
 #if UVENT_DEBUG
                 spdlog::debug("Socket hup/err fd={}", sock->fd);
 #endif
             }
         }
-        if (n == this->events.size()) this->events.resize(this->events.size() << 1);
+        if (n == this->events.size())
+            this->events.resize(this->events.size() << 1);
 #ifndef UVENT_ENABLE_REUSEADDR
         system::this_thread::detail::g_qsbr.leave();
 #endif
         return n > 0;
     }
 
-    bool EPoller::try_lock() {
-        if (this->lock.try_acquire()) {
+    bool EPoller::try_lock()
+    {
+        if (this->lock.try_acquire())
+        {
             this->is_locked.store(true, std::memory_order_release);
             return true;
         }
         return false;
     }
 
-    void EPoller::unlock() {
+    void EPoller::unlock()
+    {
         this->is_locked.store(false, std::memory_order_release);
         this->lock.release();
     }
 
-    void EPoller::lock_poll(int timeout) {
+    void EPoller::lock_poll(int timeout)
+    {
         this->lock.acquire();
         this->is_locked.store(true, std::memory_order_release);
         this->poll(timeout);
@@ -185,4 +197,4 @@ namespace usub::uvent::core {
     {
         return this->poll_fd;
     }
-}  // namespace usub::uvent::core
+} // namespace usub::uvent::core
