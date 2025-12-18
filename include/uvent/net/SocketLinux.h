@@ -483,55 +483,37 @@ namespace usub::uvent::net
     Socket<p, r>::async_read(utils::DynamicBuffer& buffer, size_t max_read_size)
         requires ((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP))
     {
-#if UVENT_DEBUG
-        spdlog::info("Entered into read coroutine: {}", this->header_->fd);
-#endif
+        if (max_read_size == 0)
+            co_return 0;
 
         int retries = 0;
-        ssize_t total_read = 0;
 
-        for (;;)
+        if constexpr (p == Proto::UDP)
         {
-            while (total_read < static_cast<ssize_t>(max_read_size))
+            for (;;)
             {
-                uint8_t temp[16384];
+                uint8_t* dst = buffer.reserve_tail(max_read_size);
 
-                size_t remaining = max_read_size - static_cast<size_t>(total_read);
-                if (remaining == 0)
-                    break;
-
-                size_t to_read = std::min(sizeof(temp), remaining);
-
-                ssize_t res = ::recv(this->header_->fd, temp, to_read, MSG_DONTWAIT);
+                ssize_t res =
+                    ::recvfrom(this->header_->fd, dst, max_read_size, 0, nullptr, nullptr);
 
                 if (res > 0)
                 {
-#if UVENT_DEBUG
-                    spdlog::debug("recv fd={} size={}", this->header_->fd, res);
+                    buffer.commit(static_cast<size_t>(res));
+#ifndef UVENT_ENABLE_REUSEADDR
+                this->header_->timeout_epoch_bump();
 #endif
-                    buffer.append(temp, static_cast<size_t>(res));
-                    total_read += res;
-                    retries = 0;
-                    continue;
+                    co_return res;
                 }
 
                 if (res == 0)
-                {
-#ifndef UVENT_ENABLE_REUSEADDR
-                if (total_read > 0)
-                    this->header_->timeout_epoch_bump();
-#endif
-                    co_return total_read;
-                }
+                    co_return 0;
 
                 if (errno == EINTR)
                 {
                     if (++retries >= settings::max_read_retries)
                     {
-#ifndef UVENT_ENABLE_REUSEADDR
-                    if (total_read > 0)
-                        this->header_->timeout_epoch_bump();
-#endif
+                        this->remove();
                         co_return -1;
                     }
                     continue;
@@ -539,38 +521,91 @@ namespace usub::uvent::net
 
                 if (errno == EAGAIN || errno == EWOULDBLOCK)
                 {
-                    if (total_read > 0)
+                    co_await detail::AwaiterRead{this->header_};
+                    continue;
+                }
+
+                this->remove();
+                co_return -1;
+            }
+        }
+        else
+        {
+            ssize_t total_read = 0;
+
+            for (;;)
+            {
+                while (total_read < static_cast<ssize_t>(max_read_size))
+                {
+                    const size_t remaining =
+                        max_read_size - static_cast<size_t>(total_read);
+
+                    const size_t to_read =
+                        remaining > 16384 ? 16384 : remaining;
+
+                    uint8_t* dst = buffer.reserve_tail(to_read);
+
+                    ssize_t res = ::recv(this->header_->fd, dst, to_read, 0);
+
+                    if (res > 0)
+                    {
+                        buffer.commit(static_cast<size_t>(res));
+                        total_read += res;
+                        retries = 0;
+                        continue;
+                    }
+
+                    if (res == 0)
                     {
 #ifndef UVENT_ENABLE_REUSEADDR
-                    this->header_->timeout_epoch_bump();
+                    if (total_read > 0)
+                        this->header_->timeout_epoch_bump();
 #endif
                         co_return total_read;
                     }
 
-#if UVENT_DEBUG
-                    spdlog::debug("recv fd={} -> EAGAIN, awaiting read", this->header_->fd);
+                    if (errno == EINTR)
+                    {
+                        if (++retries >= settings::max_read_retries)
+                        {
+#ifndef UVENT_ENABLE_REUSEADDR
+                        if (total_read > 0)
+                            this->header_->timeout_epoch_bump();
 #endif
-                    co_await detail::AwaiterRead{this->header_};
-                    break;
+                            co_return -1;
+                        }
+                        continue;
+                    }
+
+                    if (errno == EAGAIN || errno == EWOULDBLOCK)
+                    {
+                        if (total_read > 0)
+                        {
+#ifndef UVENT_ENABLE_REUSEADDR
+                        this->header_->timeout_epoch_bump();
+#endif
+                            co_return total_read;
+                        }
+
+                        co_await detail::AwaiterRead{this->header_};
+                        break;
+                    }
+
+#ifndef UVENT_ENABLE_REUSEADDR
+                if (total_read > 0)
+                    this->header_->timeout_epoch_bump();
+#endif
+                    co_return -1;
                 }
 
-#if UVENT_DEBUG
-                spdlog::error("recv fd={} -> errno={}", this->header_->fd, errno);
-#endif
+                if (total_read >= static_cast<ssize_t>(max_read_size))
+                {
 #ifndef UVENT_ENABLE_REUSEADDR
-            if (total_read > 0)
-                this->header_->timeout_epoch_bump();
+                if (total_read > 0)
+                    this->header_->timeout_epoch_bump();
 #endif
-                co_return -1;
-            }
-
-            if (total_read >= static_cast<ssize_t>(max_read_size))
-            {
-#ifndef UVENT_ENABLE_REUSEADDR
-            if (total_read > 0)
-                this->header_->timeout_epoch_bump();
-#endif
-                co_return total_read;
+                    co_return total_read;
+                }
             }
         }
     }
@@ -580,22 +615,16 @@ namespace usub::uvent::net
     Socket<p, r>::async_read(uint8_t* dst, size_t max_read_size)
         requires((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP))
     {
-#if UVENT_DEBUG
-        spdlog::info("Entered into read coroutine: fd={}", this->header_->fd);
-#endif
-
         if (!dst || max_read_size == 0)
             co_return 0;
 
         int retries = 0;
-        ssize_t total_read = 0;
 
         if constexpr (p == Proto::UDP)
         {
             for (;;)
             {
-                ssize_t res =
-                    ::recvfrom(this->header_->fd, dst, max_read_size, MSG_DONTWAIT, nullptr, nullptr);
+                ssize_t res = ::recvfrom(this->header_->fd, dst, max_read_size, 0, nullptr, nullptr);
 
                 if (res > 0)
                 {
@@ -630,23 +659,19 @@ namespace usub::uvent::net
         }
         else
         {
+            ssize_t total_read = 0;
             uint8_t* out = dst;
 
             for (;;)
             {
                 while (total_read < static_cast<ssize_t>(max_read_size))
                 {
-                    size_t remaining = max_read_size - static_cast<size_t>(total_read);
-                    if (remaining == 0)
-                        break;
+                    const size_t remaining = max_read_size - static_cast<size_t>(total_read);
 
-                    ssize_t res = ::recv(this->header_->fd, out, remaining, MSG_DONTWAIT);
+                    ssize_t res = ::recv(this->header_->fd, out, remaining, 0);
 
                     if (res > 0)
                     {
-#if UVENT_DEBUG
-                        spdlog::debug("recv fd={} size={}", this->header_->fd, res);
-#endif
                         out += static_cast<size_t>(res);
                         total_read += res;
                         retries = 0;
@@ -685,16 +710,10 @@ namespace usub::uvent::net
                             co_return total_read;
                         }
 
-#if UVENT_DEBUG
-                        spdlog::debug("recv fd={} -> EAGAIN, awaiting read", this->header_->fd);
-#endif
                         co_await detail::AwaiterRead{this->header_};
                         break;
                     }
 
-#if UVENT_DEBUG
-                    spdlog::error("recv fd={} -> errno={}", this->header_->fd, errno);
-#endif
 #ifndef UVENT_ENABLE_REUSEADDR
                 if (total_read > 0)
                     this->header_->timeout_epoch_bump();
@@ -748,7 +767,8 @@ namespace usub::uvent::net
                 }
                 if (errno == EAGAIN || errno == EWOULDBLOCK)
                 {
-                    co_return 0;
+                    co_await detail::AwaiterWrite{this->header_};
+                    continue;
                 }
                 co_return -1;
             }

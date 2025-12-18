@@ -1,46 +1,44 @@
-//
-// Created by kirill on 5/21/25.
-//
-
 #ifndef UVENT_DYNAMICBUFFER_H
 #define UVENT_DYNAMICBUFFER_H
 
 #pragma once
 
-#include <vector>
+#include <cstddef>
 #include <cstdint>
-#include <cstring>
+#include <vector>
 
-#if defined(__AVX2__)
-#include <immintrin.h>
-#endif
-
-namespace usub::uvent::utils {
-
-    class DynamicBuffer {
+namespace usub::uvent::utils
+{
+    class DynamicBuffer final
+    {
     public:
         DynamicBuffer() = default;
 
         void reserve(size_t n);
 
-        [[nodiscard]] size_t size() const;
+        [[nodiscard]] size_t size() const noexcept;
+        [[nodiscard]] size_t capacity() const noexcept;
 
-        [[nodiscard]] const uint8_t *data() const;
+        [[nodiscard]] const uint8_t* data() const noexcept;
+        [[nodiscard]] uint8_t* data() noexcept;
 
-        [[nodiscard]] uint8_t *data();
+        void clear() noexcept;
 
-        void clear();
+        uint8_t* reserve_tail(size_t len);
+        void commit(size_t n);
 
-        void append(const uint8_t *src, size_t len);
+        void append(const uint8_t* src, size_t len);
+        uint8_t* append_raw(size_t len);
 
-        uint8_t *append_raw(size_t len);
+        void shrink(size_t new_size) noexcept;
 
-        void shrink(size_t new_size);
+    private:
+        void grow_(size_t need);
 
     private:
         std::vector<uint8_t> data_;
+        size_t size_{0};
     };
-
 }
 
-#endif //UVENT_DYNAMICBUFFER_H
+#endif // UVENT_DYNAMICBUFFER_H
