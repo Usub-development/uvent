@@ -48,12 +48,6 @@ namespace usub::uvent::system
 
         void processInboxQueue();
 
-        [[nodiscard]] inline bool inbox_changed_hint() const noexcept
-        {
-            auto& tls = *thread_local_storage_;
-            return tls.inbox_seq_.load(std::memory_order_relaxed) != tls.inbox_seq_seen_;
-        }
-
     private:
         int index_;
         std::jthread thread_;

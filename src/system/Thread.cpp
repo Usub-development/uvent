@@ -147,17 +147,13 @@ namespace usub::uvent::system
 
     void Thread::processInboxQueue()
     {
-        auto& tls = *this->thread_local_storage_;
-
-        const uint32_t s = tls.inbox_seq_.load(std::memory_order_acquire);
-        if (s == tls.inbox_seq_seen_)
-            return;
-
-        tls.inbox_seq_seen_ = s;
-
-        std::coroutine_handle<> h;
-        while (tls.inbox_q_.try_dequeue(h))
-            system::this_thread::detail::q->enqueue(h);
+        if (this->thread_local_storage_->is_added_new_.load(std::memory_order_acquire))
+        {
+            std::coroutine_handle<> tmp_coroutine;
+            while (this->thread_local_storage_->inbox_q_.try_dequeue(tmp_coroutine))
+                system::this_thread::detail::q->enqueue(tmp_coroutine);
+        }
+        this->thread_local_storage_->is_added_new_.store(false, std::memory_order_seq_cst);
     }
 
     bool Thread::stop()
