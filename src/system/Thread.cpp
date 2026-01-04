@@ -16,7 +16,6 @@ namespace usub::uvent::system
 #if UVENT_DEBUG
         spdlog::info("Thread #{} started", index);
 #endif
-        this_thread::detail::t_id = this->index_;
         this->tmp_tasks_.resize(settings::max_pre_allocated_tasks_items);
         this->tmp_sockets_.resize(settings::max_pre_allocated_tmp_sockets_items);
         this->tmp_coroutines_.resize(settings::max_pre_allocated_tmp_coroutines_items);
@@ -29,6 +28,7 @@ namespace usub::uvent::system
 
     void Thread::threadFunction(std::stop_token& token)
     {
+        this_thread::detail::t_id = this->index_;
         auto& local_pl = system::this_thread::detail::pl;
         auto& local_wh = system::this_thread::detail::wh;
         auto& local_q = system::this_thread::detail::q;

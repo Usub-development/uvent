@@ -15,7 +15,7 @@ namespace usub {
         this->pool.addThread(uvent::system::CURRENT);
     }
 
-    void Uvent::for_each_thread(std::function<void(int, uvent::thread::ThreadLocalStorage*)> f)
+    void Uvent::for_each_thread(std::function<void(int, uvent::thread::ThreadLocalStorage*)> f) const
     {
         for (int i = 0; i < this->thread_count_; i++)
             f(i, uvent::system::global::detail::tls_registry->getStorage(i));

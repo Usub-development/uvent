@@ -19,7 +19,7 @@ namespace usub {
 
         void run();
 
-        void for_each_thread(std::function<void(int, uvent::thread::ThreadLocalStorage*)> f);
+        void for_each_thread(std::function<void(int, uvent::thread::ThreadLocalStorage*)> f) const;
 
     private:
         int thread_count_;
