@@ -1,39 +1,40 @@
 //
 // Created by root on 12/6/25.
 //
+#include <iostream>
 #include <source_location>
+#include <string>
 #include "uvent/Uvent.h"
+#include "uvent/sync/AsyncCancellation.h"
+#include "uvent/sync/AsyncEvent.h"
 #include "uvent/sync/AsyncMutex.h"
 #include "uvent/sync/AsyncSemaphore.h"
-#include "uvent/sync/AsyncEvent.h"
 #include "uvent/sync/AsyncWaitGroup.h"
-#include "uvent/sync/AsyncCancellation.h"
 
 using namespace usub::uvent;
 using namespace std::chrono_literals;
 
-inline std::string make_location_string(const std::source_location& loc = std::source_location::current()) {
+inline std::string make_location_string(const std::source_location& loc = std::source_location::current())
+{
     using namespace std::string_literals;
-    return std::string(loc.file_name()) + "(" +
-           std::to_string(loc.line()) + ":" +
-           std::to_string(loc.column()) + ") `" +
-           loc.function_name() + "`";
+    return std::string(loc.file_name()) + "(" + std::to_string(loc.line()) + ":" + std::to_string(loc.column()) +
+        ") `" + loc.function_name() + "`";
 }
 
 void function(std::any value)
 {
-    spdlog::info("{}: function res = {}", make_location_string(), std::any_cast<int>(value));
+    std::cout << make_location_string() << ": function res = " << std::any_cast<int>(value) << std::endl;
 }
 
 task::Awaitable<void> coroutine(int a)
 {
-    spdlog::info("{}: coroutine res = {}", make_location_string(), a);
+    std::cout << make_location_string() << ": coroutine res = " << a << std::endl;
     co_return;
 }
 
 task::Awaitable<void> coroutine_non_arg()
 {
-    spdlog::info("{}: non_arg coroutine", make_location_string());
+    std::cout << make_location_string() << ": non_arg coroutine" << std::endl;
     co_return;
 }
 
@@ -66,9 +67,11 @@ task::Awaitable<void> coroutine_timer()
 
 task::Awaitable<void> coroutine_sleep()
 {
-    spdlog::info("{}: coroutine_sleep before", make_location_string());
+    std::cout << make_location_string() << ": coroutine_sleep before" << std::endl;
+
     co_await system::this_coroutine::sleep_for(1000ms);
-    spdlog::info("{}: coroutine_sleep after", make_location_string()); // diff 1 second
+
+    std::cout << make_location_string() << ": coroutine_sleep after" << std::endl; // diff 1 second
     co_return;
 }
 
@@ -76,8 +79,7 @@ int main()
 {
     settings::timeout_duration_ms = 5000;
 #ifdef UVENT_DEBUG
-    spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [thread %t] [%l] %v%$");
-    spdlog::set_level(spdlog::level::trace);
+    std::cout << "UVENT_DEBUG enabled" << std::endl;
 #endif
 
     usub::Uvent uvent(4);

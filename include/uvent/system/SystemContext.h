@@ -7,15 +7,15 @@
 
 #include <chrono>
 #include <memory>
-#include "uvent/tasks/SharedTasks.h"
-#include "uvent/utils/timer/TimerWheel.h"
-#include "Settings.h"
-#include "uvent/utils/datastructures/queue/FastQueue.h"
-#include "uvent/utils/datastructures/queue/ConcurrentQueues.h"
-#include "uvent/utils/sync/QSBR.h"
-#include "uvent/poll/PollerBase.h"
-#include "uvent/base/Predefines.h"
 #include <uvent/pool/TLSRegistry.h>
+#include "Settings.h"
+#include "uvent/base/Predefines.h"
+#include "uvent/poll/PollerBase.h"
+#include "uvent/tasks/SharedTasks.h"
+#include "uvent/utils/datastructures/queue/ConcurrentQueues.h"
+#include "uvent/utils/datastructures/queue/FastQueue.h"
+#include "uvent/utils/sync/QSBR.h"
+#include "uvent/utils/timer/TimerWheel.h"
 
 namespace usub::uvent::system
 {
@@ -31,7 +31,8 @@ namespace usub::uvent::system
     }
 
     /// \brief Variables used internally within the system.
-    /// \attention **Do not attempt to modify variables inside directly** unless explicitly instructed in the documentation.
+    /// \attention **Do not attempt to modify variables inside directly** unless explicitly instructed in the
+    /// documentation.
     namespace this_thread::detail
     {
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -66,7 +67,7 @@ namespace usub::uvent::system
 #else
         extern bool is_started;
 #endif
-    }
+    } // namespace this_thread::detail
 
     namespace this_coroutine
     {
@@ -88,16 +89,12 @@ namespace usub::uvent::system
                     this_thread::detail::wh.addTimer(t);
                 }
 
-                void await_resume() const noexcept
-                {
-                }
+                void await_resume() const noexcept {}
             };
 
-            co_await SleepAwaiter{
-                new utils::Timer(static_cast<timer_duration_t>(ms_count))
-            };
+            co_await SleepAwaiter{new utils::Timer(static_cast<timer_duration_t>(ms_count))};
         }
-    }
+    } // namespace this_coroutine
 
     /**
      * @brief Spawns a coroutine for execution in the global thread context.
@@ -115,7 +112,8 @@ namespace usub::uvent::system
     void co_spawn(F&& f)
     {
         auto promise = f.get_promise();
-        if (promise) this_thread::detail::st->enqueue(promise->get_coroutine_handle());
+        if (promise)
+            this_thread::detail::st->enqueue(promise->get_coroutine_handle());
     }
 
     /**
@@ -137,17 +135,9 @@ namespace usub::uvent::system
     template <typename F>
     void co_spawn_static(F&& f, int threadIndex)
     {
-        if (!this_thread::detail::is_started)
-        {
-            auto promise = f.get_promise();
-            if (promise)
-                global::detail::tls_registry->getStorage(threadIndex)->push_task_inbox(
-                    promise->get_coroutine_handle());
-        }
-        else
-        {
-            throw std::runtime_error("co_spawn_static: uvent already started. use co_spawn instead.");
-        }
+        auto promise = f.get_promise();
+        if (promise)
+            global::detail::tls_registry->getStorage(threadIndex)->push_task_inbox(promise->get_coroutine_handle());
     }
 
     /**
@@ -164,11 +154,8 @@ namespace usub::uvent::system
      * @warning This method does not check whether the timer is initialized
      *          or already active. Use only with properly constructed and inactive timers.
      */
-    inline void spawn_timer(utils::Timer* timer)
-    {
-        this_thread::detail::wh.addTimer(timer);
-    }
-}
+    inline void spawn_timer(utils::Timer* timer) { this_thread::detail::wh.addTimer(timer); }
+} // namespace usub::uvent::system
 
 
-#endif //UVENT_SYSTEMCONTEXT_H
+#endif // UVENT_SYSTEMCONTEXT_H

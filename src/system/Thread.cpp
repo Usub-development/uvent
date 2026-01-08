@@ -139,6 +139,7 @@ namespace usub::uvent::system
             for (size_t i = 0; i < n_sockets; ++i)
                 delete this->tmp_sockets_[i];
 #endif
+            this->processInboxQueue();
         }
 #ifndef UVENT_ENABLE_REUSEADDR
         local_g_qsbr.detach_current_thread();
