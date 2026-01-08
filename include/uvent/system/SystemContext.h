@@ -119,18 +119,15 @@ namespace usub::uvent::system
     /**
      * @brief Enqueues a coroutine into the inbox of a specific thread before the event loop starts.
      *
-     * Used to register coroutines for execution in a given thread's context prior to system startup.
-     * The coroutine handle obtained from the function's promise is placed directly into the target
-     * thread’s inbox queue.
+     * Registers a coroutine for execution in the context of the given thread prior to system startup.
+     * The coroutine handle is placed into the target thread’s inbox queue.
      *
-     * @tparam F Type of the coroutine function providing `get_promise()`.
-     * @param f Coroutine function to be enqueued.
+     * @tparam F Type providing `get_promise()` returning an optional-like pointer to a promise.
+     * @param f Coroutine function/object to be enqueued.
      * @param threadIndex Index of the target thread whose inbox receives the coroutine.
      *
-     * @throws std::runtime_error If the system event loop has already started.
-     *
-     * @note This function must be called only before the global event loop initialization.
-     *       Use `co_spawn()` after the system is started.
+     * @note This function does not validate that the event loop is not started. The caller must ensure
+     *       it is used only before global event loop initialization. Use `co_spawn()` after startup.
      */
     template <typename F>
     void co_spawn_static(F&& f, int threadIndex)
@@ -138,6 +135,25 @@ namespace usub::uvent::system
         auto promise = f.get_promise();
         if (promise)
             global::detail::tls_registry->getStorage(threadIndex)->push_task_inbox(promise->get_coroutine_handle());
+    }
+
+    /**
+     * @brief Enqueues an existing coroutine handle into the inbox of a specific thread before the event loop starts.
+     *
+     * Places the provided coroutine handle into the target thread’s inbox queue for later execution.
+     *
+     * @param h Coroutine handle to be enqueued.
+     * @param threadIndex Index of the target thread whose inbox receives the coroutine.
+     *
+     * @note This function does not validate that the event loop is not started. The caller must ensure
+     *       it is used only before global event loop initialization. Use `co_spawn()` after startup.
+     *
+     * @warning This function does not take ownership of the coroutine lifetime beyond storing the handle.
+     *          The coroutine must remain valid until executed/destroyed by the runtime.
+     */
+    inline void co_spawn_static(std::coroutine_handle<> h, int threadIndex)
+    {
+        global::detail::tls_registry->getStorage(threadIndex)->push_task_inbox(h);
     }
 
     /**

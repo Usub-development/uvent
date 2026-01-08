@@ -76,11 +76,6 @@ void run() {
 
 ### Notes
 
-* Use this only after the event loop has started.
-* If you need to queue coroutines before startup, use `co_spawn_static()`.
-
----
-
 ## co_spawn_static
 
 Namespace: `usub::uvent::system`
@@ -90,8 +85,9 @@ template <typename F>
 void co_spawn_static(F&& f, int threadIndex);
 ```
 
-Enqueues a coroutine into a specific thread’s inbox **before** the event loop starts.
-Useful for registering startup coroutines that must run on a fixed thread.
+Enqueues a coroutine into a specific thread’s inbox queue.
+Useful for registering startup coroutines that must run on a fixed thread or it can be used to return coroutine to it's
+parent thread.
 
 ### Example
 
