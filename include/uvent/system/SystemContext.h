@@ -28,6 +28,7 @@ namespace usub::uvent::system
     namespace global::detail
     {
         inline std::unique_ptr<thread::TLSRegistry> tls_registry{nullptr};
+        extern std::atomic<int> thread_count;
     }
 
     /// \brief Variables used internally within the system.

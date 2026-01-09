@@ -20,6 +20,10 @@
 
 namespace usub::uvent::system
 {
+    namespace global::detail
+    {
+        std::atomic<int> thread_count = -1;
+    }
     namespace this_thread::detail
     {
 #ifndef UVENT_ENABLE_REUSEADDR

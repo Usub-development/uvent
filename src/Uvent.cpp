@@ -5,7 +5,10 @@
 #include "uvent/Uvent.h"
 
 namespace usub {
-    Uvent::Uvent(int threadCount) : pool(threadCount), thread_count_(threadCount) {}
+    Uvent::Uvent(int threadCount) : pool(threadCount), thread_count_(threadCount)
+    {
+        uvent::system::global::detail::thread_count = threadCount;
+    }
 
     void Uvent::stop() {
         this->pool.stop();

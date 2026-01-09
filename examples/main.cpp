@@ -168,6 +168,7 @@ task::Awaitable<void> sendingCoroTimeout()
 
 task::Awaitable<int, detail::AwaitableFrame<int>> generator()
 {
+    std::cout << "Thread count: " << system::global::detail::thread_count << std::endl;;
     for (int i = 1; i <= 3; ++i)
     {
         std::cout << "yield " << i << "\n";
