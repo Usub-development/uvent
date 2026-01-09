@@ -29,6 +29,7 @@ namespace usub::uvent::system
     void Thread::threadFunction(std::stop_token& token)
     {
         this_thread::detail::t_id = this->index_;
+        std::cout << "[THREAD:" << this_thread::detail::t_id << "] started" << std::endl;
         auto& local_pl = system::this_thread::detail::pl;
         auto& local_wh = system::this_thread::detail::wh;
         auto& local_q = system::this_thread::detail::q;

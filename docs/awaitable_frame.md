@@ -24,7 +24,8 @@ external trigger.
 It manages coroutine lifecycle and linking logic:
 
 - Holds coroutine handles (`coro_`, `prev_`, `next_`).
-- Holds parent thread id (`t_id`) (can be accessed via `int get_thread_id()` method).
+- Holds parent thread id (`t_id`); can be accessed via `int get_thread_id()` method; can be set up via
+  `void set_thread_id()` method.
 - Manages exception propagation (`exception_`).
 - Tracks whether coroutine is awaited (`is_awaited`, `set_awaited`, `unset_awaited`).
 - Provides resumption (`resume()`).

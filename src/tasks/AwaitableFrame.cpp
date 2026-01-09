@@ -56,7 +56,7 @@ namespace usub::uvent::detail
     }
 
     AwaitableFrameBase::AwaitableFrameBase() {
-        this->t_id = system::this_thread::detail::t_id;
+        this->t_id_ = system::this_thread::detail::t_id;
     }
 
     bool AwaitableFrameBase::await_ready()

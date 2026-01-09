@@ -10,6 +10,7 @@ Primitives:
 - [`AsyncEvent`](#asyncevent)
 - [`WaitGroup`](#waitgroup)
 - [`CancellationSource` / `CancellationToken`](#cancellationsource--cancellationtoken)
+- [`AsyncBarrier`](#asyncbarrier)
 
 All operations suspend coroutines and re-schedule them through the event-loop queue (`system::this_thread::detail::q`)
 instead of blocking OS threads.
@@ -451,3 +452,119 @@ public:
 ### Summary
 
 Use cancellation to terminate long-running coroutines, enforce deadlines, or compose `with_timeout()`-style utilities.
+
+---
+
+## AsyncBarrier
+
+A coroutine-native **cyclic barrier** (similar to `std::barrier`) that synchronizes a fixed number of participants
+without blocking threads.
+
+`AsyncBarrier` is useful when you need **phase-based coordination** between coroutines running on multiple runtime
+threads: all participants must reach the barrier before any of them may continue.
+
+### Overview
+
+Each call to `arrive_and_wait()` suspends the current coroutine until the required number of participants has arrived.
+When the last participant arrives, the barrier releases **all waiters of the current phase** and automatically resets
+for the next phase.
+
+Unlike an event-style primitive, a barrier provides **collective progress**: no participant can pass early.
+
+### Features
+
+* Cyclic / reusable (phase-based synchronization).
+* Zero OS thread blocking — only coroutine suspension.
+* No heap allocations on the fast path (waiters are stored intrusively in coroutine frames).
+* Wake-up is performed by **re-scheduling coroutine handles into the target threads’ queues**.
+* Correct across threads: each resumed coroutine is enqueued to its owning runtime thread using
+  `promise.get_thread_id()`.
+
+### Example (startup barrier across threads)
+
+```cpp
+#include "uvent/Uvent.h"
+#include "uvent/system/SystemContext.h"
+#include <iostream>
+
+using namespace usub::uvent;
+
+static sync::AsyncBarrier g_barrier{4};
+
+task::Awaitable<void> worker(int id)
+{
+    std::cout << "worker " << id << " phase0\n";
+    co_await g_barrier.arrive_and_wait();
+    std::cout << "worker " << id << " phase1\n";
+    co_return;
+}
+
+int main()
+{
+    usub::Uvent uvent(4);
+
+    uvent.for_each_thread([&](int tid, thread::ThreadLocalStorage*)
+    {
+        system::co_spawn_static(worker(tid), tid);
+    });
+
+    uvent.run();
+}
+```
+
+### API Reference
+
+```cpp
+namespace usub::uvent::sync {
+    class AsyncBarrier {
+    public:
+        explicit AsyncBarrier(std::size_t parties) noexcept;
+
+        struct Awaiter {
+            bool await_ready() noexcept;
+            template<class Promise>
+            bool await_suspend(std::coroutine_handle<Promise> h) noexcept;
+            void await_resume() noexcept;
+        };
+
+        Awaiter arrive_and_wait() noexcept;
+    };
+}
+```
+
+### Semantics
+
+`arrive_and_wait()`:
+
+* If this coroutine is **not** the last to arrive in the current phase:
+
+    * The coroutine **suspends** and is placed into the barrier’s waiter list.
+* If this coroutine is the **last** to arrive:
+
+    * The barrier atomically starts the next phase and **releases all waiters** from the current phase.
+
+### Internal Design
+
+* Barrier stores:
+
+    * `parties` — required number of participants.
+    * `arrived` — number of arrivals in the current phase.
+    * Intrusive singly-linked list of waiter nodes embedded into suspended coroutine frames.
+* The last arriving coroutine drains the waiter list and re-schedules each waiter by pushing its coroutine handle into
+  the correct runtime thread queue.
+* Thread affinity is preserved by reading the owner thread id from the awaiting coroutine promise:
+  `h.promise().get_thread_id()`.
+* Re-scheduling is performed by enqueuing coroutine handles to the target thread inbox before startup
+  (`system::co_spawn_static(handle, tid)`) or to the event-loop queue after startup (implementation-specific).
+
+### Performance
+
+| Scenario                   | Latency (typical) | Notes                 |
+|----------------------------|-------------------|-----------------------|
+| arrive_and_wait (not last) | ~30–80 ns         | bookkeeping + suspend |
+| arrive_and_wait (last)     | O(N)              | enqueue each waiter   |
+
+### Summary
+
+Use `AsyncBarrier` when multiple coroutines must advance in lockstep across phases, especially in multi-threaded
+event-loop setups.

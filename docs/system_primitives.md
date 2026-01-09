@@ -110,12 +110,6 @@ int main() {
 
 * Retrieves the coroutine handle via its promise.
 * Pushes the handle into the inbox queue of the target thread (via `TLSRegistry`).
-* Throws `std::runtime_error` if the event loop is already running.
-
-### Notes
-
-* Must be called **only before** `uvent` starts.
-* Designed for pre-loop scheduling, initialization, or per-thread setup logic.
 
 ---
 
@@ -160,12 +154,12 @@ system::spawn_timer(t);
 
 ## Summary
 
-| Function                          | Purpose                                              | Context          |
-|-----------------------------------|------------------------------------------------------|------------------|
-| `sleep_for(duration)`             | Suspend coroutine for the specified time             | Coroutine        |
-| `co_spawn(f)`                     | Schedule coroutine in global task queue              | Runtime running  |
-| `co_spawn_static(f, threadIndex)` | Queue coroutine for a specific thread before startup | Pre-runtime      |
-| `spawn_timer(timer)`              | Register custom timer for execution                  | Timer management |
+| Function                          | Purpose                                  | Context          |
+|-----------------------------------|------------------------------------------|------------------|
+| `sleep_for(duration)`             | Suspend coroutine for the specified time | Coroutine        |
+| `co_spawn(f)`                     | Schedule coroutine in global task queue  | Runtime running  |
+| `co_spawn_static(f, threadIndex)` | Queue coroutine for a specific thread    | Pre-runtime      |
+| `spawn_timer(timer)`              | Register custom timer for execution      | Timer management |
 
 These primitives form the low-level foundation of **uvent’s coroutine runtime**, allowing safe, event-driven execution
 and timed suspension within the thread pool.

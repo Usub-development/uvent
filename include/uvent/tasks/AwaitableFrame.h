@@ -56,16 +56,18 @@ namespace usub::uvent {
 
             void push_frame_to_be_destroyed();
 
-            int get_thread_id() const { return this->t_id; }
+            [[nodiscard]] int get_thread_id() const { return this->t_id_; }
 
-            int get_thread_id() { return this->t_id; }
+            [[nodiscard]] int get_thread_id() { return this->t_id_; }
+
+            void set_thread_id(int t_id) { this->t_id_ = t_id; }
 
         protected:
             std::exception_ptr exception_{nullptr};
             std::coroutine_handle<> coro_{nullptr};
             std::coroutine_handle<> prev_{nullptr};
             std::coroutine_handle<> next_{nullptr};
-            int t_id{0};
+            int t_id_{0};
         };
 
         template<class T>
