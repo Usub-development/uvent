@@ -29,7 +29,7 @@ namespace usub::uvent::system
     {
         inline std::unique_ptr<thread::TLSRegistry> tls_registry{nullptr};
         extern std::atomic<int> thread_count;
-    }
+    } // namespace global::detail
 
     /// \brief Variables used internally within the system.
     /// \attention **Do not attempt to modify variables inside directly** unless explicitly instructed in the
@@ -118,17 +118,22 @@ namespace usub::uvent::system
     }
 
     /**
-     * @brief Enqueues a coroutine into the inbox of a specific thread before the event loop starts.
+     * @brief Enqueues a coroutine into the inbox of a specific thread.
      *
-     * Registers a coroutine for execution in the context of the given thread prior to system startup.
+     * Registers a coroutine for execution in the context of the given thread.
      * The coroutine handle is placed into the target thread’s inbox queue.
      *
+     * This function is safe to call at any time (both before and after the event loop starts).
+     * If the target thread/event-loop is already running, the task will be picked up by the runtime
+     * according to the inbox processing rules of that thread.
+     *
      * @tparam F Type providing `get_promise()` returning an optional-like pointer to a promise.
+     *           The promise must provide `get_coroutine_handle()`.
      * @param f Coroutine function/object to be enqueued.
      * @param threadIndex Index of the target thread whose inbox receives the coroutine.
      *
-     * @note This function does not validate that the event loop is not started. The caller must ensure
-     *       it is used only before global event loop initialization. Use `co_spawn()` after startup.
+     * @warning This function stores only the coroutine handle; it does not extend coroutine lifetime.
+     *          The coroutine must remain valid until executed/destroyed by the runtime.
      */
     template <typename F>
     void co_spawn_static(F&& f, int threadIndex)
@@ -139,22 +144,104 @@ namespace usub::uvent::system
     }
 
     /**
-     * @brief Enqueues an existing coroutine handle into the inbox of a specific thread before the event loop starts.
+     * @brief Enqueues an existing coroutine handle into the inbox of a specific thread.
      *
      * Places the provided coroutine handle into the target thread’s inbox queue for later execution.
+     *
+     * This function is safe to call at any time (both before and after the event loop starts).
+     * If the target thread/event-loop is already running, the task will be picked up by the runtime
+     * according to the inbox processing rules of that thread.
      *
      * @param h Coroutine handle to be enqueued.
      * @param threadIndex Index of the target thread whose inbox receives the coroutine.
      *
-     * @note This function does not validate that the event loop is not started. The caller must ensure
-     *       it is used only before global event loop initialization. Use `co_spawn()` after startup.
-     *
-     * @warning This function does not take ownership of the coroutine lifetime beyond storing the handle.
+     * @warning This function stores only the coroutine handle; it does not extend coroutine lifetime.
      *          The coroutine must remain valid until executed/destroyed by the runtime.
      */
     inline void co_spawn_static(std::coroutine_handle<> h, int threadIndex)
     {
         global::detail::tls_registry->getStorage(threadIndex)->push_task_inbox(h);
+    }
+
+    /**
+     * @brief Enqueues a coroutine into the inbox of a specific thread, optionally setting thread id in the promise.
+     *
+     * Registers a coroutine for execution in the context of the given thread.
+     * The coroutine handle is placed into the target thread’s inbox queue.
+     *
+     * This function is safe to call at any time (both before and after the event loop starts).
+     * If the target thread/event-loop is already running, the task will be picked up by the runtime
+     * according to the inbox processing rules of that thread.
+     *
+     * @tparam F Type providing `get_promise()`.
+     * @tparam is_thread_id_set Controls whether the coroutine promise gets `threadIndex` written into it.
+     *         - `true`: the coroutine promise is treated as `detail::AwaitableFrameBase` and
+     *           `promise().set_thread_id(threadIndex)` is called before enqueue.
+     *           This requires that `F` is a coroutine whose promise type is compatible with
+     *           `detail::AwaitableFrameBase` (i.e. `from_promise(f.get_promise())` is valid and the
+     *           promise implements `set_thread_id(int)`).
+     *         - `false`: no promise mutation is performed; the handle is obtained via
+     *           `get_promise()` (optional-like) and `promise->get_coroutine_handle()`.
+     *
+     * @param f Coroutine function/object to be enqueued.
+     * @param threadIndex Index of the target thread whose inbox receives the coroutine.
+     *
+     * @warning This function stores only the coroutine handle; it does not extend coroutine lifetime.
+     *          The coroutine must remain valid until executed/destroyed by the runtime.
+     */
+    template <typename F, bool is_thread_id_set>
+    void co_spawn_static(F&& f, int threadIndex)
+    {
+        if constexpr (is_thread_id_set)
+        {
+            auto handle = std::coroutine_handle<detail::AwaitableFrameBase>::from_promise(f.get_promise());
+            handle.promise().set_thread_id(threadIndex);
+            if (handle)
+                global::detail::tls_registry->getStorage(threadIndex)->push_task_inbox(handle);
+        }
+        else if (auto promise = f.get_promise(); promise)
+            global::detail::tls_registry->getStorage(threadIndex)->push_task_inbox(promise->get_coroutine_handle());
+    }
+
+    /**
+     * @brief Enqueues an existing coroutine handle into the inbox of a specific thread,
+     *        optionally setting thread id in the promise.
+     *
+     * Places the provided coroutine handle into the target thread’s inbox queue for later execution.
+     *
+     * This function is safe to call at any time (both before and after the event loop starts).
+     * If the target thread/event-loop is already running, the task will be picked up by the runtime
+     * according to the inbox processing rules of that thread.
+     *
+     * @tparam is_thread_id_set Controls whether the coroutine promise gets `threadIndex` written into it.
+     *         - `true`: `h` is assumed to reference a coroutine whose promise type is compatible with
+     *           `detail::AwaitableFrameBase` and implements `set_thread_id(int)`. The function will
+     *           reinterpret the handle address as `std::coroutine_handle<detail::AwaitableFrameBase>`
+     *           and call `promise().set_thread_id(threadIndex)`.
+     *         - `false`: no promise mutation is performed; `h` is enqueued as-is.
+     *
+     * @param h Coroutine handle to be enqueued.
+     * @param threadIndex Index of the target thread whose inbox receives the coroutine.
+     *
+     * @warning If `is_thread_id_set == true` and `h` does not actually refer to a coroutine with a
+     *          compatible promise type, behavior is undefined.
+     *
+     * @warning This function stores only the coroutine handle; it does not extend coroutine lifetime.
+     *          The coroutine must remain valid until executed/destroyed by the runtime.
+     */
+    template <bool is_thread_id_set>
+    inline void co_spawn_static(std::coroutine_handle<> h, int threadIndex)
+    {
+        global::detail::tls_registry->getStorage(threadIndex)->push_task_inbox(h);
+        if constexpr (is_thread_id_set)
+        {
+            auto handle = std::coroutine_handle<detail::AwaitableFrameBase>::from_address(h.address());
+            handle.promise().set_thread_id(threadIndex);
+            if (handle)
+                global::detail::tls_registry->getStorage(threadIndex)->push_task_inbox(handle);
+        }
+        else
+            global::detail::tls_registry->getStorage(threadIndex)->push_task_inbox(h);
     }
 
     /**

@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <coroutine>
+#include "uvent/system/SystemContext.h"
 
 namespace usub::uvent::sync
 {
@@ -24,9 +25,7 @@ namespace usub::uvent::sync
         CancelState* s_{};
 
     public:
-        explicit CancellationToken(CancelState* s = nullptr) noexcept : s_(s)
-        {
-        }
+        explicit CancellationToken(CancelState* s = nullptr) noexcept : s_(s) {}
 
         bool stop_requested() const noexcept { return this->s_ && this->s_->requested.load(std::memory_order_acquire); }
 
@@ -51,9 +50,7 @@ namespace usub::uvent::sync
                 return true;
             }
 
-            void await_resume() noexcept
-            {
-            }
+            void await_resume() noexcept {}
         };
 
         Awaiter on_cancel() const noexcept { return Awaiter{this->s_}; }
@@ -76,10 +73,13 @@ namespace usub::uvent::sync
             {
                 auto* n = list;
                 list = list->next;
-                n->h.resume();
+                system::co_spawn_static(n->h,
+                                        std::coroutine_handle<detail::AwaitableFrameBase>::from_address(n->h.address())
+                                            .promise()
+                                            .get_thread_id());
             }
         }
     };
-}
+} // namespace usub::uvent::sync
 
 #endif

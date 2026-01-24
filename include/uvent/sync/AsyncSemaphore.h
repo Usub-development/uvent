@@ -4,6 +4,7 @@
 #include <atomic>
 #include <coroutine>
 #include <cstdint>
+#include "uvent/system/SystemContext.h"
 
 namespace usub::uvent::sync
 {
@@ -18,12 +19,16 @@ namespace usub::uvent::sync
         std::atomic<int32_t> count_;
         std::atomic<WaitNode*> head_{nullptr};
 
-        static void resume_one(WaitNode* n) noexcept { n->h.resume(); }
+        static void resume_one(WaitNode* n) noexcept
+        {
+            system::co_spawn_static(n->h,
+                                    std::coroutine_handle<detail::AwaitableFrameBase>::from_address(n->h.address())
+                                        .promise()
+                                        .get_thread_id());
+        }
 
     public:
-        explicit AsyncSemaphore(int32_t initial) noexcept : count_(initial)
-        {
-        }
+        explicit AsyncSemaphore(int32_t initial) noexcept : count_(initial) {}
 
         struct AcquireAwaiter
         {
@@ -73,8 +78,8 @@ namespace usub::uvent::sync
                                 }
                                 else
                                 {
-                                    this->self->head_.compare_exchange_strong(
-                                        cur, nxt, std::memory_order_acq_rel, std::memory_order_relaxed);
+                                    this->self->head_.compare_exchange_strong(cur, nxt, std::memory_order_acq_rel,
+                                                                              std::memory_order_relaxed);
                                 }
                                 return false;
                             }
@@ -87,9 +92,7 @@ namespace usub::uvent::sync
                 return true;
             }
 
-            void await_resume() noexcept
-            {
-            }
+            void await_resume() noexcept {}
         };
 
         AcquireAwaiter acquire() noexcept { return AcquireAwaiter{this}; }
@@ -126,6 +129,6 @@ namespace usub::uvent::sync
             }
         }
     };
-}
+} // namespace usub::uvent::sync
 
 #endif

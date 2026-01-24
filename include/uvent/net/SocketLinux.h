@@ -127,7 +127,7 @@ namespace usub::uvent::net
          * Waits for EPOLLIN event and reads up to max_read_size bytes into the given buffer.
          */
         [[nodiscard]] task::Awaitable<ssize_t, uvent::detail::AwaitableIOFrame<ssize_t>>
-        async_read(uint8_t* buffer, size_t max_read_size)
+        async_read(uint8_t* dst, size_t max_read_size)
             requires((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP));
 
         /**

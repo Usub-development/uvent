@@ -4,6 +4,7 @@
 #include <atomic>
 #include <coroutine>
 #include <cstdint>
+#include "uvent/system/SystemContext.h"
 
 namespace usub::uvent::sync
 {
@@ -25,7 +26,13 @@ namespace usub::uvent::sync
         std::atomic<bool> set_{false};
         std::atomic<WaitNode*> head_{nullptr};
 
-        static void resume_one(WaitNode* n) noexcept { n->h.resume(); }
+        static void resume_one(WaitNode* n) noexcept
+        {
+            system::co_spawn_static(n->h,
+                        std::coroutine_handle<detail::AwaitableFrameBase>::from_address(n->h.address())
+                            .promise()
+                            .get_thread_id());
+        }
 
     public:
         explicit AsyncEvent(Reset r = Reset::Auto, bool initially_set = false) noexcept :

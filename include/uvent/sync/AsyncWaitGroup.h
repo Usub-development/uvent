@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <coroutine>
+#include "uvent/system/SystemContext.h"
 
 namespace usub::uvent::sync
 {
@@ -17,7 +18,13 @@ namespace usub::uvent::sync
         std::atomic<int> cnt_{0};
         std::atomic<WaitNode*> head_{nullptr};
 
-        static void resume_one(WaitNode* n) noexcept { n->h.resume(); }
+        static void resume_one(WaitNode* n) noexcept
+        {
+            system::co_spawn_static(n->h,
+                                    std::coroutine_handle<detail::AwaitableFrameBase>::from_address(n->h.address())
+                                        .promise()
+                                        .get_thread_id());
+        }
 
     public:
         void add(int n) noexcept { this->cnt_.fetch_add(n, std::memory_order_relaxed); }
@@ -58,13 +65,11 @@ namespace usub::uvent::sync
                 return true;
             }
 
-            void await_resume() noexcept
-            {
-            }
+            void await_resume() noexcept {}
         };
 
         Awaiter wait() noexcept { return Awaiter{this}; }
     };
-}
+} // namespace usub::uvent::sync
 
 #endif
