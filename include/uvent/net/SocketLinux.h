@@ -260,10 +260,10 @@ namespace usub::uvent::net
         [[nodiscard]] utils::net::IPV get_client_ipv() const
             requires(p == Proto::TCP && r == Role::ACTIVE);
 
+        void remove();
+
     protected:
         void destroy() noexcept override;
-
-        void remove();
 
     private:
         size_t send_aux(uint8_t* buf, size_t size);
