@@ -214,6 +214,11 @@ namespace usub::uvent::core
         this->lock.release();
     }
 
+    void IOUringPoller::deregisterEvent(net::SocketHeader* header) const
+    {
+
+    }
+
     void IOUringPoller::lock_poll(int timeout_ms)
     {
         this->lock.acquire();

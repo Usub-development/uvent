@@ -192,6 +192,10 @@ namespace usub::uvent::core
         this->poll(timeout);
         this->unlock();
     }
+    void EPoller::deregisterEvent(net::SocketHeader* header) const
+    {
+        epoll_ctl(this->poll_fd, EPOLL_CTL_DEL, header->fd, nullptr);
+    }
 
     int EPoller::get_poll_fd()
     {

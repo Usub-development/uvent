@@ -3,15 +3,14 @@
 //
 
 #include "uvent/poll/KPoller.h"
+#include <cerrno>
+#include "uvent/net/Socket.h"
 #include "uvent/system/Settings.h"
 #include "uvent/system/SystemContext.h"
-#include "uvent/net/Socket.h"
-#include <cerrno>
 
 namespace usub::uvent::core
 {
-    KQueuePoller::KQueuePoller(utils::TimerWheel& wheel) :
-        wheel(wheel)
+    KQueuePoller::KQueuePoller(utils::TimerWheel& wheel) : wheel(wheel)
     {
         this->poll_fd = ::kqueue();
         if (this->poll_fd == -1)
@@ -91,9 +90,7 @@ namespace usub::uvent::core
         system::this_thread::detail::g_qsbr.enter();
 #endif
 
-        int n = kevent(this->poll_fd,
-                       nullptr, 0,
-                       this->events.data(), static_cast<int>(this->events.size()),
+        int n = kevent(this->poll_fd, nullptr, 0, this->events.data(), static_cast<int>(this->events.size()),
                        (timeout_ms < 0 ? nullptr : &ts));
 
 #if UVENT_DEBUG
@@ -109,7 +106,8 @@ namespace usub::uvent::core
                 continue;
 
 #ifndef UVENT_ENABLE_REUSEADDR
-            if (sock->is_busy_now() || sock->is_disconnected_now()) continue;
+            if (sock->is_busy_now() || sock->is_disconnected_now())
+                continue;
 #endif
 
             bool is_err = (ev.flags & EV_ERROR) && ev.data != 0;
@@ -121,8 +119,8 @@ namespace usub::uvent::core
                 // помечаем как разорванный, но НЕ закрываем fd.
                 sock->mark_disconnected();
 #if UVENT_DEBUG
-                spdlog::debug("Socket hup/err fd={}, eof={}, err={}, data={}",
-                              sock->fd, is_eof, is_err, (long long)ev.data);
+                spdlog::debug("Socket hup/err fd={}, eof={}, err={}, data={}", sock->fd, is_eof, is_err,
+                              (long long)ev.data);
 #endif
             }
 
@@ -144,8 +142,7 @@ namespace usub::uvent::core
 #if UVENT_DEBUG
                 spdlog::info("Socket #{} triggered as OUT", sock->fd);
 #endif
-                if (!(sock->socket_info &
-                    static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING)))
+                if (!(sock->socket_info & static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING)))
                 {
                     auto c = std::exchange(sock->second, nullptr);
                     system::this_thread::detail::q->enqueue(c);
@@ -155,12 +152,10 @@ namespace usub::uvent::core
                     int err = 0;
                     socklen_t len = sizeof(err);
                     getsockopt(sock->fd, SOL_SOCKET, SO_ERROR, &err, &len);
-                    sock->socket_info &=
-                        ~static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING);
+                    sock->socket_info &= ~static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING);
                     if (err != 0)
                     {
-                        sock->socket_info |=
-                            static_cast<uint8_t>(net::AdditionalState::CONNECTION_FAILED);
+                        sock->socket_info |= static_cast<uint8_t>(net::AdditionalState::CONNECTION_FAILED);
 #if UVENT_DEBUG
                         spdlog::debug("Connect failed on fd={} err={}", sock->fd, err);
 #endif
@@ -208,8 +203,13 @@ namespace usub::uvent::core
         this->unlock();
     }
 
-    int KQueuePoller::get_poll_fd() const
+    void IOUringPoller::deregisterEvent(net::SocketHeader* header) const
     {
-        return this->poll_fd;
+        EV_SET(&ev, header->fd, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
+        kevent(this->poll_fd, &ev, 1, nullptr, 0, nullptr);
+        EV_SET(&ev, header->fd, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
+        kevent(this->poll_fd, &ev, 1, nullptr, 0, nullptr);
     }
+
+    int KQueuePoller::get_poll_fd() const { return this->poll_fd; }
 } // namespace usub::uvent::core

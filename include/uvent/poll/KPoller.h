@@ -45,6 +45,7 @@ namespace usub::uvent::core
 
         int get_poll_fd() const;
 
+        void deregisterEvent(net::SocketHeader* header) const;
     private:
         inline void enable_read(net::SocketHeader* h, bool enable, bool clear_edge) const
         {

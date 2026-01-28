@@ -37,6 +37,8 @@ namespace usub::uvent::core
 
         void removeEvent(net::SocketHeader* header, OperationType op);
 
+        void deregisterEvent(net::SocketHeader* header) const;
+
         bool poll(int timeout_ms);
 
         bool try_lock();

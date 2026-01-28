@@ -291,6 +291,10 @@ namespace usub::uvent::core
         this->lock.release();
     }
 
+    void IocpPoller::deregisterEvent(net::SocketHeader* header) const
+    {
+    }
+
     void IocpPoller::lock_poll(int timeout_ms)
     {
 #if UVENT_DEBUG

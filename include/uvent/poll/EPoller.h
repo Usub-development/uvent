@@ -40,6 +40,8 @@ namespace usub::uvent::core
 
         void lock_poll(int timeout);
 
+        void deregisterEvent(net::SocketHeader* header) const;
+
         int get_poll_fd();
 
     private:

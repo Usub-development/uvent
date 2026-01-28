@@ -94,6 +94,8 @@ namespace usub::uvent::core
         void submit_sendfile(detail::SendFileOp* op, int out_fd);
         void submit_connect(detail::ConnectOp* op, int fd);
 
+        void deregisterEvent(net::SocketHeader* header) const;
+
     private:
         void handle_cqe(struct io_uring_cqe* cqe);
 
