@@ -42,6 +42,8 @@ namespace usub::uvent::system
 
         ~Thread() = default;
 
+        void run_current();
+
         bool stop();
 
     private:

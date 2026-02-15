@@ -17,12 +17,7 @@ namespace usub::uvent::system {
         this->tmp_sockets_.resize(settings::max_pre_allocated_tmp_sockets_items);
         this->tmp_coroutines_.resize(settings::max_pre_allocated_tmp_coroutines_items);
         if (tlm == NEW)
-            this->thread_ = std::jthread(
-                [this](std::stop_token token) { this->threadFunction(token); });
-        else {
-            auto token = this->stop_source_.get_token();
-            this->threadFunction(token);
-        }
+            this->thread_ = std::jthread([this](std::stop_token token) { this->threadFunction(token); });
     }
 
     void Thread::threadFunction(std::stop_token token) {
@@ -131,6 +126,7 @@ namespace usub::uvent::system {
 #ifndef UVENT_ENABLE_REUSEADDR
         local_g_qsbr.detach_current_thread();
 #endif
+        std::cout << "stopped: " << (this->tlm == NEW ? std::string("NEW") : std::string("CURRENT")) << std::endl;
     }
 
     void Thread::processInboxQueue() {
@@ -142,9 +138,16 @@ namespace usub::uvent::system {
         this->thread_local_storage_->is_added_new_.store(false, std::memory_order_seq_cst);
     }
 
+    void Thread::run_current() {
+        threadFunction(this->stop_source_.get_token());
+    }
+
     bool Thread::stop() {
-        if (this->tlm == NEW)
-            return this->thread_.request_stop();
-        return this->stop_source_.request_stop();
+        bool a = false;
+        if (this->thread_.joinable())
+            a = this->thread_.request_stop();
+
+        bool b = this->stop_source_.request_stop();
+        return a || b;
     }
 }

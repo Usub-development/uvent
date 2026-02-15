@@ -9,28 +9,35 @@ namespace usub::uvent {
         this->barrier = new std::barrier<>(size);
         system::global::detail::tls_registry = std::make_unique<thread::TLSRegistry>(this->size_);
         for (int i = 0; i < size - 1; i++)
-            this->threads.push_back(new system::Thread(this->barrier, i, system::global::detail::tls_registry->getStorage(i), system::NEW));
+            this->threads.push_back(new system::Thread(this->barrier, i,
+                                                       system::global::detail::tls_registry->getStorage(i),
+                                                       system::NEW));
     }
 
     void ThreadPool::stop() {
-        for (auto &thread: this->threads) {
+        for (auto &thread: this->threads)
             thread->stop();
-            delete thread;
-        }
     }
 
     void ThreadPool::addThread(system::ThreadLaunchMode tlm) {
-        this->threads.push_back(
-                new system::Thread(this->barrier, static_cast<int>(this->threads.size()), system::global::detail::tls_registry->getStorage(this->threads.size()), tlm));
+        const int index = static_cast<int>(threads.size());
+        std::cout << "index: " << index << std::endl;
+        auto *t = new system::Thread(barrier, index,
+                                     system::global::detail::tls_registry->getStorage(this->threads.size()), tlm);
+        threads.push_back(t);
+
+        if (tlm == system::CURRENT)
+            t->run_current();
     }
 
-    const thread::TLSRegistry* ThreadPool::getTLSRegistry()
-    {
+    const thread::TLSRegistry *ThreadPool::getTLSRegistry() {
         return system::global::detail::tls_registry.get();
     }
 
     ThreadPool::~ThreadPool() {
         this->stop();
         delete this->barrier;
+        for (auto &thread: this->threads)
+            delete thread;
     }
 }
