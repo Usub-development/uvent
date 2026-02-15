@@ -203,8 +203,9 @@ namespace usub::uvent::core
         this->unlock();
     }
 
-    void IOUringPoller::deregisterEvent(net::SocketHeader* header) const
+    void KQueuePoller::deregisterEvent(net::SocketHeader* header) const
     {
+        struct kevent ev{};
         EV_SET(&ev, header->fd, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
         kevent(this->poll_fd, &ev, 1, nullptr, 0, nullptr);
         EV_SET(&ev, header->fd, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);

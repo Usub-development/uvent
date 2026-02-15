@@ -10,6 +10,7 @@
 #include <chrono>
 #include <barrier>
 #include <functional>
+#include <stop_token>
 #include "uvent/system/Defines.h"
 #include "uvent/system/SystemContext.h"
 #include "uvent/base/Predefines.h"
@@ -44,7 +45,7 @@ namespace usub::uvent::system
         bool stop();
 
     private:
-        void threadFunction(std::stop_token& token);
+        void threadFunction(std::stop_token token);
 
         void processInboxQueue();
 
@@ -52,7 +53,7 @@ namespace usub::uvent::system
         int index_;
         std::jthread thread_;
         std::barrier<>* barrier;
-        std::stop_token stop_token{};
+        std::stop_source stop_source_;
         ThreadLaunchMode tlm{NEW};
         std::vector<std::coroutine_handle<>> tmp_tasks_;
         std::vector<net::SocketHeader*> tmp_sockets_;
