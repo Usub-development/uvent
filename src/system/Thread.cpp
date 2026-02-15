@@ -126,7 +126,6 @@ namespace usub::uvent::system {
 #ifndef UVENT_ENABLE_REUSEADDR
         local_g_qsbr.detach_current_thread();
 #endif
-        std::cout << "stopped: " << (this->tlm == NEW ? std::string("NEW") : std::string("CURRENT")) << std::endl;
     }
 
     void Thread::processInboxQueue() {

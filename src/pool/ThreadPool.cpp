@@ -21,7 +21,6 @@ namespace usub::uvent {
 
     void ThreadPool::addThread(system::ThreadLaunchMode tlm) {
         const int index = static_cast<int>(threads.size());
-        std::cout << "index: " << index << std::endl;
         auto *t = new system::Thread(barrier, index,
                                      system::global::detail::tls_registry->getStorage(this->threads.size()), tlm);
         threads.push_back(t);
