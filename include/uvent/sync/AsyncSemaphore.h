@@ -22,19 +22,11 @@ namespace usub::uvent::sync
         {
             std::coroutine_handle<> h{};
             WaitNode* next{};
-            int thread_id{};
             std::atomic<NodeState> st{NodeState::Waiting};
         };
 
         std::atomic<int32_t> count_;
         std::atomic<WaitNode*> head_{nullptr};
-
-        static int get_thread_id(std::coroutine_handle<> h) noexcept
-        {
-            return std::coroutine_handle<detail::AwaitableFrameBase>::from_address(h.address())
-                .promise()
-                .get_thread_id();
-        }
 
         void push_waiter(WaitNode* n) noexcept
         {
@@ -82,7 +74,6 @@ namespace usub::uvent::sync
             bool await_suspend(std::coroutine_handle<> h) noexcept
             {
                 this->node.h = h;
-                this->node.thread_id = get_thread_id(h);
                 this->node.st.store(NodeState::Waiting, std::memory_order_relaxed);
 
                 this->self->push_waiter(&this->node);
@@ -124,7 +115,7 @@ namespace usub::uvent::sync
                                                        std::memory_order_relaxed))
                         continue;
 
-                    system::co_spawn_static(n->h, n->thread_id);
+                    system::this_thread::detail::q->enqueue(n->h);
                     break;
                 }
             }

@@ -261,5 +261,4 @@ namespace usub::uvent::system
     inline void spawn_timer(utils::Timer* timer) { this_thread::detail::wh.addTimer(timer); }
 } // namespace usub::uvent::system
 
-
 #endif // UVENT_SYSTEMCONTEXT_H

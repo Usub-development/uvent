@@ -9,6 +9,7 @@
 #include <memory>
 #include "Awaitable.h"
 #include "uvent/utils/datastructures/queue/ConcurrentQueues.h"
+#include "uvent/utils/datastructures/queue/FastQueue.h"
 
 namespace usub::uvent::task {
     class SharedTasks {
@@ -24,6 +25,8 @@ namespace usub::uvent::task {
         bool dequeue(std::coroutine_handle<> &task);
 
         bool dequeue(std::coroutine_handle<> &&task);
+
+        bool dequeue_bulk(queue::single_thread::Queue<std::coroutine_handle<>>* q);
 
         std::size_t getSize();
 

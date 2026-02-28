@@ -10,8 +10,7 @@
 
 namespace usub::uvent::core
 {
-    EPoller::EPoller(utils::TimerWheel& wheel) :
-        wheel(wheel)
+    EPoller::EPoller(utils::TimerWheel& wheel) : wheel(wheel)
     {
         this->poll_fd = epoll_create1(0);
         sigemptyset(&this->sigmask);
@@ -26,9 +25,8 @@ namespace usub::uvent::core
         event.events = (EPOLLIN | EPOLLOUT | EPOLLET);
 
 #if UVENT_DEBUG
-        spdlog::info("Socket added: fd={} et={} in={} out={}", header->fd,
-                     bool(event.events & EPOLLET), bool(event.events & EPOLLIN),
-                     bool(event.events & EPOLLOUT));
+        spdlog::info("Socket added: fd={} et={} in={} out={}", header->fd, bool(event.events & EPOLLET),
+                     bool(event.events & EPOLLIN), bool(event.events & EPOLLOUT));
 #endif
 
         epoll_ctl(this->poll_fd, EPOLL_CTL_ADD, header->fd, &event);
@@ -45,7 +43,7 @@ namespace usub::uvent::core
             event.events = (EPOLLIN | EPOLLOUT | EPOLLET);
         else
         {
-            event.events = EPOLLIN;
+            event.events = EPOLLIN | EPOLLET;
 #ifndef UVENT_ENABLE_REUSEADDR
             if (header->is_tcp() && header->is_passive())
                 system::this_thread::detail::is_started.store(true, std::memory_order_relaxed);
@@ -56,20 +54,19 @@ namespace usub::uvent::core
         }
 
 #if UVENT_DEBUG
-        spdlog::info("Updating socket #{} READ: {}, WRITE: {}", header->fd,
-                     static_cast<bool>(event.events & EPOLLIN),
+        spdlog::info("Updating socket #{} READ: {}, WRITE: {}", header->fd, static_cast<bool>(event.events & EPOLLIN),
                      static_cast<bool>(event.events & EPOLLOUT));
-        spdlog::info("Socket #{} updated with state: {}, read state: {}, write state: {}",
-                     header->fd, static_cast<int>(initialState), header->is_reading_now(),
-                     header->is_writing_now());
+        spdlog::info("Socket #{} updated with state: {}, read state: {}, write state: {}", header->fd,
+                     static_cast<int>(initialState), header->is_reading_now(), header->is_writing_now());
 #endif
 
         int result = epoll_ctl(this->poll_fd, EPOLL_CTL_MOD, header->fd, &event);
 #if UVENT_DEBUG
-        if (result < 0) {
-            if (errno == ENOENT || errno == EBADF || errno == ENOTSOCK) {
-                spdlog::info("Socket #{} is closed or invalid, ignoring epoll_ctl modification.",
-                             header->fd);
+        if (result < 0)
+        {
+            if (errno == ENOENT || errno == EBADF || errno == ENOTSOCK)
+            {
+                spdlog::info("Socket #{} is closed or invalid, ignoring epoll_ctl modification.", header->fd);
                 return;
             }
             throw std::system_error(errno, std::generic_category(),
@@ -92,8 +89,8 @@ namespace usub::uvent::core
 
     bool EPoller::poll(int timeout)
     {
-        int n = epoll_pwait(this->poll_fd, this->events.data(),
-                            static_cast<int>(this->events.size()), timeout, &this->sigmask);
+        int n = epoll_pwait(this->poll_fd, this->events.data(), static_cast<int>(this->events.size()), timeout,
+                            &this->sigmask);
 #ifndef UVENT_ENABLE_REUSEADDR
         system::this_thread::detail::g_qsbr.enter();
 #endif
@@ -106,10 +103,10 @@ namespace usub::uvent::core
             auto& event = this->events[i];
             auto* sock = static_cast<net::SocketHeader*>(event.data.ptr);
 #ifndef UVENT_ENABLE_REUSEADDR
-            if (sock->is_busy_now() || sock->is_disconnected_now()) continue;
+            if (sock->is_busy_now() || sock->is_disconnected_now())
+                continue;
 #endif
-            bool hup = !(sock->is_tcp() && sock->is_passive()) &&
-                (event.events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR));
+            bool hup = !(sock->is_tcp() && sock->is_passive()) && (event.events & (EPOLLHUP | EPOLLRDHUP | EPOLLERR));
             if (hup)
                 sock->mark_disconnected();
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -122,16 +119,13 @@ namespace usub::uvent::core
 #endif
                 auto c = std::exchange(sock->first, nullptr);
                 system::this_thread::detail::q->enqueue(c);
-                if (!(event.events & EPOLLOUT))
-                    continue;
             }
             if (event.events & EPOLLOUT && sock->second)
             {
 #if UVENT_DEBUG
                 spdlog::info("Socket #{} triggered as OUT", sock->fd);
 #endif
-                if (!(sock->socket_info &
-                    static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING)))
+                if (!(sock->socket_info & static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING)))
                 {
                     auto c = std::exchange(sock->second, nullptr);
                     system::this_thread::detail::q->enqueue(c);
@@ -141,11 +135,9 @@ namespace usub::uvent::core
                     int err = 0;
                     socklen_t len = sizeof(err);
                     getsockopt(sock->fd, SOL_SOCKET, SO_ERROR, &err, &len);
-                    sock->socket_info &=
-                        ~static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING);
+                    sock->socket_info &= ~static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING);
                     if (err != 0)
-                        sock->socket_info |=
-                            static_cast<uint8_t>(net::AdditionalState::CONNECTION_FAILED);
+                        sock->socket_info |= static_cast<uint8_t>(net::AdditionalState::CONNECTION_FAILED);
                     else
                     {
                         auto c = std::exchange(sock->second, nullptr);
@@ -197,8 +189,5 @@ namespace usub::uvent::core
         epoll_ctl(this->poll_fd, EPOLL_CTL_DEL, header->fd, nullptr);
     }
 
-    int EPoller::get_poll_fd()
-    {
-        return this->poll_fd;
-    }
+    int EPoller::get_poll_fd() { return this->poll_fd; }
 } // namespace usub::uvent::core

@@ -5,11 +5,11 @@
 #ifndef FASTQUEUE_FASTQUEUE_H
 #define FASTQUEUE_FASTQUEUE_H
 
-#include <queue>
+#include <cassert>
 #include <chrono>
 #include <cstdlib>
-#include <cassert>
 #include <cstring>
+#include <queue>
 #include <utility>
 #include "uvent/utils/intrinsincs/optimizations.h"
 
@@ -26,7 +26,8 @@ namespace usub::queue::single_thread
         bool enqueue(T&& item) noexcept
         {
             size_t next_tail = (this->tail + 1) & (Capacity - 1);
-            if (next_tail == this->head) return false;
+            if (next_tail == this->head)
+                return false;
 
             prefetch_for_write(&this->buffer[next_tail]);
             this->buffer[this->tail] = std::forward<T>(item);
@@ -36,7 +37,8 @@ namespace usub::queue::single_thread
 
         bool dequeue(T& item) noexcept
         {
-            if (this->head == this->tail) return false;
+            if (this->head == this->tail)
+                return false;
 
             prefetch_for_read(&this->buffer[(this->head + 1) & (Capacity - 1)]);
             item = this->buffer[this->head];
@@ -68,28 +70,119 @@ namespace usub::queue::single_thread
         template <typename U>
         void enqueue(U&& item)
         {
-            if (this->tail - this->head == this->capacity) grow();
+            if (this->tail - this->head == this->capacity)
+                grow();
 
             size_t idx = this->tail & this->mask;
             prefetch_for_write(&this->buffer[(idx + 4) & this->mask]);
-            new(&this->buffer[idx]) T(std::forward<U>(item));
+            new (&this->buffer[idx]) T(std::forward<U>(item));
             ++this->tail;
         }
 
         template <typename... Args>
         void emplace(Args&&... args)
         {
-            if (this->tail - this->head == this->capacity) grow();
+            if (this->tail - this->head == this->capacity)
+                grow();
 
             size_t idx = this->tail & this->mask;
             prefetch_for_write(&this->buffer[(idx + 4) & this->mask]);
-            new(&this->buffer[idx]) T(std::forward<Args>(args)...);
+            new (&this->buffer[idx]) T(std::forward<Args>(args)...);
             ++this->tail;
+        }
+
+        template <typename U>
+        size_t enqueue_bulk(U* src, size_t count)
+        {
+            if (count == 0)
+                return 0;
+
+            const size_t sz = this->tail - this->head;
+            const size_t need = sz + count;
+            while (need > this->capacity)
+                grow();
+
+            const size_t start = this->tail;
+            const size_t end = this->tail + count;
+
+            for (size_t pos = start; pos < end; ++pos)
+            {
+                const size_t i = pos - start;
+                const size_t look = i + k_prefetch_ahead;
+                if (look < count)
+                {
+                    prefetch_for_write(&this->buffer[(pos + k_prefetch_ahead) & this->mask]);
+                    prefetch_for_read(&src[look]);
+                }
+            }
+
+            const size_t s = start & this->mask;
+            const size_t e = end & this->mask;
+
+            if constexpr (std::is_trivially_copyable_v<T> && std::is_same_v<std::remove_cv_t<U>, T>)
+            {
+                if (s < e)
+                {
+                    std::memcpy(&this->buffer[s], src, sizeof(T) * count);
+                }
+                else
+                {
+                    const size_t first_part = this->capacity - s;
+                    std::memcpy(&this->buffer[s], src, sizeof(T) * first_part);
+                    std::memcpy(&this->buffer[0], src + first_part, sizeof(T) * (count - first_part));
+                }
+            }
+            else
+            {
+                for (size_t i = 0; i < count; ++i)
+                {
+                    const size_t idx = (start + i) & this->mask;
+                    new (&this->buffer[idx]) T(std::forward<U>(src[i]));
+                }
+            }
+
+            this->tail = end;
+            return count;
+        }
+
+        template <typename... Arrays>
+        size_t enqueue_bulk_emplace(size_t count, Arrays*... arrays)
+        {
+            if (count == 0)
+                return 0;
+
+            const size_t sz = this->tail - this->head;
+            const size_t need = sz + count;
+            while (need > this->capacity)
+                grow();
+
+            const size_t start = this->tail;
+            const size_t end = this->tail + count;
+
+            for (size_t pos = start; pos < end; ++pos)
+            {
+                const size_t i = pos - start;
+                const size_t look = i + k_prefetch_ahead;
+                if (look < count)
+                {
+                    prefetch_for_write(&this->buffer[(pos + k_prefetch_ahead) & this->mask]);
+                }
+            }
+
+            for (size_t i = 0; i < count; ++i)
+            {
+                const size_t idx = (start + i) & this->mask;
+                new (&this->buffer[idx]) T(std::forward<Arrays>(arrays[i])...);
+            }
+
+            this->tail = end;
+            return count;
         }
 
         bool dequeue(T& item)
         {
-            if (this->head == this->tail) return false;
+            if (this->head == this->tail)
+                return false;
 
             size_t idx = this->head & this->mask;
             prefetch_for_read(&this->buffer[(idx + 4) & this->mask]);
@@ -106,7 +199,8 @@ namespace usub::queue::single_thread
         size_t dequeue_bulk(T* out, size_t max_count)
         {
             size_t available = this->tail - this->head;
-            if (available == 0 || max_count == 0) return 0;
+            if (available == 0 || max_count == 0)
+                return 0;
 
             size_t count = (available < max_count) ? available : max_count;
 
@@ -170,7 +264,8 @@ namespace usub::queue::single_thread
 
         static size_t next_pow2(size_t x)
         {
-            if (x == 0) return 1;
+            if (x == 0)
+                return 1;
             --x;
             x |= x >> 1;
             x |= x >> 2;
@@ -214,7 +309,7 @@ namespace usub::queue::single_thread
             for (size_t i = 0; i < count; ++i)
             {
                 size_t src_idx = (this->head + i) & this->mask;
-                new(&new_buf[i]) T(std::move(this->buffer[src_idx]));
+                new (&new_buf[i]) T(std::move(this->buffer[src_idx]));
                 if constexpr (!std::is_trivially_destructible_v<T>)
                     this->buffer[src_idx].~T();
             }
@@ -229,7 +324,10 @@ namespace usub::queue::single_thread
 
         void normalize_if_empty() noexcept
         {
-            if (this->head == this->tail) { this->head = this->tail = 0; }
+            if (this->head == this->tail)
+            {
+                this->head = this->tail = 0;
+            }
         }
 
     private:
@@ -239,6 +337,6 @@ namespace usub::queue::single_thread
         size_t tail = 0; // монотонный
         size_t mask = 0;
     };
-}
+} // namespace usub::queue::single_thread
 
-#endif //FASTQUEUE_FASTQUEUE_H
+#endif // FASTQUEUE_FASTQUEUE_H

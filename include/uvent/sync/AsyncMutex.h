@@ -3,8 +3,8 @@
 
 #include <atomic>
 #include <coroutine>
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 
 namespace usub::uvent::sync
 {
@@ -53,6 +53,6 @@ namespace usub::uvent::sync
         Guard try_lock() noexcept;
         void unlock() noexcept;
     };
-}
+} // namespace usub::uvent::sync
 
 #endif

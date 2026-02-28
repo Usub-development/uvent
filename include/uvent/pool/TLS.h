@@ -8,8 +8,8 @@
 #include <atomic>
 #include <coroutine>
 #include <uvent/base/Predefines.h>
-#include <uvent/utils/datastructures/queue/FastQueue.h>
 #include <uvent/utils/datastructures/queue/ConcurrentQueues.h>
+#include <uvent/utils/datastructures/queue/FastQueue.h>
 
 namespace usub::uvent::thread
 {
@@ -19,10 +19,10 @@ namespace usub::uvent::thread
 
         void push_task_inbox(std::coroutine_handle<> task);
 
-        private:
+    private:
         queue::concurrent::MPMCQueue<std::coroutine_handle<>> inbox_q_;
         std::atomic_bool is_added_new_{false};
     };
-}
+} // namespace usub::uvent::thread
 
-#endif //TLS_UVENT_H
+#endif // TLS_UVENT_H

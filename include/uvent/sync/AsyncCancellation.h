@@ -33,6 +33,7 @@ namespace usub::uvent::sync
         {
             CancelState* s;
             CancelState::WaitNode node{};
+
             bool await_ready() noexcept { return this->s->requested.load(std::memory_order_acquire); }
 
             bool await_suspend(std::coroutine_handle<> h) noexcept
@@ -73,10 +74,7 @@ namespace usub::uvent::sync
             {
                 auto* n = list;
                 list = list->next;
-                system::co_spawn_static(n->h,
-                                        std::coroutine_handle<detail::AwaitableFrameBase>::from_address(n->h.address())
-                                            .promise()
-                                            .get_thread_id());
+                system::this_thread::detail::q->enqueue(n->h);
             }
         }
     };

@@ -26,17 +26,10 @@ namespace usub::uvent::sync
         std::atomic<bool> set_{false};
         std::atomic<WaitNode*> head_{nullptr};
 
-        static void resume_one(WaitNode* n) noexcept
-        {
-            system::co_spawn_static(n->h,
-                        std::coroutine_handle<detail::AwaitableFrameBase>::from_address(n->h.address())
-                            .promise()
-                            .get_thread_id());
-        }
+        static void resume_one(WaitNode* n) noexcept { system::this_thread::detail::q->enqueue(n->h); }
 
     public:
-        explicit AsyncEvent(Reset r = Reset::Auto, bool initially_set = false) noexcept :
-            reset_(r), set_(initially_set)
+        explicit AsyncEvent(Reset r = Reset::Auto, bool initially_set = false) noexcept : reset_(r), set_(initially_set)
         {
         }
 
@@ -82,9 +75,7 @@ namespace usub::uvent::sync
                 return true;
             }
 
-            void await_resume() noexcept
-            {
-            }
+            void await_resume() noexcept {}
         };
 
         WaitAwaiter wait() noexcept { return WaitAwaiter{this}; }
@@ -126,6 +117,6 @@ namespace usub::uvent::sync
                 this->set_.store(false, std::memory_order_release);
         }
     };
-}
+} // namespace usub::uvent::sync
 
 #endif
