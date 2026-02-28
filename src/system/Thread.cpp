@@ -20,8 +20,6 @@ namespace usub::uvent::system
         this->tmp_coroutines_.resize(settings::max_pre_allocated_tmp_coroutines_items);
         if (tlm == NEW)
             this->thread_ = std::jthread([this](std::stop_token token) { this->threadFunction(token); });
-        else
-            this->threadFunction(this->stop_token);
     }
 
     void Thread::threadFunction(std::stop_token token)
