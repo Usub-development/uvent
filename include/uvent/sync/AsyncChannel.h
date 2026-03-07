@@ -6,18 +6,21 @@
 #define UVENT_SYNC_ASYNC_CHANNEL_H
 
 #include <atomic>
-#include <tuple>
 #include <optional>
-#include <utility>
+#include <random>
+#include <tuple>
 #include <type_traits>
+#include <utility>
 
-#include "uvent/system/Settings.h"
 #include "uvent/sync/AsyncEvent.h"
-#include "uvent/utils/datastructures/queue/ConcurrentQueues.h"
+#include "uvent/system/Settings.h"
 #include "uvent/tasks/AwaitableFrame.h"
+#include "uvent/utils/datastructures/queue/ConcurrentQueues.h"
 
 namespace usub::uvent::sync
 {
+    inline AsyncEvent g_select_recv_event{Reset::Manual, false};
+
     template <class... Ts>
     class AsyncChannel
     {
@@ -28,19 +31,12 @@ namespace usub::uvent::sync
         using Queue = usub::queue::concurrent::MPMCQueue<value_type>;
 
         Queue queue_;
-        AsyncEvent can_recv_{Reset::Auto, false};
-        AsyncEvent can_send_{Reset::Auto, false};
+        AsyncEvent can_recv_{Reset::Manual, false};
+        AsyncEvent can_send_{Reset::Manual, false};
         std::atomic<bool> closed_{false};
 
-        friend task::Awaitable<
-            std::optional<std::pair<std::size_t, value_type>>>
-        select_recv<>(AsyncChannel&);
-
     public:
-        explicit AsyncChannel(std::size_t capacity_pow2 = 1024) :
-            queue_(capacity_pow2)
-        {
-        }
+        explicit AsyncChannel(std::size_t capacity_pow2 = 1024) : queue_(capacity_pow2) {}
 
         AsyncChannel(const AsyncChannel&) = delete;
         AsyncChannel& operator=(const AsyncChannel&) = delete;
@@ -48,10 +44,7 @@ namespace usub::uvent::sync
         AsyncChannel(AsyncChannel&&) = delete;
         AsyncChannel& operator=(AsyncChannel&&) = delete;
 
-        bool is_closed() const noexcept
-        {
-            return closed_.load(std::memory_order_acquire);
-        }
+        bool is_closed() const noexcept { return closed_.load(std::memory_order_acquire); }
 
         void close() noexcept
         {
@@ -61,24 +54,21 @@ namespace usub::uvent::sync
 
             can_recv_.set();
             can_send_.set();
-            extern AsyncEvent g_select_recv_event;
             g_select_recv_event.set();
         }
 
-        std::size_t capacity() const noexcept { return queue_.capacity(); }
-        std::size_t size_relaxed() const noexcept { return queue_.size_relaxed(); }
-        bool empty_relaxed() const noexcept { return queue_.empty_relaxed(); }
+        [[nodiscard]] std::size_t capacity() const noexcept { return queue_.capacity(); }
+        [[nodiscard]] std::size_t size_relaxed() const noexcept { return queue_.size_relaxed(); }
+        [[nodiscard]] bool empty_relaxed() const noexcept { return queue_.empty_relaxed(); }
 
         template <class... Us>
         bool try_send(Us&&... vs)
         {
-            static_assert(sizeof...(Ts) == sizeof...(Us),
-                          "try_send: argument count mismatch");
+            static_assert(sizeof...(Ts) == sizeof...(Us), "try_send: argument count mismatch");
             value_type v{std::forward<Us>(vs)...};
             if (!queue_.try_enqueue(v))
                 return false;
             can_recv_.set();
-            extern AsyncEvent g_select_recv_event;
             g_select_recv_event.set();
             return true;
         }
@@ -88,7 +78,6 @@ namespace usub::uvent::sync
             if (!queue_.try_enqueue(v))
                 return false;
             can_recv_.set();
-            extern AsyncEvent g_select_recv_event;
             g_select_recv_event.set();
             return true;
         }
@@ -98,7 +87,6 @@ namespace usub::uvent::sync
             if (!queue_.try_enqueue(std::move(v)))
                 return false;
             can_recv_.set();
-            extern AsyncEvent g_select_recv_event;
             g_select_recv_event.set();
             return true;
         }
@@ -114,8 +102,7 @@ namespace usub::uvent::sync
         template <class... Us>
         bool try_recv_into(Us&... out)
         {
-            static_assert(sizeof...(Ts) == sizeof...(Us),
-                          "try_recv_into: argument count mismatch");
+            static_assert(sizeof...(Ts) == sizeof...(Us), "try_recv_into: argument count mismatch");
             value_type tmp;
             if (!queue_.try_dequeue(tmp))
                 return false;
@@ -128,8 +115,7 @@ namespace usub::uvent::sync
         template <class... Us>
         task::Awaitable<bool> send(Us&&... vs)
         {
-            static_assert(sizeof...(Ts) == sizeof...(Us),
-                          "send: argument count mismatch");
+            static_assert(sizeof...(Ts) == sizeof...(Us), "send: argument count mismatch");
 
             value_type value{std::forward<Us>(vs)...};
 
@@ -141,13 +127,21 @@ namespace usub::uvent::sync
                 if (queue_.try_enqueue(value))
                 {
                     can_recv_.set();
-                    extern AsyncEvent g_select_recv_event;
                     g_select_recv_event.set();
                     co_return true;
                 }
 
+                can_send_.reset();
+
                 if (is_closed())
                     co_return false;
+
+                if (queue_.try_enqueue(value))
+                {
+                    can_recv_.set();
+                    g_select_recv_event.set();
+                    co_return true;
+                }
 
                 co_await can_send_.wait();
             }
@@ -163,13 +157,21 @@ namespace usub::uvent::sync
                 if (queue_.try_enqueue(v))
                 {
                     can_recv_.set();
-                    extern AsyncEvent g_select_recv_event;
                     g_select_recv_event.set();
                     co_return true;
                 }
 
+                can_send_.reset();
+
                 if (is_closed())
                     co_return false;
+
+                if (queue_.try_enqueue(v))
+                {
+                    can_recv_.set();
+                    g_select_recv_event.set();
+                    co_return true;
+                }
 
                 co_await can_send_.wait();
             }
@@ -192,25 +194,46 @@ namespace usub::uvent::sync
                     co_return std::nullopt;
                 }
 
+                can_recv_.reset();
+
+                if (queue_.try_dequeue(tmp))
+                {
+                    can_send_.set();
+                    co_return std::optional<value_type>{std::move(tmp)};
+                }
+
+                if (is_closed() && queue_.empty_relaxed())
+                {
+                    co_return std::nullopt;
+                }
+
                 co_await can_recv_.wait();
             }
         }
 
-        /**
-         * recv_into(out...)
-         *  - кладет значения сразу по ссылкам в аргументы
-         *  - false если канал закрыт и буфер пуст
-         */
         template <class... Us>
         task::Awaitable<bool> recv_into(Us&... out)
         {
-            static_assert(sizeof...(Ts) == sizeof...(Us),
-                          "recv_into: argument count mismatch");
+            static_assert(sizeof...(Ts) == sizeof...(Us), "recv_into: argument count mismatch");
 
             value_type tmp;
 
             for (;;)
             {
+                if (queue_.try_dequeue(tmp))
+                {
+                    assign_from_tuple(tmp, out...);
+                    can_send_.set();
+                    co_return true;
+                }
+
+                if (is_closed() && queue_.empty_relaxed())
+                {
+                    co_return false;
+                }
+
+                can_recv_.reset();
+
                 if (queue_.try_dequeue(tmp))
                 {
                     assign_from_tuple(tmp, out...);
@@ -229,9 +252,7 @@ namespace usub::uvent::sync
 
     private:
         template <class Tup, class... Us, std::size_t... Is>
-        static void assign_from_tuple_impl(Tup& t,
-                                           std::tuple<Us&...> refs,
-                                           std::index_sequence<Is...>)
+        static void assign_from_tuple_impl(Tup& t, std::tuple<Us&...> refs, std::index_sequence<Is...>)
         {
             ((std::get<Is>(refs) = std::get<Is>(t)), ...);
         }
@@ -253,12 +274,9 @@ namespace usub::uvent::sync
     template <class... Ts, class... Us>
     inline task::Awaitable<bool> operator<<(AsyncChannel<Ts...>& ch, std::tuple<Us...> v)
     {
-        static_assert(sizeof...(Ts) == sizeof...(Us),
-                      "operator<<: tuple size mismatch");
+        static_assert(sizeof...(Ts) == sizeof...(Us), "operator<<: tuple size mismatch");
         co_return co_await ch.send_tuple(std::move(v));
     }
-
-    inline AsyncEvent g_select_recv_event{Reset::Auto, false};
 
     namespace detail
     {
@@ -266,20 +284,22 @@ namespace usub::uvent::sync
         using channel_value_t = typename C::value_type;
 
         template <class C0, class... Cs>
-        constexpr bool all_same_value_type_v =
-            (std::is_same_v<channel_value_t<C0>, channel_value_t<Cs>> && ...);
-    }
+        constexpr bool all_same_value_type_v = (std::is_same_v<channel_value_t<C0>, channel_value_t<Cs>> && ...);
+
+        inline std::size_t random_index(std::size_t n)
+        {
+            thread_local std::minstd_rand rng{std::random_device{}()};
+            return std::uniform_int_distribution<std::size_t>{0, n - 1}(rng);
+        }
+    } // namespace detail
 
     template <class Channel0, class... Channels>
-    task::Awaitable<
-        std::optional<std::pair<std::size_t, typename Channel0::value_type>>>
-    select_recv(Channel0& c0, Channels&... cs)
+    task::Awaitable<std::optional<std::pair<std::size_t, typename Channel0::value_type>>> select_recv(Channel0& c0,
+                                                                                                      Channels&... cs)
     {
-        static_assert(sizeof...(Channels) >= 1,
-                      "select_recv: need at least 2 channels");
-        static_assert(
-            detail::all_same_value_type_v<Channel0, Channels...>,
-            "select_recv: all channels must have the same value_type");
+        static_assert(sizeof...(Channels) >= 1, "select_recv: need at least 2 channels");
+        static_assert(detail::all_same_value_type_v<Channel0, Channels...>,
+                      "select_recv: all channels must have the same value_type");
 
         using value_type = typename Channel0::value_type;
         using Result = std::optional<std::pair<std::size_t, value_type>>;
@@ -289,8 +309,10 @@ namespace usub::uvent::sync
 
         for (;;)
         {
-            for (std::size_t i = 0; i < N; ++i)
+            const std::size_t start = detail::random_index(N);
+            for (std::size_t k = 0; k < N; ++k)
             {
+                std::size_t i = (start + k) % N;
                 value_type v{};
                 if (channels[i]->try_recv(v))
                 {
@@ -299,6 +321,32 @@ namespace usub::uvent::sync
             }
 
             bool any_open = false;
+            for (std::size_t i = 0; i < N; ++i)
+            {
+                if (!channels[i]->is_closed() || !channels[i]->empty_relaxed())
+                {
+                    any_open = true;
+                    break;
+                }
+            }
+            if (!any_open)
+            {
+                co_return std::nullopt;
+            }
+
+            g_select_recv_event.reset();
+
+            for (std::size_t k = 0; k < N; ++k)
+            {
+                std::size_t i = (start + k) % N;
+                value_type v{};
+                if (channels[i]->try_recv(v))
+                {
+                    co_return Result{std::make_pair(i, std::move(v))};
+                }
+            }
+
+            any_open = false;
             for (std::size_t i = 0; i < N; ++i)
             {
                 if (!channels[i]->is_closed() || !channels[i]->empty_relaxed())
