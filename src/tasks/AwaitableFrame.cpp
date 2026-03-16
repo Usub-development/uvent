@@ -57,6 +57,11 @@ namespace usub::uvent::detail
 
     AwaitableFrameBase::AwaitableFrameBase() {
         this->t_id_ = system::this_thread::detail::t_id;
+        std::cerr << "Coroutine created: " << this->coro_.address() << std::endl;
+    }
+    AwaitableFrameBase::~AwaitableFrameBase()
+    {
+        std::cerr << "Coroutine destroyed: " << this->coro_.address() << std::endl;
     }
 
     bool AwaitableFrameBase::await_ready()

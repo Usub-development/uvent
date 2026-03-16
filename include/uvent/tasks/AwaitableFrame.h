@@ -34,7 +34,7 @@ namespace usub::uvent {
 
             AwaitableFrameBase();
 
-            virtual ~AwaitableFrameBase() = default;
+            virtual ~AwaitableFrameBase();
 
             virtual bool await_ready();
 

@@ -282,6 +282,13 @@ task::Awaitable<void> wg_waiter()
     co_return;
 }
 
+task::Awaitable<void> stop_uvent(usub::Uvent& runtime)
+{
+    co_await usub::uvent::system::this_coroutine::sleep_for(std::chrono::milliseconds(5000));
+    runtime.stop();
+    co_return;
+}
+
 int main()
 {
     settings::timeout_duration_ms = 5000;
@@ -294,8 +301,8 @@ int main()
     uvent.for_each_thread([&](int threadIndex, thread::ThreadLocalStorage* tls)
                           { system::co_spawn_static(listeningCoro(), threadIndex); });
 
-    system::co_spawn(sendingCoro());
-    system::co_spawn(sendingCoroTimeout());
+    // system::co_spawn(sendingCoro());
+    // system::co_spawn(sendingCoroTimeout());
     system::co_spawn(consumer());
     system::co_spawn(critical_task(1));
     system::co_spawn(critical_task(2));
@@ -316,6 +323,7 @@ int main()
     system::co_spawn(cancel_after_1500ms());
 
     system::co_spawn(wg_waiter());
+    system::co_spawn(stop_uvent(uvent));
 
     uvent.run();
     return 0;
