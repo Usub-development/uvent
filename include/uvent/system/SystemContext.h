@@ -118,6 +118,20 @@ namespace usub::uvent::system
     }
 
     /**
+     * @brief Spawns a coroutine for execution in the global thread context.
+     *
+     * Retrieves the coroutine promise from the given function object and, if valid,
+     * enqueues its coroutine handle into the global task queue.
+     *
+     * @tparam F Coroutine function type providing `get_promise()`.
+     * @param f Coroutine function to be spawned.
+     *
+     * @warning Method doesn't check if the coroutine is valid beyond `get_promise()`.
+     *          Ensure the coroutine object remains valid until scheduled.
+     */
+    inline void co_spawn(std::coroutine_handle<> h) { this_thread::detail::st->enqueue(h); }
+
+    /**
      * @brief Enqueues a coroutine into the inbox of a specific thread.
      *
      * Registers a coroutine for execution in the context of the given thread.

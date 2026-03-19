@@ -6,14 +6,18 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "uvent/sync/SyncCommon.h"
+
 namespace usub::uvent::sync
 {
+
     class AsyncMutex
     {
         struct WaitNode
         {
             std::coroutine_handle<> h{};
             WaitNode* next{};
+            int thread_id{-1};
         };
 
         std::atomic<std::uintptr_t> state_{0};
@@ -44,6 +48,7 @@ namespace usub::uvent::sync
         {
             AsyncMutex* m;
             WaitNode node{};
+
             bool await_ready() noexcept;
             bool await_suspend(std::coroutine_handle<> h) noexcept;
             Guard await_resume() noexcept;
@@ -51,8 +56,10 @@ namespace usub::uvent::sync
 
         LockAwaiter lock() noexcept;
         Guard try_lock() noexcept;
+
         void unlock() noexcept;
     };
+
 } // namespace usub::uvent::sync
 
-#endif
+#endif // UVENT_ASYNC_MUTEX_H
