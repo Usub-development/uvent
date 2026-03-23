@@ -3,81 +3,143 @@
 
 #include <atomic>
 #include <coroutine>
+
+#include "uvent/sync/SyncCommon.h"
+#include "uvent/utils/sync/TaggedPtr.h"
 #include "uvent/system/SystemContext.h"
 
-namespace usub::uvent::sync
-{
-    struct CancelState
-    {
-        std::atomic<bool> requested{false};
+namespace usub::uvent::sync {
 
-        struct WaitNode
-        {
-            std::coroutine_handle<> h{};
-            WaitNode* next{};
+    struct CancelState {
+        enum class NodeState : uint8_t {
+            Waiting   = 0,
+            Cancelled = 1,
+            Claimed   = 2
         };
 
-        std::atomic<WaitNode*> head{nullptr};
+        struct WaitNode {
+            std::coroutine_handle<>  h{};
+            WaitNode*                next{};
+            int                      thread_id{-1};
+            std::atomic<NodeState>   st{NodeState::Waiting};
+        };
+
+        std::atomic<bool>       requested{false};
+        TaggedPtr<WaitNode>     head{nullptr};
+
+        ~CancelState() {
+            auto snap = head.load(std::memory_order_acquire);
+            while (snap.ptr) {
+                if (head.compare_exchange_weak(snap, nullptr)) {
+                    WaitNode* list = snap.ptr;
+                    while (list) {
+                        WaitNode* next = list->next;
+                        delete list;
+                        list = next;
+                    }
+                    break;
+                }
+            }
+        }
+
+        void push_waiter(WaitNode* n) noexcept {
+            auto snap = head.load(std::memory_order_relaxed);
+            do {
+                n->next = snap.ptr;
+            } while (!head.compare_exchange_weak(
+                snap, n,
+                std::memory_order_release,
+                std::memory_order_relaxed));
+        }
+
+        WaitNode* exchange_all() noexcept {
+            auto snap = head.load(std::memory_order_acquire);
+            while (snap.ptr) {
+                if (head.compare_exchange_weak(snap, nullptr))
+                    return snap.ptr;
+            }
+            return nullptr;
+        }
     };
 
-    class CancellationToken
-    {
+    class CancellationToken {
         CancelState* s_{};
 
     public:
         explicit CancellationToken(CancelState* s = nullptr) noexcept : s_(s) {}
 
-        bool stop_requested() const noexcept { return this->s_ && this->s_->requested.load(std::memory_order_acquire); }
+        bool stop_requested() const noexcept {
+            return s_ && s_->requested.load(std::memory_order_acquire);
+        }
 
-        struct Awaiter
-        {
-            CancelState* s;
-            CancelState::WaitNode node{};
+        struct Awaiter {
+            CancelState*              s;
+            CancelState::WaitNode*    node{};
 
-            bool await_ready() noexcept { return this->s->requested.load(std::memory_order_acquire); }
+            bool await_ready() noexcept {
+                return s->requested.load(std::memory_order_acquire);
+            }
 
-            bool await_suspend(std::coroutine_handle<> h) noexcept
-            {
-                this->node.h = h;
-                auto* old = this->s->head.load(std::memory_order_relaxed);
-                do
-                {
-                    this->node.next = old;
+            bool await_suspend(std::coroutine_handle<> h) noexcept {
+                using NodeState = CancelState::NodeState;
+
+                node = new CancelState::WaitNode{};
+                node->h         = h;
+                node->thread_id = detail::current_thread_id();
+                node->st.store(NodeState::Waiting, std::memory_order_relaxed);
+
+                s->push_waiter(node);
+
+                if (s->requested.load(std::memory_order_acquire)) {
+                    NodeState exp = NodeState::Waiting;
+                    if (node->st.compare_exchange_strong(
+                            exp, NodeState::Cancelled,
+                            std::memory_order_acq_rel,
+                            std::memory_order_relaxed)) {
+                        return false;
+                    }
+                    return true;
                 }
-                while (!this->s->head.compare_exchange_weak(old, &this->node, std::memory_order_release,
-                                                            std::memory_order_relaxed));
-                if (this->s->requested.load(std::memory_order_acquire))
-                    return false;
                 return true;
             }
 
             void await_resume() noexcept {}
         };
 
-        Awaiter on_cancel() const noexcept { return Awaiter{this->s_}; }
+        Awaiter on_cancel() const noexcept { return Awaiter{s_}; }
     };
 
-    class CancellationSource
-    {
+    class CancellationSource {
         CancelState state_;
 
     public:
-        CancellationToken token() noexcept { return CancellationToken(&this->state_); }
+        CancellationToken token() noexcept {
+            return CancellationToken(&state_);
+        }
 
-        void request_cancel() noexcept
-        {
-            bool was = this->state_.requested.exchange(true, std::memory_order_acq_rel);
-            if (was)
-                return;
-            auto* list = this->state_.head.exchange(nullptr, std::memory_order_acq_rel);
-            while (list)
-            {
-                auto* n = list;
-                list = list->next;
-                system::this_thread::detail::q->enqueue(n->h);
+        void request_cancel() noexcept {
+            using NodeState = CancelState::NodeState;
+
+            bool was = state_.requested.exchange(true, std::memory_order_acq_rel);
+            if (was) return;
+
+            CancelState::WaitNode* list = state_.exchange_all();
+            while (list) {
+                auto* n  = list;
+                list     = list->next;
+
+                NodeState exp = NodeState::Waiting;
+                if (n->st.compare_exchange_strong(
+                        exp, NodeState::Claimed,
+                        std::memory_order_acq_rel,
+                        std::memory_order_relaxed)) {
+                    detail::resume_on(n->h, n->thread_id);
+                }
+                delete n;
             }
         }
     };
+
 } // namespace usub::uvent::sync
 
-#endif
+#endif // UVENT_SYNC_CANCELLATION_H

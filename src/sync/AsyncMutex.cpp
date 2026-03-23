@@ -54,6 +54,7 @@ namespace usub::uvent::sync
     bool AsyncMutex::LockAwaiter::await_suspend(std::coroutine_handle<> h) noexcept
     {
         this->node.h = h;
+        this->node.thread_id = detail::current_thread_id();
         for (;;)
         {
             auto s = this->m->state_.load(std::memory_order_acquire);

@@ -117,6 +117,8 @@ namespace usub::uvent::system
             this_thread::detail::st->enqueue(promise->get_coroutine_handle());
     }
 
+    inline void co_spawn(std::coroutine_handle<> h) { this_thread::detail::st->enqueue(h); }
+
     /**
      * @brief Enqueues a coroutine into the inbox of a specific thread.
      *
