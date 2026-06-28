@@ -89,33 +89,33 @@ namespace usub::uvent::utils
 
     void TimerWheel::addTimerToWheel(Timer* timer, timeout_t expiryTime)
     {
-        uint64_t diff  = expiryTime - this->currentTime_;
-        size_t   level = 0;
+        const uint64_t diff = (expiryTime > this->currentTime_)
+                                  ? (expiryTime - this->currentTime_)
+                                  : 0;
 
-        while (level < this->wheels_.size())
-        {
-            Wheel& wheel = this->wheels_[level];
-            if (diff < wheel.interval_ * wheel.slots_)
-            {
-                size_t ticks = diff / wheel.interval_;
-                size_t slot  = (wheel.currentSlot_ + ticks) % wheel.slots_;
-                wheel.buckets_[slot].push_back(timer);
-
-                timer->level     = level;
-                timer->slotIndex = slot;
-
-                if (this->nextExpiryTime_ == 0 || expiryTime < this->nextExpiryTime_)
-                    this->nextExpiryTime_ = expiryTime;
-
-                return;
-            }
+        // Coarsest level whose span still contains the timer; clamped to the last
+        // level for timeouts beyond the whole wheel's range.
+        size_t level = 0;
+        while (level + 1 < this->wheels_.size() &&
+               diff >= this->wheels_[level].interval_ * this->wheels_[level].slots_)
             ++level;
-        }
 
-        Wheel& lastWheel = this->wheels_.back();
-        lastWheel.buckets_.back().push_back(timer);
-        timer->level     = this->wheels_.size() - 1;
-        timer->slotIndex = lastWheel.buckets_.size() - 1;
+        Wheel&       wheel = this->wheels_[level];
+        const size_t mask  = wheel.slots_ - 1;
+
+        // Absolute-time slot indexing: the slot is derived from the expiry's own
+        // bits, so the timer is collected exactly when the clock's index for this
+        // level reaches it -- no process-then-increment off-by-one, and a cascade
+        // always lands the timer in the correct finer slot. An already-due timer is
+        // parked one tick ahead so the next advance() fires it instead of skipping
+        // it for a full rotation.
+        const size_t slot = (diff == 0)
+                                ? ((this->currentTime_ + 1) & mask)
+                                : ((expiryTime / wheel.interval_) & mask);
+
+        wheel.buckets_[slot].push_back(timer);
+        timer->level     = level;
+        timer->slotIndex = slot;
 
         if (this->nextExpiryTime_ == 0 || expiryTime < this->nextExpiryTime_)
             this->nextExpiryTime_ = expiryTime;
@@ -137,7 +137,7 @@ namespace usub::uvent::utils
         }
 
         if (timer->expiryTime == this->nextExpiryTime_)
-            this->nextExpiryTime_ = 0;
+            this->nextExpiryDirty_ = true;
     }
 
     void TimerWheel::updateNextExpiryTime()
@@ -155,6 +155,25 @@ namespace usub::uvent::utils
                 }
             }
         }
+    }
+
+    void TimerWheel::refreshNextExpiry()
+    {
+        /**
+         * @brief Keeps nextExpiryTime_ consistent after a tick.
+         *
+         * The minimum is recomputed at most once per tick, batching every
+         * add/update/remove/fire that happened during op draining and advancing.
+         * A full rescan only runs when the earliest timer was disturbed
+         * (nextExpiryDirty_) or the value is unset (== 0); pure additions keep the
+         * incremental min and stay O(1).
+         */
+        if (this->activeTimerCount_ == 0)
+            this->nextExpiryTime_ = 0;
+        else if (this->nextExpiryDirty_ || this->nextExpiryTime_ == 0)
+            updateNextExpiryTime();
+
+        this->nextExpiryDirty_ = false;
     }
 
     void TimerWheel::tick()
@@ -187,6 +206,8 @@ namespace usub::uvent::utils
 
                 case OpType::UPDATE:
                 {
+                    // No-op if the timer no longer exists (already fired/removed):
+                    // a stale id must not resurrect a phantom timer.
                     auto it = timerMap_.find(op.id);
                     if (it != timerMap_.end())
                     {
@@ -198,16 +219,6 @@ namespace usub::uvent::utils
                             t->expiryTime  = getCurrentTime() + t->duration_ms;
                             addTimerToWheel(t, t->expiryTime);
                         }
-                    }
-                    else
-                    {
-                        auto* t       = new Timer(op.new_dur);
-                        t->active     = true;
-                        t->id         = op.id;
-                        t->expiryTime = getCurrentTime() + t->duration_ms;
-                        addTimerToWheel(t, t->expiryTime);
-                        this->timerMap_[t->id] = t;
-                        ++this->activeTimerCount_;
                     }
                     break;
                 }
@@ -235,46 +246,54 @@ namespace usub::uvent::utils
         }
 
         const timeout_t newTime = getCurrentTime();
-        const uint64_t  elapsed = newTime - this->currentTime_;
 
-        if (elapsed == 0)
+        if (newTime <= this->currentTime_)
         {
-            if (this->nextExpiryTime_ == 0 && this->activeTimerCount_ > 0)
-                updateNextExpiryTime();
+            refreshNextExpiry();
             return;
         }
 
-        this->currentTime_ = newTime;
-
-        uint64_t ticks = elapsed / this->wheels_[0].interval_;
-        if (ticks == 0) ticks = 1;
-
-        for (uint64_t i = 0; i < ticks; ++i)
+        // advance() steps the clock by one tick and processes the slot it enters,
+        // so the wheel visits every intermediate slot between ticks.
+        while (this->currentTime_ < newTime)
             advance();
 
-        if (this->nextExpiryTime_ == 0 && this->activeTimerCount_ > 0)
-            updateNextExpiryTime();
+        refreshNextExpiry();
     }
 
     void TimerWheel::advance()
     {
-        for (auto& wheel : this->wheels_)
+        ++this->currentTime_;
+
+        // Cascade every coarser level that just rolled into a new slot (from the
+        // top down), then expire the level-0 slot we entered. A level-i slot is
+        // visited once every interval_i ticks; collected timers always re-bucket
+        // into a strictly finer level and land in a slot ahead of the ones being
+        // processed this tick, so nothing is touched twice.
+        for (size_t level = this->wheels_.size(); level-- > 1;)
         {
-            auto& bucket = wheel.buckets_[wheel.currentSlot_];
+            const Wheel& wheel = this->wheels_[level];
+            if (this->currentTime_ % wheel.interval_ != 0)
+                continue;
+            processSlot(level, (this->currentTime_ / wheel.interval_) & (wheel.slots_ - 1));
+        }
 
-            size_t i = 0;
-            while (i < bucket.size())
+        const Wheel& l0 = this->wheels_[0];
+        processSlot(0, this->currentTime_ & (l0.slots_ - 1));
+    }
+
+    void TimerWheel::processSlot(size_t level, size_t slot)
+    {
+        auto& bucket = this->wheels_[level].buckets_[slot];
+
+        size_t i = 0;
+        while (i < bucket.size())
+        {
+            Timer* timer = bucket[i];
+
+            if (timer->active)
             {
-                Timer* timer = bucket[i];
-
-                if (!timer->active)
-                {
-                    bucket[i] = bucket.back();
-                    bucket.pop_back();
-                    continue;
-                }
-
-                if (is_due(this->currentTime_, timer->expiryTime, wheel.interval_))
+                if (timer->expiryTime <= this->currentTime_)
                 {
                     if (timer->coro)
                         system::this_thread::detail::q->enqueue(timer->coro);
@@ -284,25 +303,20 @@ namespace usub::uvent::utils
                     --this->activeTimerCount_;
 
                     if (timer->expiryTime == this->nextExpiryTime_)
-                        this->nextExpiryTime_ = 0;
+                        this->nextExpiryDirty_ = true;
 
                     delete timer;
-
-                    bucket[i] = bucket.back();
-                    bucket.pop_back();
                 }
                 else
                 {
+                    // Not due yet: re-bucket into a finer level (always < `level`
+                    // here), which never pushes back into the bucket being iterated.
                     addTimerToWheel(timer, timer->expiryTime);
-
-                    bucket[i] = bucket.back();
-                    bucket.pop_back();
                 }
             }
 
-            wheel.currentSlot_ = (wheel.currentSlot_ + 1) % wheel.slots_;
-            if (wheel.currentSlot_ != 0)
-                break;
+            bucket[i] = bucket.back();
+            bucket.pop_back();
         }
     }
 

@@ -61,19 +61,17 @@ namespace usub::uvent::utils
 
         void advance();
 
+        void processSlot(size_t level, size_t slot);
+
         void updateNextExpiryTime();
 
-        inline static bool is_due(timeout_t now, timeout_t expiry, uint64_t interval) noexcept
-        {
-            if (expiry <= now) return true;
-            return (expiry - now) < interval;
-        }
+        void refreshNextExpiry();
 
     private:
         struct Wheel
         {
             Wheel(size_t slots, uint64_t interval)
-                : slots_(slots), interval_(interval), currentSlot_(0)
+                : slots_(slots), interval_(interval)
             {
                 buckets_.resize(slots_);
                 for (auto& b : buckets_)
@@ -82,7 +80,6 @@ namespace usub::uvent::utils
 
             size_t slots_;
             uint64_t interval_;
-            size_t currentSlot_;
             std::vector<std::vector<Timer*>> buckets_;
         };
 
@@ -95,6 +92,7 @@ namespace usub::uvent::utils
         uint64_t                             timerIdCounter_{0};
 #endif
         timeout_t                            nextExpiryTime_;
+        bool                                 nextExpiryDirty_{false};
         size_t                               activeTimerCount_;
 #ifndef UVENT_ENABLE_REUSEADDR
         queue::concurrent::MPMCQueue<Op>     timer_operations_queue;
