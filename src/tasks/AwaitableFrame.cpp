@@ -49,7 +49,7 @@ namespace usub::uvent::detail
 
     void AwaitableFrameBase::push_frame_into_task_queue(std::coroutine_handle<> h)
     {
-        system::this_thread::detail::q->enqueue(h);
+        system::this_thread::detail::q.enqueue(h);
 #if UVENT_DEBUG
         spdlog::trace("Coroutine returned into local queue: {}", h.address());
 #endif

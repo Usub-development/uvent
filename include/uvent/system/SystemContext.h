@@ -37,10 +37,13 @@ namespace usub::uvent::system
     namespace this_thread::detail
     {
 #ifndef UVENT_ENABLE_REUSEADDR
+        // Был extern std::unique_ptr<core::PollerBase> pl, но в .cpp определён как
+        // core::PollerImpl pl. Это была ODR-violation (см. SystemContext.cpp).
+        // Тип в декларации теперь совпадает с определением.
         /// \brief Wrapper over I/O notification mechanism provided by OS.
-        extern std::unique_ptr<core::PollerBase> pl;
+        extern core::PollerImpl pl;
         /// \brief Timer wheel used to handle multiple timers efficiently.
-        extern std::unique_ptr<utils::TimerWheel> wh;
+        extern utils::TimerWheel wh;
 #else
         /// \brief Wrapper over I/O notification mechanism provided by OS.
         thread_local extern core::PollerImpl pl;

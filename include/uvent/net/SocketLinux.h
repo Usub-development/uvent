@@ -54,7 +54,7 @@ namespace usub::uvent::net
          * \brief Constructs a passive TCP socket bound to given address/port (lvalue ip).
          * Used for listening sockets (bind + listen).
          */
-        explicit Socket(std::string& ip_addr, int port = 8080, int backlog = 50, utils::net::IPV ipv = utils::net::IPV4,
+        explicit Socket(std::string& ip_addr, int port = 8080, int backlog = SOMAXCONN, utils::net::IPV ipv = utils::net::IPV4,
                         utils::net::SocketAddressType socketAddressType = utils::net::TCP) noexcept
             requires(p == Proto::TCP && r == Role::PASSIVE);
 
@@ -62,7 +62,7 @@ namespace usub::uvent::net
          * \brief Constructs a passive TCP socket bound to given address/port (rvalue ip).
          * Used for listening sockets (bind + listen).
          */
-        explicit Socket(std::string&& ip_addr, int port = 8080, int backlog = 50,
+        explicit Socket(std::string&& ip_addr, int port = 8080, int backlog = SOMAXCONN,
                         utils::net::IPV ipv = utils::net::IPV4,
                         utils::net::SocketAddressType socketAddressType = utils::net::TCP) noexcept
             requires(p == Proto::TCP && r == Role::PASSIVE);
@@ -433,6 +433,20 @@ namespace usub::uvent::net
 
             if (cfd >= 0)
             {
+                // На принятом сокете включаем то, что реально влияет на RPS короткой нагрузки:
+                //  - TCP_NODELAY: убирает Nagle (echo-200 байт перестаёт ждать ACK/200ms)
+                //  - SO_BUSY_POLL/SO_PREFER_BUSY_POLL: ядро спинит до syscall, режет latency
+                {
+                    int one = 1;
+                    int busy_us = 50;
+                    (void)::setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+#ifdef SO_BUSY_POLL
+                    (void)::setsockopt(cfd, SOL_SOCKET, SO_BUSY_POLL, &busy_us, sizeof(busy_us));
+#endif
+#ifdef SO_PREFER_BUSY_POLL
+                    (void)::setsockopt(cfd, SOL_SOCKET, SO_PREFER_BUSY_POLL, &one, sizeof(one));
+#endif
+                }
                 auto* h = new SocketHeader{.fd = cfd,
                                            .socket_info = uint8_t(Proto::TCP) | uint8_t(Role::ACTIVE),
                                            .state = (1ull & usub::utils::sync::refc::COUNT_MASK)};
@@ -501,6 +515,17 @@ namespace usub::uvent::net
                     ::accept4(this->header_->fd, reinterpret_cast<sockaddr*>(&ss), &sl, SOCK_NONBLOCK | SOCK_CLOEXEC);
                 if (cfd >= 0)
                 {
+                    {
+                        int one = 1;
+                        int busy_us = 50;
+                        (void)::setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+#ifdef SO_BUSY_POLL
+                        (void)::setsockopt(cfd, SOL_SOCKET, SO_BUSY_POLL, &busy_us, sizeof(busy_us));
+#endif
+#ifdef SO_PREFER_BUSY_POLL
+                        (void)::setsockopt(cfd, SOL_SOCKET, SO_PREFER_BUSY_POLL, &one, sizeof(one));
+#endif
+                    }
                     auto* h = new SocketHeader{.fd = cfd,
                                                .socket_info = uint8_t(Proto::TCP) | uint8_t(Role::ACTIVE),
                                                .state = (1ull & usub::utils::sync::refc::COUNT_MASK)};
@@ -955,16 +980,16 @@ namespace usub::uvent::net
     ssize_t Socket<p, r>::write(uint8_t* buf, size_t sz)
         requires((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP))
     {
-        auto buf_internal = std::unique_ptr<uint8_t[]>(new uint8_t[sz], std::default_delete<uint8_t[]>());
-        std::copy_n(buf, sz, buf_internal.get());
-
+        // Прежняя реализация копировала buf в heap-выделенный массив unique_ptr<uint8_t[]>
+        // и слала уже из копии. Зачем — неясно: send() и так синхронный, ядро само копирует
+        // в свой буфер. Удаляем malloc + memcpy.
         ssize_t total_written = 0;
         int retries = 0;
 
-        while (total_written < sz)
+        while (total_written < static_cast<ssize_t>(sz))
         {
             ssize_t res =
-                ::send(this->header_->fd, buf_internal.get() + total_written, sz - total_written, MSG_DONTWAIT);
+                ::send(this->header_->fd, buf + total_written, sz - total_written, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (res > 0)
             {
                 total_written += res;
@@ -1200,9 +1225,11 @@ namespace usub::uvent::net
     Socket<p, r>::async_send(uint8_t* buf, size_t sz)
         requires((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP))
     {
-        auto buf_internal = std::unique_ptr<uint8_t[]>(new uint8_t[sz]);
-        std::memcpy(buf_internal.get(), buf, sz);
-
+        // Контракт API: пользовательский буфер обязан жить на время co_await.
+        // Прежняя реализация копировала его в new uint8_t[sz] перед отправкой,
+        // что давало malloc + memcpy на каждый async_send — бесполезно для эпол-режима.
+        // (Если когда-нибудь нужен pinned buffer для io_uring — это решается на уровне
+        //  io_uring submission, а не глобальной копией для всех путей.)
         ssize_t total_written = 0;
         int retries = 0;
 
@@ -1217,8 +1244,8 @@ namespace usub::uvent::net
 
                 if constexpr (p == Proto::TCP)
                 {
-                    res = ::send(this->header_->fd, buf_internal.get() + total_written,
-                                 sz - static_cast<size_t>(total_written), MSG_DONTWAIT);
+                    res = ::send(this->header_->fd, buf + total_written,
+                                 sz - static_cast<size_t>(total_written), MSG_DONTWAIT | MSG_NOSIGNAL);
                 }
                 else
                 {
@@ -1228,7 +1255,7 @@ namespace usub::uvent::net
                         {
                             auto& addr = std::get<sockaddr_in>(this->address);
                             socklen_t addr_len = sizeof(sockaddr_in);
-                            res = ::sendto(this->header_->fd, buf_internal.get() + total_written,
+                            res = ::sendto(this->header_->fd, buf + total_written,
                                            sz - static_cast<size_t>(total_written), MSG_DONTWAIT,
                                            reinterpret_cast<sockaddr*>(&addr), addr_len);
                         }
@@ -1236,7 +1263,7 @@ namespace usub::uvent::net
                         {
                             auto& addr = std::get<sockaddr_in6>(this->address);
                             socklen_t addr_len = sizeof(sockaddr_in6);
-                            res = ::sendto(this->header_->fd, buf_internal.get() + total_written,
+                            res = ::sendto(this->header_->fd, buf + total_written,
                                            sz - static_cast<size_t>(total_written), MSG_DONTWAIT,
                                            reinterpret_cast<sockaddr*>(&addr), addr_len);
                         }

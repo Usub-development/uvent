@@ -139,7 +139,7 @@ namespace usub::uvent::core
 
         if (base->coro && !base->coro.done())
         {
-            usub::uvent::system::this_thread::detail::q->enqueue(base->coro);
+            usub::uvent::system::this_thread::detail::q.enqueue(base->coro);
         }
     }
 

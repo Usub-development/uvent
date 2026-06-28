@@ -53,8 +53,6 @@ namespace usub::uvent::core
     private:
         /// @brief events returned by epoll
         std::vector<epoll_event> events;
-        /// @brief used to ignore signal like: SIGPIPE etc.
-        sigset_t sigmask{};
         /// @brief used to store all timers
         utils::TimerWheel& wheel;
     };

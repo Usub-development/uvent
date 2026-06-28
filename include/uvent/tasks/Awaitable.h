@@ -35,11 +35,13 @@ namespace usub::uvent::task {
 
         Awaitable() = default;
 
-        virtual ~Awaitable() = default;
+        // Non-virtual: Awaitable никогда не используется полиморфно;
+        // virtual вешал vptr на каждый co_await и блокировал тривиальное копирование.
+        ~Awaitable() = default;
 
         [[nodiscard]] bool await_ready() const noexcept;
 
-        virtual Value await_resume();
+        Value await_resume();
 
         template <class U>
         void await_suspend(std::coroutine_handle<U> h);
@@ -68,11 +70,11 @@ namespace usub::uvent::task {
 
         Awaitable() = default;
 
-        virtual ~Awaitable() = default;
+        ~Awaitable() = default;
 
         [[nodiscard]] bool await_ready() const noexcept;
 
-        virtual void await_resume();
+        void await_resume();
 
         promise_type* get_promise();
 

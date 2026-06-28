@@ -35,8 +35,10 @@ namespace usub::uvent::system
 #endif
         std::unique_ptr<task::SharedTasks> st = std::make_unique<task::SharedTasks>();
         thread_local std::coroutine_handle<> cec{nullptr};
-        thread_local std::unique_ptr<queue::single_thread::Queue<std::coroutine_handle<>>> q = std::make_unique<
-            queue::single_thread::Queue<std::coroutine_handle<>>>();
+        // Раньше: thread_local std::unique_ptr<Queue<...>> q = make_unique<...>();
+        // Это давало лишний load на каждом q->enqueue плюс init-guard на первом
+        // обращении. Локальный объект в TLS-сегменте лежит без обёрток.
+        thread_local queue::single_thread::Queue<std::coroutine_handle<>> q;
         thread_local int t_id{-1};
         thread_local queue::single_thread::Queue<std::coroutine_handle<>> q_c =
             queue::single_thread::Queue<std::coroutine_handle<>>();

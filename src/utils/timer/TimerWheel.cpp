@@ -113,9 +113,10 @@ namespace usub::uvent::utils
                                 ? ((this->currentTime_ + 1) & mask)
                                 : ((expiryTime / wheel.interval_) & mask);
 
+        timer->level       = level;
+        timer->slotIndex   = slot;
+        timer->posInBucket = wheel.buckets_[slot].size();
         wheel.buckets_[slot].push_back(timer);
-        timer->level     = level;
-        timer->slotIndex = slot;
 
         if (this->nextExpiryTime_ == 0 || expiryTime < this->nextExpiryTime_)
             this->nextExpiryTime_ = expiryTime;
@@ -129,11 +130,33 @@ namespace usub::uvent::utils
         Wheel& wheel  = this->wheels_[timer->level];
         auto&  bucket = wheel.buckets_[timer->slotIndex];
 
-        auto it = std::find(bucket.begin(), bucket.end(), timer);
-        if (it != bucket.end())
+        // O(1) swap-pop via the stored posInBucket; keep the moved tail timer's
+        // index in sync. Falls back to a linear find if the index ever desyncs.
+        const size_t pos = timer->posInBucket;
+        if (pos < bucket.size() && bucket[pos] == timer)
         {
-            *it = bucket.back();
+            const size_t last = bucket.size() - 1;
+            if (pos != last)
+            {
+                bucket[pos]              = bucket[last];
+                bucket[pos]->posInBucket = pos;
+            }
             bucket.pop_back();
+        }
+        else
+        {
+            auto it = std::find(bucket.begin(), bucket.end(), timer);
+            if (it != bucket.end())
+            {
+                const size_t idx  = static_cast<size_t>(it - bucket.begin());
+                const size_t last = bucket.size() - 1;
+                if (idx != last)
+                {
+                    bucket[idx]              = bucket[last];
+                    bucket[idx]->posInBucket = idx;
+                }
+                bucket.pop_back();
+            }
         }
 
         if (timer->expiryTime == this->nextExpiryTime_)
@@ -286,6 +309,19 @@ namespace usub::uvent::utils
     {
         auto& bucket = this->wheels_[level].buckets_[slot];
 
+        // Swap-pop that keeps the moved tail timer's posInBucket in sync, so the
+        // O(1) removeTimerFromWheel index stays valid across processing.
+        auto swap_pop_at = [&](size_t at)
+        {
+            const size_t last = bucket.size() - 1;
+            if (at != last)
+            {
+                bucket[at]              = bucket[last];
+                bucket[at]->posInBucket = at;
+            }
+            bucket.pop_back();
+        };
+
         size_t i = 0;
         while (i < bucket.size())
         {
@@ -296,7 +332,7 @@ namespace usub::uvent::utils
                 if (timer->expiryTime <= this->currentTime_)
                 {
                     if (timer->coro)
-                        system::this_thread::detail::q->enqueue(timer->coro);
+                        system::this_thread::detail::q.enqueue(timer->coro);
 
                     timer->active = false;
                     this->timerMap_.erase(timer->id);
@@ -315,8 +351,7 @@ namespace usub::uvent::utils
                 }
             }
 
-            bucket[i] = bucket.back();
-            bucket.pop_back();
+            swap_pop_at(i);
         }
     }
 

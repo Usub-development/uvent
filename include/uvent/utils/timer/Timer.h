@@ -70,6 +70,10 @@ namespace usub::uvent::utils
         uint64_t id;
         size_t slotIndex{0};
         size_t level{0};
+        // Индекс таймера в bucket'е (см. TimerWheel::buckets_[slot]). При swap-pop'е
+        // удаления O(1). До этого removeTimerFromWheel делал linear std::find по бакету —
+        // на 50k таймерах с одинаковым таймаутом это O(N) на каждый updateTimer.
+        size_t posInBucket{0};
     };
 
     enum class OpType : uint8_t { ADD, UPDATE, REMOVE };

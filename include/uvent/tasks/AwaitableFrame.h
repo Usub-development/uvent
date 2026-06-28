@@ -42,9 +42,9 @@ namespace usub::uvent
 
             AwaitableFrameBase();
 
-            virtual ~AwaitableFrameBase() = default;
-
-            virtual bool await_ready();
+            // Non-virtual: вызывается только из тривиального await_ready, который
+            // и так возвращает false; полиморфизм никем не используется.
+            bool await_ready();
 
             void destroy(DestroyingPolicy policy = DEFAULT);
 
@@ -71,6 +71,13 @@ namespace usub::uvent
             void set_thread_id(int t_id) { this->t_id_ = t_id; }
 
         protected:
+            // Protected non-virtual destructor (canonical "Meyers form"):
+            // запрещает delete через AwaitableFrameBase*, при этом не тащит vptr
+            // в каждый coroutine frame. Уничтожение идёт через
+            // std::coroutine_handle<Derived>::destroy(), который сам знает
+            // фактический тип через указатель функции в coroutine frame.
+            ~AwaitableFrameBase() = default;
+
             std::exception_ptr exception_{nullptr};
             std::coroutine_handle<> coro_{nullptr};
             std::coroutine_handle<> prev_{nullptr};
@@ -84,7 +91,7 @@ namespace usub::uvent
         public:
             AwaitableFrame() noexcept = default;
 
-            ~AwaitableFrame() override;
+            ~AwaitableFrame();
 
             void unhandled_exception() { this->exception_ = std::current_exception(); }
 
@@ -125,7 +132,7 @@ namespace usub::uvent
         public:
             AwaitableFrame() noexcept = default;
 
-            ~AwaitableFrame() override;
+            ~AwaitableFrame();
 
             auto get_return_object()
             {
@@ -158,7 +165,7 @@ namespace usub::uvent
         public:
             AwaitableIOFrame() noexcept = default;
 
-            ~AwaitableIOFrame() override;
+            ~AwaitableIOFrame();
 
             void unhandled_exception() { this->exception_ = std::current_exception(); }
 
@@ -274,7 +281,7 @@ namespace usub::uvent
     namespace system::this_thread::detail
     {
         /// \brief Thread local task queue.
-        thread_local extern std::unique_ptr<queue::single_thread::Queue<std::coroutine_handle<>>> q;
+        thread_local extern queue::single_thread::Queue<std::coroutine_handle<>> q;
     } // namespace system::this_thread::detail
 
     namespace task

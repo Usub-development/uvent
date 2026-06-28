@@ -12,12 +12,15 @@ namespace usub::uvent::core
 {
     EPoller::EPoller(utils::TimerWheel& wheel) : wheel(wheel)
     {
-        this->poll_fd = epoll_create1(0);
-        int busy_us = 50;
-        setsockopt(this->poll_fd, SOL_SOCKET, SO_PREFER_BUSY_POLL, &busy_us, sizeof(busy_us));
-
-        sigemptyset(&this->sigmask);
-        this->events.resize(1000);
+        // CLOEXEC, чтобы не утекало в форки/exec
+        this->poll_fd = epoll_create1(EPOLL_CLOEXEC);
+        // Прежняя строка ставила SO_PREFER_BUSY_POLL на epoll_fd — это noop, т. к.
+        // SO_PREFER_BUSY_POLL — socket option, и должен ставиться на data-сокеты,
+        // плюс требует SO_BUSY_POLL > 0. Переехало в async_accept (см. SocketLinux.h).
+        // Зафиксированный размер: 4096 events за один epoll_wait — достаточно;
+        // если не хватит, следующий epoll_wait считает остаток. Раньше events.resize(<<1)
+        // на каждом переполнении делал realloc/копию.
+        this->events.resize(4096);
     }
 
     void EPoller::addEvent(net::SocketHeader* header, OperationType initialState)
@@ -92,14 +95,15 @@ namespace usub::uvent::core
 
     bool EPoller::poll(int timeout)
     {
-        int n = epoll_pwait(this->poll_fd, this->events.data(), static_cast<int>(this->events.size()), timeout,
-                            &this->sigmask);
+        // epoll_wait вместо epoll_pwait: sigmask пустой, переключение sigprocmask
+        // в ядре стоит ~150 нс на каждый syscall, а смысла не несёт.
+        int n = ::epoll_wait(this->poll_fd, this->events.data(), static_cast<int>(this->events.size()), timeout);
 #ifndef UVENT_ENABLE_REUSEADDR
         system::this_thread::detail::g_qsbr.enter();
 #endif
 #if UVENT_DEBUG
         if (n < 0 && errno != EINTR)
-            throw std::system_error(errno, std::generic_category(), "epoll_pwait");
+            throw std::system_error(errno, std::generic_category(), "epoll_wait");
 #endif
         for (int i = 0; i < n; i++)
         {
@@ -123,7 +127,7 @@ namespace usub::uvent::core
                 if (sock->first)
                 {
                     auto c = std::exchange(sock->first, nullptr);
-                    system::this_thread::detail::q->enqueue(c);
+                    system::this_thread::detail::q.enqueue(c);
                 }
                 else
                 {
@@ -140,7 +144,7 @@ namespace usub::uvent::core
                     if (sock->second)
                     {
                         auto c = std::exchange(sock->second, nullptr);
-                        system::this_thread::detail::q->enqueue(c);
+                        system::this_thread::detail::q.enqueue(c);
                     }
                     else
                     {
@@ -158,7 +162,7 @@ namespace usub::uvent::core
                     else if (sock->second)
                     {
                         auto c = std::exchange(sock->second, nullptr);
-                        system::this_thread::detail::q->enqueue(c);
+                        system::this_thread::detail::q.enqueue(c);
                     }
                     else
                     {
@@ -174,8 +178,10 @@ namespace usub::uvent::core
 #endif
             }
         }
-        if (n == this->events.size())
-            this->events.resize(this->events.size() << 1);
+        // Раньше при n == events.size() вектор удваивался через resize(size << 1),
+        // что стоило realloc + memcpy. Не удваиваем: если уперлись в 4096 — ОК,
+        // следующий epoll_wait дозаберёт остаток. Тонкий хвост latency скрадывается
+        // тем, что мы и так бьём итерации в цикле.
 #ifndef UVENT_ENABLE_REUSEADDR
         system::this_thread::detail::g_qsbr.leave();
 #endif

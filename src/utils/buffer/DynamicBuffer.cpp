@@ -1,53 +1,31 @@
 #include "uvent/utils/buffer/DynamicBuffer.h"
 
 #include <cstring>
+#include <new>
 
 namespace usub::uvent::utils
 {
+    static constexpr std::align_val_t kAlign{64}; // одна cache line — попутно дружит с DMA для io_uring
+
     void DynamicBuffer::reserve(size_t n)
     {
-        if (n > data_.size())
-            data_.resize(n);
-    }
-
-    size_t DynamicBuffer::size() const noexcept
-    {
-        return size_;
-    }
-
-    size_t DynamicBuffer::capacity() const noexcept
-    {
-        return data_.size();
-    }
-
-    const uint8_t* DynamicBuffer::data() const noexcept
-    {
-        return data_.data();
-    }
-
-    uint8_t* DynamicBuffer::data() noexcept
-    {
-        return data_.data();
-    }
-
-    void DynamicBuffer::clear() noexcept
-    {
-        size_ = 0;
+        if (n > cap_)
+            grow_(n);
     }
 
     uint8_t* DynamicBuffer::reserve_tail(size_t len)
     {
         const size_t need = size_ + len;
-        if (need > data_.size())
+        if (need > cap_)
             grow_(need);
-        return data_.data() + size_;
+        return data_ + size_;
     }
 
     void DynamicBuffer::commit(size_t n)
     {
         size_ += n;
-        if (size_ > data_.size())
-            size_ = data_.size();
+        if (size_ > cap_)
+            size_ = cap_;
     }
 
     void DynamicBuffer::append(const uint8_t* src, size_t len)
@@ -72,9 +50,27 @@ namespace usub::uvent::utils
 
     void DynamicBuffer::grow_(size_t need)
     {
-        size_t cap = data_.size() ? data_.size() : 4096;
+        size_t cap = cap_ ? cap_ : 4096;
         while (cap < need)
             cap <<= 1;
-        data_.resize(cap);
+        // operator new без initialization — НЕ зануляет, в отличие от vector::resize.
+        auto* p = static_cast<uint8_t*>(::operator new(cap, kAlign));
+        if (size_)
+            std::memcpy(p, data_, size_);
+        if (data_)
+            ::operator delete(data_, kAlign);
+        data_ = p;
+        cap_  = cap;
+    }
+
+    void DynamicBuffer::free_() noexcept
+    {
+        if (data_)
+        {
+            ::operator delete(data_, kAlign);
+            data_ = nullptr;
+            cap_  = 0;
+            size_ = 0;
+        }
     }
 }

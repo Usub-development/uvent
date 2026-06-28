@@ -134,7 +134,7 @@ namespace usub::uvent::core
                 spdlog::info("Socket #{} triggered as IN", sock->fd);
 #endif
                 auto c = std::exchange(sock->first, nullptr);
-                system::this_thread::detail::q->enqueue(c);
+                system::this_thread::detail::q.enqueue(c);
             }
 
             if (ev.filter == EVFILT_WRITE && sock->second)
@@ -145,7 +145,7 @@ namespace usub::uvent::core
                 if (!(sock->socket_info & static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING)))
                 {
                     auto c = std::exchange(sock->second, nullptr);
-                    system::this_thread::detail::q->enqueue(c);
+                    system::this_thread::detail::q.enqueue(c);
                 }
                 else
                 {
@@ -163,7 +163,7 @@ namespace usub::uvent::core
                     else
                     {
                         auto c = std::exchange(sock->second, nullptr);
-                        system::this_thread::detail::q->enqueue(c);
+                        system::this_thread::detail::q.enqueue(c);
                     }
                 }
             }
