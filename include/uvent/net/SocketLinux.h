@@ -54,7 +54,8 @@ namespace usub::uvent::net
          * \brief Constructs a passive TCP socket bound to given address/port (lvalue ip).
          * Used for listening sockets (bind + listen).
          */
-        explicit Socket(std::string& ip_addr, int port = 8080, int backlog = SOMAXCONN, utils::net::IPV ipv = utils::net::IPV4,
+        explicit Socket(std::string& ip_addr, int port = 8080, int backlog = SOMAXCONN,
+                        utils::net::IPV ipv = utils::net::IPV4,
                         utils::net::SocketAddressType socketAddressType = utils::net::TCP) noexcept
             requires(p == Proto::TCP && r == Role::PASSIVE);
 
@@ -922,6 +923,7 @@ namespace usub::uvent::net
                 }
                 co_return -1;
             }
+            co_return total_written;
         }
     }
 
@@ -1244,8 +1246,8 @@ namespace usub::uvent::net
 
                 if constexpr (p == Proto::TCP)
                 {
-                    res = ::send(this->header_->fd, buf + total_written,
-                                 sz - static_cast<size_t>(total_written), MSG_DONTWAIT | MSG_NOSIGNAL);
+                    res = ::send(this->header_->fd, buf + total_written, sz - static_cast<size_t>(total_written),
+                                 MSG_DONTWAIT | MSG_NOSIGNAL);
                 }
                 else
                 {
