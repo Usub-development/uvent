@@ -93,6 +93,10 @@ namespace usub::uvent::core
             spdlog::info("IocpPoller::removeEvent: closesocket fd={}",
                          (std::uint64_t)header->fd);
 #endif
+            // Cancel first so outstanding ops complete deterministically; each
+            // still delivers a packet, which is how poll() reclaims an overlapped
+            // whose coroutine already unwound.
+            ::CancelIoEx(reinterpret_cast<HANDLE>(header->fd), nullptr);
             ::closesocket(header->fd);
             header->fd = INVALID_FD;
         }
@@ -148,26 +152,38 @@ namespace usub::uvent::core
                           e.Internal);
 #endif
 
-            if (!header || !ov)
+            if (!ov)
                 continue;
 
-#ifndef UVENT_ENABLE_REUSEADDR
-            if (header->is_busy_now() || header->is_disconnected_now()) {
+            // The kernel is finished with this structure.
+            ov->posted = false;
+
+            // Issuing coroutine unwound before the completion arrived (timeout
+            // resumes parked waiters with I/O still outstanding) and handed us
+            // ownership. No waiter to resume, and header may already be
+            // reclaimed, so free the op and touch nothing else.
+            if (ov->abandoned)
+            {
 #if UVENT_DEBUG
-            spdlog::trace("IocpPoller::poll: skip event, busy={} disconnected={} fd={}",
-                          header->is_busy_now(),
-                          header->is_disconnected_now(),
-                          (std::uint64_t) header->fd);
+                spdlog::trace("IocpPoller::poll: reclaiming abandoned overlapped, op={}", (int)ov->op);
 #endif
-            continue;
+                delete ov;
+                continue;
             }
 
-            header->try_mark_busy();
-#endif
+            if (!header)
+                continue;
 
+            // An IOCP completion is one-shot: skipping it strands the coroutine
+            // parked on it forever. So it is always consumed -- busy/disconnected
+            // affect what we do with the result, not whether we take delivery.
             bool hup = false;
             DWORD transferred = e.dwNumberOfBytesTransferred;
             ov->bytes_transferred = transferred;
+
+#ifndef UVENT_ENABLE_REUSEADDR
+            header->try_mark_busy();
+#endif
 
             if (transferred == 0 &&
                 (ov->op == net::IocpOp::READ || ov->op == net::IocpOp::WRITE))

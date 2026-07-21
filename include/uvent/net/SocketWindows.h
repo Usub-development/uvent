@@ -39,6 +39,51 @@ namespace usub::uvent::net
         SocketHeader* header{};
         IocpOp op{};
         DWORD bytes_transferred{};
+
+        /// Buffer the kernel writes into, when the op owns one.
+        std::unique_ptr<uint8_t[]> buf;
+
+        /// True while the kernel owns this structure.
+        bool posted{false};
+
+        /// Issuing coroutine unwound while still posted; the poller owns this
+        /// now and must not dereference \c header, which may be reclaimed.
+        bool abandoned{false};
+    };
+
+    /// Owns one IocpOverlapped for one in-flight operation. The coroutine frame
+    /// only borrows it: if the frame unwinds while the op is posted (timeout
+    /// closes the socket and resumes parked waiters), ownership passes to
+    /// IocpPoller::poll, which frees it when the completion arrives.
+    class PendingOverlapped
+    {
+    public:
+        PendingOverlapped() : p_(new IocpOverlapped()) {}
+
+        PendingOverlapped(const PendingOverlapped&) = delete;
+        PendingOverlapped& operator=(const PendingOverlapped&) = delete;
+
+        ~PendingOverlapped()
+        {
+            if (!this->p_)
+                return;
+            if (this->p_->posted)
+                this->p_->abandoned = true; // poller owns it from here
+            else
+                delete this->p_;
+        }
+
+
+        IocpOverlapped* operator->() const noexcept { return this->p_; }
+        IocpOverlapped& operator*() const noexcept { return *this->p_; }
+        [[nodiscard]] IocpOverlapped* get() const noexcept { return this->p_; }
+
+        /// Call once the op is outstanding. Both WSA_IO_PENDING and inline
+        /// success queue a completion packet, so both must be marked.
+        void mark_posted() noexcept { this->p_->posted = true; }
+
+    private:
+        IocpOverlapped* p_;
     };
 
     namespace detail
@@ -590,13 +635,15 @@ namespace usub::uvent::net
 
         DWORD addr_len = static_cast<DWORD>(sizeof(sockaddr_storage) + 16);
         DWORD buf_len = addr_len * 2;
-        auto addr_buf = std::make_unique<char[]>(buf_len);
-
-        auto ov = std::make_unique<IocpOverlapped>();
+        PendingOverlapped ov;
         std::memset(&ov->ov, 0, sizeof(ov->ov));
         ov->header = header;
         ov->op = IocpOp::ACCEPT;
         ov->bytes_transferred = 0;
+
+        // AcceptEx writes the addresses here, so the buffer belongs to the op.
+        ov->buf = std::make_unique<uint8_t[]>(buf_len);
+        char* addr_buf = reinterpret_cast<char*>(ov->buf.get());
 
         DWORD bytes = 0;
 
@@ -605,7 +652,7 @@ namespace usub::uvent::net
                       static_cast<socket_fd_t>(listen_s), static_cast<socket_fd_t>(client_s));
 #endif
 
-        BOOL ok = accept_ex(listen_s, client_s, addr_buf.get(), 0, addr_len, addr_len, &bytes, &ov->ov);
+        BOOL ok = accept_ex(listen_s, client_s, addr_buf, 0, addr_len, addr_len, &bytes, &ov->ov);
 
         if (!ok)
         {
@@ -625,9 +672,21 @@ namespace usub::uvent::net
             spdlog::trace("async_accept(win): AcceptEx pending, listen_fd={}, accept_fd={}",
                           static_cast<socket_fd_t>(listen_s), static_cast<socket_fd_t>(client_s));
 #endif
+        }
+        else
+        {
+#if UVENT_TRACE
+            spdlog::trace("async_accept(win): AcceptEx completed synchronously, "
+                          "listen_fd={}, accept_fd={}, bytes={}",
+                          static_cast<socket_fd_t>(listen_s), static_cast<socket_fd_t>(client_s), bytes);
+#endif
+        }
 
-            co_await detail::AwaiterRead{header};
+        // Inline success queues a completion packet just as ERROR_IO_PENDING does.
+        ov.mark_posted();
+        co_await detail::AwaiterRead{header};
 
+        {
             DWORD flags = 0;
             if (!::WSAGetOverlappedResult(listen_s, &ov->ov, &bytes, FALSE, &flags))
             {
@@ -640,14 +699,6 @@ namespace usub::uvent::net
                 ::closesocket(client_s);
                 co_return std::nullopt;
             }
-        }
-        else
-        {
-#if UVENT_TRACE
-            spdlog::trace("async_accept(win): AcceptEx completed synchronously, "
-                          "listen_fd={}, accept_fd={}, bytes={}",
-                          static_cast<socket_fd_t>(listen_s), static_cast<socket_fd_t>(client_s), bytes);
-#endif
         }
 
         if (::setsockopt(client_s, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT, reinterpret_cast<char*>(&listen_s),
@@ -681,7 +732,7 @@ namespace usub::uvent::net
         int local_len = 0;
         int remote_len = 0;
 
-        ::GetAcceptExSockaddrs(addr_buf.get(), 0, addr_len, addr_len, &local_sa, &local_len, &remote_sa, &remote_len);
+        ::GetAcceptExSockaddrs(addr_buf, 0, addr_len, addr_len, &local_sa, &local_len, &remote_sa, &remote_len);
 
         TCPClientSocket client{static_cast<socket_fd_t>(client_s)};
 
@@ -765,13 +816,15 @@ namespace usub::uvent::net
 
             DWORD addr_len = static_cast<DWORD>(sizeof(sockaddr_storage) + 16);
             DWORD buf_len = addr_len * 2;
-            auto addr_buf = std::make_unique<char[]>(buf_len);
-
-            auto ov = std::make_unique<IocpOverlapped>();
+            PendingOverlapped ov;
             std::memset(&ov->ov, 0, sizeof(ov->ov));
             ov->header = header;
             ov->op = IocpOp::ACCEPT;
             ov->bytes_transferred = 0;
+
+            // AcceptEx writes the addresses here, so the buffer belongs to the op.
+            ov->buf = std::make_unique<uint8_t[]>(buf_len);
+            char* addr_buf = reinterpret_cast<char*>(ov->buf.get());
 
             DWORD bytes = 0;
 
@@ -780,7 +833,7 @@ namespace usub::uvent::net
                           static_cast<socket_fd_t>(listen_s), static_cast<socket_fd_t>(client_s));
 #endif
 
-            BOOL ok = accept_ex(listen_s, client_s, addr_buf.get(), 0, addr_len, addr_len, &bytes, &ov->ov);
+            BOOL ok = accept_ex(listen_s, client_s, addr_buf, 0, addr_len, addr_len, &bytes, &ov->ov);
 
             if (!ok)
             {
@@ -800,9 +853,21 @@ namespace usub::uvent::net
                 spdlog::trace("async_accept(win): AcceptEx pending, listen_fd={}, accept_fd={}",
                               static_cast<socket_fd_t>(listen_s), static_cast<socket_fd_t>(client_s));
 #endif
+            }
+            else
+            {
+#if UVENT_TRACE
+                spdlog::trace("async_accept(win): AcceptEx completed synchronously, "
+                              "listen_fd={}, accept_fd={}, bytes={}",
+                              static_cast<socket_fd_t>(listen_s), static_cast<socket_fd_t>(client_s), bytes);
+#endif
+            }
 
-                co_await detail::AwaiterRead{header};
+            // Inline success queues a completion packet just as ERROR_IO_PENDING does.
+            ov.mark_posted();
+            co_await detail::AwaiterRead{header};
 
+            {
                 DWORD flags = 0;
                 if (!::WSAGetOverlappedResult(listen_s, &ov->ov, &bytes, FALSE, &flags))
                 {
@@ -815,14 +880,6 @@ namespace usub::uvent::net
                     ::closesocket(client_s);
                     co_return;
                 }
-            }
-            else
-            {
-#if UVENT_TRACE
-                spdlog::trace("async_accept(win): AcceptEx completed synchronously, "
-                              "listen_fd={}, accept_fd={}, bytes={}",
-                              static_cast<socket_fd_t>(listen_s), static_cast<socket_fd_t>(client_s), bytes);
-#endif
             }
 
             if (::setsockopt(client_s, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT, reinterpret_cast<char*>(&listen_s),
@@ -856,7 +913,7 @@ namespace usub::uvent::net
             int local_len = 0;
             int remote_len = 0;
 
-            ::GetAcceptExSockaddrs(addr_buf.get(), 0, addr_len, addr_len, &local_sa, &local_len, &remote_sa,
+            ::GetAcceptExSockaddrs(addr_buf, 0, addr_len, addr_len, &local_sa, &local_len, &remote_sa,
                                    &remote_len);
 
             TCPClientSocket client{static_cast<socket_fd_t>(client_s)};
@@ -994,14 +1051,16 @@ namespace usub::uvent::net
             spdlog::trace("async_read(tcp)(win): posting WSARecv, remaining={}", remaining);
 #endif
 
-            auto ov = std::make_unique<IocpOverlapped>();
+            PendingOverlapped ov;
             ov->header = this->header_;
             ov->op = IocpOp::READ;
             std::memset(&ov->ov, 0, sizeof(ov->ov));
 
-            auto tmp = std::make_unique<uint8_t[]>(remaining);
+            // Buffer belongs to the op, not this frame: the kernel writes into
+            // it until the completion is dequeued.
+            ov->buf = std::make_unique<uint8_t[]>(remaining);
             WSABUF wbuf;
-            wbuf.buf = reinterpret_cast<char*>(tmp.get());
+            wbuf.buf = reinterpret_cast<char*>(ov->buf.get());
             wbuf.len = static_cast<ULONG>(remaining);
 
             DWORD flags = 0;
@@ -1020,35 +1079,19 @@ namespace usub::uvent::net
 #endif
                 if (err != WSA_IO_PENDING)
                 {
+                    // Nothing queued; ov and its buffer are ours to drop.
                     this->remove();
                     co_return -1;
                 }
             }
 
-            if (rc == 0)
-            {
-                if (bytes == 0)
-                {
+            // Inline success queues a completion packet too (we don't set
+            // FILE_SKIP_COMPLETION_PORT_ON_SUCCESS), so returning here would free
+            // ov under the poller. Await it either way, as async_connect does.
+            ov.mark_posted();
 #if UVENT_DEBUG
-                    spdlog::info("async_read(tcp)(win): immediate EOF fd={}", (std::uint64_t)this->header_->fd);
-#endif
-                    this->remove();
-                    co_return 0;
-                }
-                buffer.append(tmp.get(), bytes);
-#ifndef UVENT_ENABLE_REUSEADDR
-                if (bytes > 0)
-                    this->header_->timeout_epoch_bump();
-#endif
-#if UVENT_DEBUG
-                spdlog::info("async_read(tcp)(win): immediate completion bytes={} fd={}", bytes,
-                             (std::uint64_t)this->header_->fd);
-#endif
-                co_return static_cast<ssize_t>(bytes);
-            }
-
-#if UVENT_DEBUG
-            spdlog::trace("async_read(tcp)(win): waiting on AwaiterRead fd={}", (std::uint64_t)this->header_->fd);
+            spdlog::trace("async_read(tcp)(win): waiting on AwaiterRead fd={} rc={}",
+                          (std::uint64_t)this->header_->fd, rc);
 #endif
             co_await detail::AwaiterRead{this->header_};
 
@@ -1076,7 +1119,7 @@ namespace usub::uvent::net
                 co_return 0;
             }
 
-            buffer.append(tmp.get(), bytes);
+            buffer.append(ov->buf.get(), bytes);
 #ifndef UVENT_ENABLE_REUSEADDR
             if (bytes > 0)
                 this->header_->timeout_epoch_bump();
@@ -1161,7 +1204,10 @@ namespace usub::uvent::net
 #if UVENT_DEBUG
             spdlog::trace("async_read(raw-tcp)(win): posting WSARecv fd={}", (std::uint64_t)this->header_->fd);
 #endif
-            auto ov = std::make_unique<IocpOverlapped>();
+            // The kernel writes straight into the caller's dst, so this op can't
+            // own its buffer; dst must stay valid until the completion is
+            // dequeued (we always await below; teardown cancels first).
+            PendingOverlapped ov;
             ov->header = this->header_;
             ov->op = IocpOp::READ;
             std::memset(&ov->ov, 0, sizeof(ov->ov));
@@ -1187,34 +1233,18 @@ namespace usub::uvent::net
 #endif
                 if (err != WSA_IO_PENDING)
                 {
+                    // Nothing queued; safe to unwind.
                     this->remove();
                     co_return -1;
                 }
             }
 
-            if (rc == 0)
-            {
-                if (bytes == 0)
-                {
+            // Inline success queues a completion packet too; returning here would
+            // free ov under the poller and hand back dst while the kernel writes.
+            ov.mark_posted();
 #if UVENT_DEBUG
-                    spdlog::info("async_read(raw-tcp)(win): immediate EOF fd={}", (std::uint64_t)this->header_->fd);
-#endif
-                    this->remove();
-                    co_return 0;
-                }
-#ifndef UVENT_ENABLE_REUSEADDR
-                if (bytes > 0)
-                    this->header_->timeout_epoch_bump();
-#endif
-#if UVENT_DEBUG
-                spdlog::info("async_read(raw-tcp)(win): immediate bytes={} fd={}", bytes,
-                             (std::uint64_t)this->header_->fd);
-#endif
-                co_return static_cast<ssize_t>(bytes);
-            }
-
-#if UVENT_DEBUG
-            spdlog::trace("async_read(raw-tcp)(win): waiting AwaiterRead fd={}", (std::uint64_t)this->header_->fd);
+            spdlog::trace("async_read(raw-tcp)(win): waiting AwaiterRead fd={} rc={}",
+                          (std::uint64_t)this->header_->fd, rc);
 #endif
             co_await detail::AwaiterRead{this->header_};
 
@@ -1306,7 +1336,9 @@ namespace usub::uvent::net
         else
         {
             ssize_t total_written = 0;
-            auto ov = std::make_unique<IocpOverlapped>();
+            // Reused per iteration, but only re-armed after the previous send's
+            // completion was dequeued (see the await below).
+            PendingOverlapped ov;
             ov->header = this->header_;
             ov->op = IocpOp::WRITE;
             std::memset(&ov->ov, 0, sizeof(ov->ov));
@@ -1334,33 +1366,18 @@ namespace usub::uvent::net
 #endif
                     if (err != WSA_IO_PENDING)
                     {
+                        // Nothing queued; safe to unwind.
                         co_return -1;
                     }
                 }
 
-                if (rc == 0)
-                {
-                    if (bytes == 0)
-                    {
+                // Inline success queues a completion packet too; continue-ing here
+                // would memset ov->ov at the top of the loop while the kernel still
+                // references it. Await each send's own completion.
+                ov.mark_posted();
 #if UVENT_DEBUG
-                        spdlog::error("async_write(tcp)(win): WSASend bytes=0 fd={}", (std::uint64_t)this->header_->fd);
-#endif
-                        co_return -1;
-                    }
-                    total_written += bytes;
-#ifndef UVENT_ENABLE_REUSEADDR
-                    if (bytes > 0)
-                        this->header_->timeout_epoch_bump();
-#endif
-#if UVENT_DEBUG
-                    spdlog::trace("async_write(tcp)(win): immediate bytes={}, total_written={} fd={}", bytes,
-                                  total_written, (std::uint64_t)this->header_->fd);
-#endif
-                    continue;
-                }
-
-#if UVENT_DEBUG
-                spdlog::trace("async_write(tcp)(win): waiting AwaiterWrite fd={}", (std::uint64_t)this->header_->fd);
+                spdlog::trace("async_write(tcp)(win): waiting AwaiterWrite fd={} rc={}",
+                              (std::uint64_t)this->header_->fd, rc);
 #endif
                 co_await detail::AwaiterWrite{this->header_};
 
@@ -1637,7 +1654,7 @@ namespace usub::uvent::net
 
         this->header_->socket_info |= static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING);
 
-        auto ov = std::make_unique<IocpOverlapped>();
+        PendingOverlapped ov;
         ov->header = this->header_;
         ov->op = IocpOp::CONNECT;
         std::memset(&ov->ov, 0, sizeof(ov->ov));
@@ -1674,6 +1691,8 @@ namespace usub::uvent::net
 #endif
         }
 
+        // A completion packet is queued either way.
+        ov.mark_posted();
 #if UVENT_DEBUG
         spdlog::trace("async_connect(win,lvalue): await AwaiterWrite fd={}", (socket_fd_t)this->header_->fd);
 #endif
@@ -1835,7 +1854,7 @@ namespace usub::uvent::net
 
         this->header_->socket_info |= static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING);
 
-        auto ov = std::make_unique<IocpOverlapped>();
+        PendingOverlapped ov;
         ov->header = this->header_;
         ov->op = IocpOp::CONNECT;
         std::memset(&ov->ov, 0, sizeof(ov->ov));
@@ -1872,6 +1891,8 @@ namespace usub::uvent::net
 #endif
         }
 
+        // A completion packet is queued either way.
+        ov.mark_posted();
 #if UVENT_DEBUG
         spdlog::trace("async_connect(win,rvalue): await AwaiterWrite fd={}", (socket_fd_t)this->header_->fd);
 #endif
@@ -2101,7 +2122,7 @@ namespace usub::uvent::net
 #if UVENT_DEBUG
         spdlog::info("async_sendfile(win): fd={}, in_fd={}, count={}", (std::uint64_t)this->header_->fd, in_fd, count);
 #endif
-        auto ov = std::make_unique<IocpOverlapped>();
+        PendingOverlapped ov;
         ov->header = this->header_;
         ov->op = IocpOp::WRITE;
 
@@ -2140,6 +2161,10 @@ namespace usub::uvent::net
                 co_return -1;
             }
         }
+
+        // The blocking WSAGetOverlappedResult below waits for the kernel, but the
+        // packet still has to be drained by the poller, which reclaims ov.
+        ov.mark_posted();
 
         DWORD bytes = 0;
         DWORD flags = 0;
