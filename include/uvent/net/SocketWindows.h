@@ -518,7 +518,7 @@ namespace usub::uvent::net
     }
 
     template <Proto p, Role r>
-    Socket<p, r>::Socket(const Socket& o) noexcept : header_(o.header_)
+    Socket<p, r>::Socket(const Socket& o) noexcept : address(o.address), ipv(o.ipv), header_(o.header_)
     {
         if (this->header_)
             this->add_ref();
@@ -530,7 +530,7 @@ namespace usub::uvent::net
     }
 
     template <Proto p, Role r>
-    Socket<p, r>::Socket(Socket&& o) noexcept : header_(o.header_)
+    Socket<p, r>::Socket(Socket&& o) noexcept : address(o.address), ipv(o.ipv), header_(o.header_)
     {
         o.header_ = nullptr;
 #if UVENT_DEBUG
@@ -546,6 +546,8 @@ namespace usub::uvent::net
             return *this;
         Socket tmp(o);
         std::swap(this->header_, tmp.header_);
+        std::swap(this->address, tmp.address);
+        std::swap(this->ipv, tmp.ipv);
 #if UVENT_DEBUG
         spdlog::debug("Socket copy-assign(win): header={}, fd={}", static_cast<void*>(this->header_),
                       this->header_ ? static_cast<std::uint64_t>(this->header_->fd) : 0ull);
@@ -560,6 +562,8 @@ namespace usub::uvent::net
             return *this;
         Socket tmp(std::move(o));
         std::swap(this->header_, tmp.header_);
+        std::swap(this->address, tmp.address);
+        std::swap(this->ipv, tmp.ipv);
 #if UVENT_DEBUG
         spdlog::debug("Socket move-assign(win): header={}, fd={}", static_cast<void*>(this->header_),
                       this->header_ ? static_cast<std::uint64_t>(this->header_->fd) : 0ull);
@@ -651,6 +655,8 @@ namespace usub::uvent::net
         spdlog::trace("async_accept(win): posting AcceptEx listen_fd={} accept_fd={}",
                       static_cast<socket_fd_t>(listen_s), static_cast<socket_fd_t>(client_s));
 #endif
+
+        header->disarm_read();
 
         BOOL ok = accept_ex(listen_s, client_s, addr_buf, 0, addr_len, addr_len, &bytes, &ov->ov);
 
@@ -832,6 +838,8 @@ namespace usub::uvent::net
             spdlog::trace("async_accept(win): posting AcceptEx listen_fd={} accept_fd={}",
                           static_cast<socket_fd_t>(listen_s), static_cast<socket_fd_t>(client_s));
 #endif
+
+            header->disarm_read();
 
             BOOL ok = accept_ex(listen_s, client_s, addr_buf, 0, addr_len, addr_len, &bytes, &ov->ov);
 
@@ -1066,6 +1074,8 @@ namespace usub::uvent::net
             DWORD flags = 0;
             DWORD bytes = 0;
 
+            this->header_->disarm_read();
+
             int rc = ::WSARecv(this->header_->fd, &wbuf, 1, &bytes, &flags, &ov->ov, nullptr);
 #if UVENT_DEBUG
             spdlog::trace("async_read(tcp)(win): WSARecv rc={}, bytes={}, fd={}", rc, bytes,
@@ -1219,6 +1229,8 @@ namespace usub::uvent::net
             DWORD flags = 0;
             DWORD bytes = 0;
 
+            this->header_->disarm_read();
+
             int rc = ::WSARecv(this->header_->fd, &wbuf, 1, &bytes, &flags, &ov->ov, nullptr);
 #if UVENT_DEBUG
             spdlog::trace("async_read(raw-tcp)(win): WSARecv rc={}, bytes={} fd={}", rc, bytes,
@@ -1352,6 +1364,9 @@ namespace usub::uvent::net
                 wbuf.len = static_cast<ULONG>(sz - static_cast<size_t>(total_written));
 
                 DWORD bytes = 0;
+
+                this->header_->disarm_write();
+
                 int rc = ::WSASend(this->header_->fd, &wbuf, 1, &bytes, 0, &ov->ov, nullptr);
 #if UVENT_DEBUG
                 spdlog::trace("async_write(tcp)(win): WSASend rc={}, bytes={} fd={}", rc, bytes,
@@ -1665,6 +1680,8 @@ namespace usub::uvent::net
         spdlog::trace("async_connect(win,lvalue): calling ConnectEx fd={}", (socket_fd_t)this->header_->fd);
 #endif
 
+        this->header_->disarm_write();
+
         BOOL ok = connect_ex(s, res->ai_addr, static_cast<int>(res->ai_addrlen), nullptr, 0, &bytes_sent, &ov->ov);
 
         if (!ok)
@@ -1864,6 +1881,8 @@ namespace usub::uvent::net
 #if UVENT_DEBUG
         spdlog::trace("async_connect(win,rvalue): calling ConnectEx fd={}", (socket_fd_t)this->header_->fd);
 #endif
+
+        this->header_->disarm_write();
 
         BOOL ok = connect_ex(s, res->ai_addr, static_cast<int>(res->ai_addrlen), nullptr, 0, &bytes_sent, &ov->ov);
 

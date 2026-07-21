@@ -214,6 +214,10 @@ namespace usub::uvent::core
 #endif
                     system::this_thread::detail::q.enqueue(c);
                 }
+                else
+                {
+                    header->mark_read_pending();
+                }
             }
             else if (ov->op == net::IocpOp::WRITE || ov->op == net::IocpOp::CONNECT)
             {
@@ -252,6 +256,10 @@ namespace usub::uvent::core
                                   (std::uint64_t)header->fd);
 #endif
                     system::this_thread::detail::q.enqueue(c);
+                }
+                else
+                {
+                    header->mark_write_pending();
                 }
             }
 

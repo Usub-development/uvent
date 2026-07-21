@@ -394,14 +394,14 @@ namespace usub::uvent::net
     }
 
     template <Proto p, Role r>
-    Socket<p, r>::Socket(const Socket& o) noexcept : header_(o.header_)
+    Socket<p, r>::Socket(const Socket& o) noexcept : address(o.address), ipv(o.ipv), header_(o.header_)
     {
         if (this->header_)
             this->add_ref();
     }
 
     template <Proto p, Role r>
-    Socket<p, r>::Socket(Socket&& o) noexcept : header_(o.header_)
+    Socket<p, r>::Socket(Socket&& o) noexcept : address(o.address), ipv(o.ipv), header_(o.header_)
     {
         o.header_ = nullptr;
     }
@@ -413,6 +413,8 @@ namespace usub::uvent::net
             return *this;
         Socket tmp(o);
         std::swap(this->header_, tmp.header_);
+        std::swap(this->address, tmp.address);
+        std::swap(this->ipv, tmp.ipv);
         return *this;
     }
 
@@ -423,6 +425,8 @@ namespace usub::uvent::net
             return *this;
         Socket tmp(std::move(o));
         std::swap(this->header_, tmp.header_);
+        std::swap(this->address, tmp.address);
+        std::swap(this->ipv, tmp.ipv);
         return *this;
     }
 
