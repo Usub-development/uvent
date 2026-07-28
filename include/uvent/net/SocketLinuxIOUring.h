@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #include "AwaiterOperations.h"
+#include "Resolver.h"
 #include "SocketMetadata.h"
 #include "uvent/base/Predefines.h"
 #include "uvent/poll/IOUringPoller.h"
@@ -37,9 +38,92 @@ namespace usub::uvent::net
         using core::detail::AcceptOp;
         using core::detail::ConnectOp;
         using core::detail::IoOpKind;
+        using core::detail::MultishotAcceptOp;
+        using core::detail::MultishotRecvOp;
         using core::detail::RecvOp;
         using core::detail::SendFileOp;
         using core::detail::SendOp;
+
+        inline void add_ref_for_ms_recv(SocketHeader* header) noexcept
+        {
+            using namespace usub::utils::sync::refc;
+#ifndef UVENT_ENABLE_REUSEADDR
+            uint64_t s = header->state.load(std::memory_order_relaxed);
+            for (;;)
+            {
+                if (s & CLOSED_MASK)
+                    break;
+                const uint64_t cnt = s & COUNT_MASK;
+                if (cnt == COUNT_MASK)
+                    break;
+                const uint64_t ns = (s & ~COUNT_MASK) | (cnt + 1);
+                if (header->state.compare_exchange_weak(s, ns, std::memory_order_acq_rel,
+                                                        std::memory_order_relaxed))
+                    break;
+                cpu_relax();
+            }
+#else
+            uint64_t& st = header->state;
+            if ((st & CLOSED_MASK) == 0)
+            {
+                const uint64_t cnt = st & COUNT_MASK;
+                if (cnt != COUNT_MASK)
+                    st = (st & ~COUNT_MASK) | ((cnt + 1) & COUNT_MASK);
+            }
+#endif
+        }
+
+        struct MultishotRecvAwaiter
+        {
+            MultishotRecvOp* op{nullptr};
+            SocketHeader* header{nullptr};
+
+            bool await_ready() const noexcept { return op->has_data() || op->has_terminal; }
+
+            template <class Promise>
+            bool await_suspend(std::coroutine_handle<Promise> h)
+            {
+                op->coro = h;
+                if (!op->armed && !op->has_terminal)
+                {
+                    auto& pl = static_cast<IOUringPoller&>(system::this_thread::detail::pl);
+                    pl.submit_recv_multishot(op, header->fd);
+                    if (op->armed)
+                    {
+                        add_ref_for_ms_recv(header);
+                        header->read_op = op;
+                    }
+                }
+                if (op->has_data() || op->has_terminal)
+                    return false;
+                op->waiting = true;
+                return true;
+            }
+
+            void await_resume() noexcept { op->waiting = false; }
+        };
+
+        inline size_t consume_ms_recv(IOUringPoller& pl, MultishotRecvOp* op, uint8_t* dst, size_t max) noexcept
+        {
+            size_t total = 0;
+            while (total < max)
+            {
+                auto* s = op->front();
+                if (!s)
+                    break;
+                const size_t avail = s->len - s->off;
+                const size_t take = (avail < max - total) ? avail : max - total;
+                std::memcpy(dst + total, pl.buf_base(s->bid) + s->off, take);
+                s->off += static_cast<uint32_t>(take);
+                total += take;
+                if (s->off == s->len)
+                {
+                    pl.recycle_buf(s->bid);
+                    op->pop_front();
+                }
+            }
+            return total;
+        }
 
         struct RecvAwaiter
         {
@@ -48,7 +132,26 @@ namespace usub::uvent::net
             uint8_t* buf{nullptr};
             size_t len{0};
 
-            bool await_ready() const noexcept { return false; }
+            bool await_ready() noexcept
+            {
+                if (header->first_read_done)
+                    return false;
+                header->first_read_done = true;
+                const ssize_t n = ::recv(header->fd, buf, len, MSG_DONTWAIT);
+                if (n >= 0)
+                {
+                    op.res = n;
+                    op.err = 0;
+                    return true;
+                }
+                if (errno != EAGAIN && errno != EWOULDBLOCK)
+                {
+                    op.res = -errno;
+                    op.err = errno;
+                    return true;
+                }
+                return false;
+            }
 
             template <class Promise>
             void await_suspend(std::coroutine_handle<Promise> h)
@@ -59,12 +162,14 @@ namespace usub::uvent::net
                 op.buf = buf;
                 op.len = len;
 
+                header->read_op = &op;
                 auto& pl = static_cast<IOUringPoller&>(system::this_thread::detail::pl);
                 pl.submit_recv(&op, header->fd);
             }
 
             ssize_t await_resume() noexcept
             {
+                header->read_op = nullptr;
                 if (op.res < 0)
                     return -op.err;
                 return op.res;
@@ -78,7 +183,26 @@ namespace usub::uvent::net
             const uint8_t* buf{nullptr};
             size_t len{0};
 
-            bool await_ready() const noexcept { return false; }
+            bool await_ready() noexcept
+            {
+                if (header->first_write_done)
+                    return false;
+                header->first_write_done = true;
+                const ssize_t n = ::send(header->fd, buf, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+                if (n >= 0)
+                {
+                    op.res = n;
+                    op.err = 0;
+                    return true;
+                }
+                if (errno != EAGAIN && errno != EWOULDBLOCK)
+                {
+                    op.res = -errno;
+                    op.err = errno;
+                    return true;
+                }
+                return false;
+            }
 
             template <class Promise>
             void await_suspend(std::coroutine_handle<Promise> h)
@@ -89,12 +213,14 @@ namespace usub::uvent::net
                 op.buf = buf;
                 op.len = len;
 
+                header->write_op = &op;
                 auto& pl = static_cast<IOUringPoller&>(system::this_thread::detail::pl);
                 pl.submit_send(&op, header->fd);
             }
 
             ssize_t await_resume() noexcept
             {
+                header->write_op = nullptr;
                 if (op.res < 0)
                     return -op.err;
                 return op.res;
@@ -128,6 +254,48 @@ namespace usub::uvent::net
             }
         };
 
+        struct MultishotAcceptAwaiter
+        {
+            MultishotAcceptOp* op{nullptr};
+            SocketHeader* header{nullptr}; ///< листенер — для fd при перевзводе
+
+            bool await_ready() const noexcept { return op->next_fd < op->pending_fds.size(); }
+
+            template <class Promise>
+            bool await_suspend(std::coroutine_handle<Promise> h)
+            {
+                op->coro = h;
+                if (!op->armed)
+                {
+                    auto& pl = static_cast<IOUringPoller&>(system::this_thread::detail::pl);
+                    pl.submit_accept_multishot(op, header->fd);
+                }
+                if (op->next_fd < op->pending_fds.size() || op->res < 0)
+                    return false;
+                op->waiting = true;
+                return true;
+            }
+
+            int await_resume() noexcept
+            {
+                op->waiting = false;
+                if (op->next_fd < op->pending_fds.size())
+                {
+                    const int fd = op->pending_fds[op->next_fd++];
+                    if (op->next_fd == op->pending_fds.size())
+                    {
+                        op->pending_fds.clear();
+                        op->next_fd = 0;
+                    }
+                    return fd;
+                }
+                const int e = static_cast<int>(op->res);
+                op->res = 0;
+                op->err = 0;
+                return (e < 0) ? e : -1;
+            }
+        };
+
         struct SendFileAwaiter
         {
             SendFileOp op{};
@@ -142,7 +310,7 @@ namespace usub::uvent::net
                 op.header = header;
                 op.coro = h;
 
-                system::this_thread::detail::q->enqueue(h);
+                system::this_thread::detail::q.enqueue(h);
             }
 
             void await_resume() noexcept {}
@@ -394,14 +562,14 @@ namespace usub::uvent::net
     }
 
     template <Proto p, Role r>
-    Socket<p, r>::Socket(const Socket& o) noexcept : header_(o.header_)
+    Socket<p, r>::Socket(const Socket& o) noexcept : address(o.address), ipv(o.ipv), header_(o.header_)
     {
         if (this->header_)
             this->add_ref();
     }
 
     template <Proto p, Role r>
-    Socket<p, r>::Socket(Socket&& o) noexcept : header_(o.header_)
+    Socket<p, r>::Socket(Socket&& o) noexcept : address(o.address), ipv(o.ipv), header_(o.header_)
     {
         o.header_ = nullptr;
     }
@@ -413,6 +581,8 @@ namespace usub::uvent::net
             return *this;
         Socket tmp(o);
         std::swap(this->header_, tmp.header_);
+        this->address = tmp.address;
+        this->ipv = tmp.ipv;
         return *this;
     }
 
@@ -423,6 +593,8 @@ namespace usub::uvent::net
             return *this;
         Socket tmp(std::move(o));
         std::swap(this->header_, tmp.header_);
+        this->address = tmp.address;
+        this->ipv = tmp.ipv;
         return *this;
     }
 
@@ -514,37 +686,19 @@ namespace usub::uvent::net
     task::Awaitable<void> Socket<p, r>::async_accept(F on_accept, Args&&... args)
         requires(p == Proto::TCP && r == Role::PASSIVE)
     {
+        detail::MultishotAcceptOp op;
+        op.kind = detail::IoOpKind::AcceptMultishot;
+        op.header = this->header_;
+
         for (;;)
         {
-            sockaddr_storage ss{};
-            socklen_t sl = sizeof(ss);
+            detail::MultishotAcceptAwaiter aw{.op = &op, .header = this->header_};
+            const int cfd = co_await aw;
 
-            int cfd = ::accept4(this->header_->fd, reinterpret_cast<sockaddr*>(&ss), &sl, SOCK_NONBLOCK | SOCK_CLOEXEC);
-            if (cfd >= 0)
+            if (cfd < 0)
             {
-                auto* h = new SocketHeader{.fd = cfd,
-                                           .socket_info = uint8_t(Proto::TCP) | uint8_t(Role::ACTIVE),
-                                           .state = (1ull & usub::utils::sync::refc::COUNT_MASK)};
-
-                TCPClientSocket sc(h);
-                if (ss.ss_family == AF_INET)
-                    sc.address = *reinterpret_cast<sockaddr_in*>(&ss);
-                else if (ss.ss_family == AF_INET6)
-                {
-                    sc.address = *reinterpret_cast<sockaddr_in6*>(&ss);
-                    sc.ipv = utils::net::IPV6;
-                }
-
-                if constexpr (std::is_void_v<std::invoke_result_t<F, TCPClientSocket>>)
-                    on_accept(std::move(sc, std::forward<Args>(args)...));
-                else
-                    system::co_spawn(on_accept(std::move(sc), std::forward<Args>(args)...));
-                continue;
-            }
-
-            if (errno != EAGAIN && errno != EWOULDBLOCK)
-            {
-                switch (errno)
+                const int err = -cfd;
+                switch (err)
                 {
                 case EINTR:
                 case ECONNABORTED:
@@ -553,32 +707,55 @@ namespace usub::uvent::net
 #endif
                     continue;
                 default:
+                {
+                    auto& pl = static_cast<detail::IOUringPoller&>(system::this_thread::detail::pl);
+                    pl.submit_cancel(&op);
                     co_return;
+                }
                 }
             }
 
-            detail::AcceptAwaiter aw{.op = {}, .header = this->header_};
-            int new_fd = co_await aw;
-            if (new_fd < 0)
-                co_return;
+            {
+                int one = 1;
+                int busy_us = 50;
+                ::setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+#ifdef SO_BUSY_POLL
+                ::setsockopt(cfd, SOL_SOCKET, SO_BUSY_POLL, &busy_us, sizeof(busy_us));
+#endif
+#ifdef SO_PREFER_BUSY_POLL
+                ::setsockopt(cfd, SOL_SOCKET, SO_PREFER_BUSY_POLL, &one, sizeof(one));
+#endif
+            }
 
-            auto* h = new SocketHeader{.fd = new_fd,
+            auto* h = new SocketHeader{.fd = cfd,
                                        .socket_info = uint8_t(Proto::TCP) | uint8_t(Role::ACTIVE),
                                        .state = (1ull & usub::utils::sync::refc::COUNT_MASK)};
 
             TCPClientSocket sc(h);
-            if (aw.op.addr.ss_family == AF_INET)
-                sc.address = *reinterpret_cast<sockaddr_in*>(&aw.op.addr);
-            else if (aw.op.addr.ss_family == AF_INET6)
+            sockaddr_storage ss{};
+            socklen_t sl = sizeof(ss);
+            if (::getpeername(cfd, reinterpret_cast<sockaddr*>(&ss), &sl) == 0)
             {
-                sc.address = *reinterpret_cast<sockaddr_in6*>(&aw.op.addr);
-                sc.ipv = utils::net::IPV6;
+                if (ss.ss_family == AF_INET)
+                    sc.address = *reinterpret_cast<sockaddr_in*>(&ss);
+                else if (ss.ss_family == AF_INET6)
+                {
+                    sc.address = *reinterpret_cast<sockaddr_in6*>(&ss);
+                    sc.ipv = utils::net::IPV6;
+                }
             }
 
             if constexpr (std::is_void_v<std::invoke_result_t<F, TCPClientSocket>>)
-                on_accept(std::move(sc));
+                on_accept(std::move(sc), std::forward<Args>(args)...);
             else
-                system::co_spawn(on_accept(std::move(sc)));
+            {
+#ifndef UVENT_ENABLE_REUSEADDR
+                system::co_spawn(on_accept(std::move(sc), std::forward<Args>(args)...));
+#else
+                system::co_spawn_static(on_accept(std::move(sc), std::forward<Args>(args)...),
+                                        system::this_thread::detail::t_id);
+#endif
+            }
         }
     }
 
@@ -592,6 +769,26 @@ namespace usub::uvent::net
 #endif
         if (!dst || max_read_size == 0)
             co_return 0;
+
+        auto& pl = static_cast<detail::IOUringPoller&>(system::this_thread::detail::pl);
+        if (pl.has_buf_ring())
+        {
+            auto* op = &this->header_->ms_recv;
+            for (;;)
+            {
+                if (op->has_data())
+                {
+                    const size_t n = detail::consume_ms_recv(pl, op, dst, max_read_size);
+#ifndef UVENT_ENABLE_REUSEADDR
+                    this->header_->timeout_epoch_bump();
+#endif
+                    co_return static_cast<ssize_t>(n);
+                }
+                if (op->has_terminal)
+                    co_return static_cast<ssize_t>(op->terminal); // 0=EOF, <0=-errno
+                co_await detail::MultishotRecvAwaiter{.op = op, .header = this->header_};
+            }
+        }
 
         detail::RecvAwaiter aw{
             .op = {},
@@ -630,12 +827,51 @@ namespace usub::uvent::net
         if (max_read_size == 0)
             co_return 0;
 
-        auto tmp = std::unique_ptr<uint8_t[]>(new uint8_t[max_read_size]);
+        uint8_t* dst = buffer.reserve_tail(max_read_size);
+
+        auto& mspl = static_cast<detail::IOUringPoller&>(system::this_thread::detail::pl);
+        if (mspl.has_buf_ring())
+        {
+            if (!this->header_->first_read_done)
+            {
+                this->header_->first_read_done = true;
+                const ssize_t n = ::recv(this->header_->fd, dst, max_read_size, MSG_DONTWAIT);
+                if (n > 0)
+                {
+                    buffer.commit(static_cast<size_t>(n));
+#ifndef UVENT_ENABLE_REUSEADDR
+                    this->header_->timeout_epoch_bump();
+#endif
+                    co_return n;
+                }
+                if (n == 0)
+                    co_return 0;
+                if (errno != EAGAIN && errno != EWOULDBLOCK)
+                    co_return -errno;
+            }
+
+            auto* op = &this->header_->ms_recv;
+            for (;;)
+            {
+                if (op->has_data())
+                {
+                    const size_t n = detail::consume_ms_recv(mspl, op, dst, max_read_size);
+                    buffer.commit(n);
+#ifndef UVENT_ENABLE_REUSEADDR
+                    this->header_->timeout_epoch_bump();
+#endif
+                    co_return static_cast<ssize_t>(n);
+                }
+                if (op->has_terminal)
+                    co_return static_cast<ssize_t>(op->terminal); // 0=EOF, <0=-errno
+                co_await detail::MultishotRecvAwaiter{.op = op, .header = this->header_};
+            }
+        }
 
         detail::RecvAwaiter aw{
             .op = {},
             .header = this->header_,
-            .buf = tmp.get(),
+            .buf = dst,
             .len = max_read_size,
         };
 
@@ -649,7 +885,7 @@ namespace usub::uvent::net
             co_return res;
         }
 
-        buffer.append(tmp.get(), static_cast<size_t>(res));
+        buffer.commit(static_cast<size_t>(res));
 
 #ifndef UVENT_ENABLE_REUSEADDR
         this->header_->timeout_epoch_bump();
@@ -668,9 +904,6 @@ namespace usub::uvent::net
         if (!buf || sz == 0)
             co_return 0;
 
-        auto internal = std::unique_ptr<uint8_t[]>(new uint8_t[sz]);
-        std::memcpy(internal.get(), buf, sz);
-
         size_t total_written = 0;
 
         while (total_written < sz)
@@ -678,7 +911,7 @@ namespace usub::uvent::net
             detail::SendAwaiter aw{
                 .op = {},
                 .header = this->header_,
-                .buf = internal.get() + total_written,
+                .buf = buf + total_written,
                 .len = sz - total_written,
             };
 
@@ -784,21 +1017,23 @@ namespace usub::uvent::net
     Socket<p, r>::async_connect(std::string& host, std::string& port, std::chrono::milliseconds connect_timeout)
         requires(p == Proto::TCP && r == Role::ACTIVE)
     {
-        addrinfo hints{}, *res = nullptr;
+        addrinfo hints{};
         hints.ai_family = (this->ipv == utils::net::IPV::IPV4) ? AF_INET : AF_INET6;
         hints.ai_socktype = SOCK_STREAM;
         hints.ai_protocol = 0;
 
-        if (getaddrinfo(host.c_str(), port.c_str(), &hints, &res) != 0 || !res)
+        auto resolved = co_await async_resolve(host, port, hints);
+        if (!resolved || !*resolved)
         {
             this->header_->fd = -1;
             co_return usub::utils::errors::ConnectError::GetAddrInfoFailed;
         }
+        AddrInfoPtr res_holder = std::move(*resolved);
+        addrinfo* res = res_holder.get();
 
         this->header_->fd = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
         if (this->header_->fd < 0)
         {
-            freeaddrinfo(res);
             co_return usub::utils::errors::ConnectError::SocketCreationFailed;
         }
 
@@ -826,12 +1061,16 @@ namespace usub::uvent::net
         aw.op.addrlen = res->ai_addrlen;
 
         int c = co_await aw;
-        freeaddrinfo(res);
 
         if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
             co_return usub::utils::errors::ConnectError::Timeout;
 
+#ifdef UVENT_ENABLE_REUSEADDR
+        system::this_thread::detail::wh.cancelTimer(this->header_->timer_id);
+#else
         system::this_thread::detail::wh.removeTimer(this->header_->timer_id);
+#endif
+        this->header_->timer_id = 0;
 
 #ifndef UVENT_ENABLE_REUSEADDR
         if (connect_timeout.count() > 0)
@@ -897,21 +1136,23 @@ namespace usub::uvent::net
     Socket<p, r>::async_connect(std::string&& host, std::string&& port, std::chrono::milliseconds connect_timeout)
         requires(p == Proto::TCP && r == Role::ACTIVE)
     {
-        addrinfo hints{}, *res = nullptr;
+        addrinfo hints{};
         hints.ai_family = (this->ipv == utils::net::IPV::IPV4) ? AF_INET : AF_INET6;
         hints.ai_socktype = SOCK_STREAM;
         hints.ai_protocol = 0;
 
-        if (getaddrinfo(host.c_str(), port.c_str(), &hints, &res) != 0 || !res)
+        auto resolved = co_await async_resolve(host, port, hints);
+        if (!resolved || !*resolved)
         {
             this->header_->fd = -1;
             co_return usub::utils::errors::ConnectError::GetAddrInfoFailed;
         }
+        AddrInfoPtr res_holder = std::move(*resolved);
+        addrinfo* res = res_holder.get();
 
         this->header_->fd = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
         if (this->header_->fd < 0)
         {
-            freeaddrinfo(res);
             co_return usub::utils::errors::ConnectError::SocketCreationFailed;
         }
 
@@ -939,12 +1180,16 @@ namespace usub::uvent::net
         aw.op.addrlen = res->ai_addrlen;
 
         int c = co_await aw;
-        freeaddrinfo(res);
 
         if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
             co_return usub::utils::errors::ConnectError::Timeout;
 
+#ifdef UVENT_ENABLE_REUSEADDR
+        system::this_thread::detail::wh.cancelTimer(this->header_->timer_id);
+#else
         system::this_thread::detail::wh.removeTimer(this->header_->timer_id);
+#endif
+        this->header_->timer_id = 0;
 
 #ifndef UVENT_ENABLE_REUSEADDR
         if (connect_timeout.count() > 0)
@@ -1094,6 +1339,17 @@ namespace usub::uvent::net
         if (!this->header_ || this->header_->fd < 0)
             return;
 
+#ifdef UVENT_ENABLE_REUSEADDR
+        if constexpr (p == Proto::TCP && r == Role::ACTIVE)
+        {
+            if (this->header_->timer_id != 0 &&
+                system::this_thread::detail::wh.cancelTimer(this->header_->timer_id))
+            {
+                this->header_->timer_id = 0;
+                this->release();
+            }
+        }
+#endif
         ::shutdown(this->header_->fd, SHUT_RDWR);
         this->header_->mark_disconnected();
     }
@@ -1102,6 +1358,11 @@ namespace usub::uvent::net
     void Socket<p, r>::set_timeout_ms(timeout_t timeout) const
         requires(p == Proto::TCP && r == Role::ACTIVE)
     {
+        if (this->header_->timer_id != 0)
+        {
+            system::this_thread::detail::wh.updateTimer(this->header_->timer_id, timeout);
+            return;
+        }
 #ifndef UVENT_ENABLE_REUSEADDR
         {
             uint64_t s = this->header_->state.load(std::memory_order_relaxed);
@@ -1139,8 +1400,14 @@ namespace usub::uvent::net
 #if UVENT_DEBUG
         spdlog::debug("set_timeout_ms(io_uring): {}", this->header_->get_counter());
 #endif
-        auto* timer = new utils::Timer(timeout);
-        timer->addFunction(detail::processSocketTimeout, this->header_);
+        auto* timer = &this->header_->timer;
+        timer->arm_embedded(timeout,
+                            [](void* hp)
+                            {
+                                std::any a{static_cast<SocketHeader*>(hp)};
+                                detail::processSocketTimeout(a);
+                            },
+                            this->header_);
         this->header_->timer_id = system::this_thread::detail::wh.addTimer(timer);
     }
 
@@ -1150,7 +1417,30 @@ namespace usub::uvent::net
         if (!this->header_)
             return;
 
+        if (this->header_->timer_id != 0)
+        {
+#ifdef UVENT_ENABLE_REUSEADDR
+            system::this_thread::detail::wh.cancelTimer(this->header_->timer_id);
+#else
+            system::this_thread::detail::wh.removeTimer(this->header_->timer_id);
+#endif
+            this->header_->timer_id = 0;
+        }
+
         this->header_->close_for_new_refs();
+
+        {
+            auto& pl = static_cast<detail::IOUringPoller&>(system::this_thread::detail::pl);
+            if (pl.has_buf_ring())
+            {
+                auto* op = &this->header_->ms_recv;
+                while (auto* s = op->front())
+                {
+                    pl.recycle_buf(s->bid);
+                    op->pop_front();
+                }
+            }
+        }
 
         system::this_thread::detail::pl.removeEvent(this->header_);
 

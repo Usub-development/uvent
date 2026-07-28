@@ -21,7 +21,7 @@ namespace usub::uvent::net::detail
             auto resumed = std::exchange(this->header_->first, nullptr);
             if (resumed)
             {
-                system::this_thread::detail::q->enqueue(resumed);
+                system::this_thread::detail::q.enqueue(resumed);
             }
         }
     }
@@ -44,7 +44,7 @@ namespace usub::uvent::net::detail
             auto resumed = std::exchange(this->header_->second, nullptr);
             if (resumed)
             {
-                system::this_thread::detail::q->enqueue(resumed);
+                system::this_thread::detail::q.enqueue(resumed);
             }
         }
     }
@@ -67,7 +67,7 @@ namespace usub::uvent::net::detail
             auto resumed = std::exchange(this->header_->first, nullptr);
             if (resumed)
             {
-                system::this_thread::detail::q->enqueue(resumed);
+                system::this_thread::detail::q.enqueue(resumed);
             }
         }
     }

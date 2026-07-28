@@ -62,7 +62,6 @@ namespace usub::uvent::core
                           (void*)h);
         }
 #endif
-        (void)h;
     }
 
     void IocpPoller::updateEvent(net::SocketHeader* header, OperationType op)
@@ -73,8 +72,6 @@ namespace usub::uvent::core
                       header ? static_cast<std::uint64_t>(header->fd) : 0ull,
                       (int)op);
 #endif
-        (void)header;
-        (void)op;
     }
 
     void IocpPoller::removeEvent(net::SocketHeader* header, OperationType)
@@ -96,6 +93,14 @@ namespace usub::uvent::core
             ::closesocket(header->fd);
             header->fd = INVALID_FD;
         }
+    }
+
+    void IocpPoller::wake() noexcept
+    {
+        if (!this->iocp_handle)
+            return;
+        if (!this->wake_pending.exchange(true, std::memory_order_acq_rel))
+            ::PostQueuedCompletionStatus(this->iocp_handle, 0, reinterpret_cast<ULONG_PTR>(this), nullptr);
     }
 
     bool IocpPoller::poll(int timeout_ms)
@@ -136,6 +141,11 @@ namespace usub::uvent::core
         for (ULONG i = 0; i < n; ++i)
         {
             auto& e = this->events[i];
+            if (e.lpCompletionKey == reinterpret_cast<ULONG_PTR>(this) && e.lpOverlapped == nullptr)
+            {
+                this->wake_pending.store(false, std::memory_order_release);
+                continue;
+            }
             auto* header = reinterpret_cast<net::SocketHeader*>(e.lpCompletionKey);
             auto* ov = reinterpret_cast<net::IocpOverlapped*>(e.lpOverlapped);
 
@@ -196,7 +206,7 @@ namespace usub::uvent::core
                     spdlog::trace("IocpPoller::poll: enqueue FIRST continuation fd={}",
                                   (std::uint64_t)header->fd);
 #endif
-                    system::this_thread::detail::q->enqueue(c);
+                    system::this_thread::detail::q.enqueue(c);
                 }
             }
             else if (ov->op == net::IocpOp::WRITE || ov->op == net::IocpOp::CONNECT)
@@ -235,7 +245,7 @@ namespace usub::uvent::core
                     spdlog::trace("IocpPoller::poll: enqueue SECOND continuation fd={}",
                                   (std::uint64_t)header->fd);
 #endif
-                    system::this_thread::detail::q->enqueue(c);
+                    system::this_thread::detail::q.enqueue(c);
                 }
             }
 

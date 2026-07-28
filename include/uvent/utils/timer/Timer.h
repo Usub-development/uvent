@@ -24,6 +24,8 @@ namespace usub::uvent::utils
 {
     task::Awaitable<void> timeout_coroutine(std::function<void(std::any&)> f, std::any arg);
 
+    using raw_timer_fn = void (*)(void*);
+
     class alignas(32) Timer
     {
     public:
@@ -60,16 +62,22 @@ namespace usub::uvent::utils
 
         void bind(std::coroutine_handle<> h) noexcept;
 
+        void arm_embedded(timer_duration_t dur, raw_timer_fn f, void* arg) noexcept;
+
     public:
         timeout_t expiryTime;
         timer_duration_t duration_ms;
 
     private:
         std::coroutine_handle<> coro;
+        raw_timer_fn raw_fn{nullptr};
+        void* raw_arg{nullptr};
+        bool heap{true};
         bool active;
         uint64_t id;
         size_t slotIndex{0};
         size_t level{0};
+        size_t posInBucket{0};
     };
 
     enum class OpType : uint8_t { ADD, UPDATE, REMOVE };

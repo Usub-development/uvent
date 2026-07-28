@@ -170,7 +170,7 @@ static inline void uvent_sock_nosigpipe(int) {}
 #define UVENT_SEND_NOSIG_FLAGS 0
 static inline void uvent_sock_nosigpipe(int fd) {
   int one = 1;
-  (void)setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+  setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
 }
 
 #elif defined(OS_WINDOWS)

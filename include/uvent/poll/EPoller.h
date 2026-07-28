@@ -24,7 +24,7 @@ namespace usub::uvent::core
     public:
         explicit EPoller(utils::TimerWheel& wheel);
 
-        ~EPoller() = default;
+        ~EPoller();
 
         void addEvent(net::SocketHeader* header, OperationType initialState);
 
@@ -44,17 +44,19 @@ namespace usub::uvent::core
 
         int get_poll_fd();
 
+        void wake() noexcept;
+
     private:
         std::binary_semaphore lock{1};
         int poll_fd{-1};
+        int wake_fd{-1};
         uint64_t timeoutDuration_ms{5000};
         std::atomic_bool is_locked{false};
+        std::atomic_bool wake_pending{false};
 
     private:
         /// @brief events returned by epoll
         std::vector<epoll_event> events;
-        /// @brief used to ignore signal like: SIGPIPE etc.
-        sigset_t sigmask{};
         /// @brief used to store all timers
         utils::TimerWheel& wheel;
     };

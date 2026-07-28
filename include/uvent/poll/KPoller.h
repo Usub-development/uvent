@@ -46,7 +46,12 @@ namespace usub::uvent::core
         int get_poll_fd() const;
 
         void deregisterEvent(net::SocketHeader* header) const;
+
+        void wake() noexcept;
+
     private:
+        static constexpr uintptr_t kWakeIdent = 0;
+
         inline void enable_read(net::SocketHeader* h, bool enable, bool clear_edge) const
         {
             uint16_t flags = (enable ? (EV_ADD | EV_ENABLE) : (EV_ADD | EV_DISABLE));
@@ -72,6 +77,7 @@ namespace usub::uvent::core
         int poll_fd{-1};
         uint64_t timeoutDuration_ms{5000};
         std::atomic_bool is_locked{false};
+        std::atomic_bool wake_pending{false};
 
     private:
         /// events returned by kevent

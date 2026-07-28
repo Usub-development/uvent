@@ -35,14 +35,14 @@ namespace usub::uvent::task {
 
         Awaitable() = default;
 
-        virtual ~Awaitable() = default;
+        ~Awaitable() = default;
 
         [[nodiscard]] bool await_ready() const noexcept;
 
-        virtual Value await_resume();
+        Value await_resume();
 
         template <class U>
-        void await_suspend(std::coroutine_handle<U> h);
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<U> h);
 
         promise_type* get_promise();
 
@@ -68,16 +68,16 @@ namespace usub::uvent::task {
 
         Awaitable() = default;
 
-        virtual ~Awaitable() = default;
+        ~Awaitable() = default;
 
         [[nodiscard]] bool await_ready() const noexcept;
 
-        virtual void await_resume();
+        void await_resume();
 
         promise_type* get_promise();
 
         template <class U>
-        void await_suspend(std::coroutine_handle<U> h);
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<U> h);
 
         /// @brief Should be used carefully! Only for `get_return_object` in promise type.
         explicit Awaitable(promise_type* af);

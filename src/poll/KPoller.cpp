@@ -17,6 +17,22 @@ namespace usub::uvent::core
             throw std::system_error(errno, std::generic_category(), "kqueue()");
         sigemptyset(&this->sigmask);
         this->events.resize(1024);
+
+        struct kevent wev{};
+        EV_SET(&wev, kWakeIdent, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, nullptr);
+        ::kevent(this->poll_fd, &wev, 1, nullptr, 0, nullptr);
+    }
+
+    void KQueuePoller::wake() noexcept
+    {
+        if (this->poll_fd < 0)
+            return;
+        if (!this->wake_pending.exchange(true, std::memory_order_acq_rel))
+        {
+            struct kevent wev{};
+            EV_SET(&wev, kWakeIdent, EVFILT_USER, 0, NOTE_TRIGGER, 0, nullptr);
+            ::kevent(this->poll_fd, &wev, 1, nullptr, 0, nullptr);
+        }
     }
 
     void KQueuePoller::addEvent(net::SocketHeader* header, OperationType initialState)
@@ -101,6 +117,13 @@ namespace usub::uvent::core
         for (int i = 0; i < n; ++i)
         {
             auto& ev = this->events[i];
+            if (ev.filter == EVFILT_USER)
+            {
+                // Wake-событие: сбрасываем флаг — задача уже в очереди
+                // (enqueue до wake), EV_CLEAR сбросил само событие.
+                this->wake_pending.store(false, std::memory_order_release);
+                continue;
+            }
             auto* sock = static_cast<net::SocketHeader*>(ev.udata);
             if (!sock)
                 continue;
@@ -134,7 +157,7 @@ namespace usub::uvent::core
                 spdlog::info("Socket #{} triggered as IN", sock->fd);
 #endif
                 auto c = std::exchange(sock->first, nullptr);
-                system::this_thread::detail::q->enqueue(c);
+                system::this_thread::detail::q.enqueue(c);
             }
 
             if (ev.filter == EVFILT_WRITE && sock->second)
@@ -145,7 +168,7 @@ namespace usub::uvent::core
                 if (!(sock->socket_info & static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING)))
                 {
                     auto c = std::exchange(sock->second, nullptr);
-                    system::this_thread::detail::q->enqueue(c);
+                    system::this_thread::detail::q.enqueue(c);
                 }
                 else
                 {
@@ -159,11 +182,15 @@ namespace usub::uvent::core
 #if UVENT_DEBUG
                         spdlog::debug("Connect failed on fd={} err={}", sock->fd, err);
 #endif
+                        // Будим запаркованный connect — иначе он ждёт только
+                        // таймер (см. аналогичный фикс в EPoller).
+                        auto c = std::exchange(sock->second, nullptr);
+                        system::this_thread::detail::q.enqueue(c);
                     }
                     else
                     {
                         auto c = std::exchange(sock->second, nullptr);
-                        system::this_thread::detail::q->enqueue(c);
+                        system::this_thread::detail::q.enqueue(c);
                     }
                 }
             }

@@ -11,6 +11,7 @@
 
 #include <uvent/poll/EPoller.h>
 #include "AwaiterOperations.h"
+#include "Resolver.h"
 #include "SocketMetadata.h"
 #include "uvent/base/Predefines.h"
 #include "uvent/system/Defines.h"
@@ -54,7 +55,7 @@ namespace usub::uvent::net
          * \brief Constructs a passive TCP socket bound to given address/port (lvalue ip).
          * Used for listening sockets (bind + listen).
          */
-        explicit Socket(std::string& ip_addr, int port = 8080, int backlog = 50, utils::net::IPV ipv = utils::net::IPV4,
+        explicit Socket(std::string& ip_addr, int port = 8080, int backlog = SOMAXCONN, utils::net::IPV ipv = utils::net::IPV4,
                         utils::net::SocketAddressType socketAddressType = utils::net::TCP) noexcept
             requires(p == Proto::TCP && r == Role::PASSIVE);
 
@@ -62,7 +63,7 @@ namespace usub::uvent::net
          * \brief Constructs a passive TCP socket bound to given address/port (rvalue ip).
          * Used for listening sockets (bind + listen).
          */
-        explicit Socket(std::string&& ip_addr, int port = 8080, int backlog = 50,
+        explicit Socket(std::string&& ip_addr, int port = 8080, int backlog = SOMAXCONN,
                         utils::net::IPV ipv = utils::net::IPV4,
                         utils::net::SocketAddressType socketAddressType = utils::net::TCP) noexcept
             requires(p == Proto::TCP && r == Role::PASSIVE);
@@ -374,14 +375,14 @@ namespace usub::uvent::net
     }
 
     template <Proto p, Role r>
-    Socket<p, r>::Socket(const Socket& o) noexcept : header_(o.header_)
+    Socket<p, r>::Socket(const Socket& o) noexcept : address(o.address), ipv(o.ipv), header_(o.header_)
     {
         if (this->header_)
             this->add_ref();
     }
 
     template <Proto p, Role r>
-    Socket<p, r>::Socket(Socket&& o) noexcept : header_(o.header_)
+    Socket<p, r>::Socket(Socket&& o) noexcept : address(o.address), ipv(o.ipv), header_(o.header_)
     {
         o.header_ = nullptr;
     }
@@ -393,6 +394,8 @@ namespace usub::uvent::net
             return *this;
         Socket tmp(o);
         std::swap(this->header_, tmp.header_);
+        this->address = tmp.address;
+        this->ipv = tmp.ipv;
         return *this;
     }
 
@@ -403,6 +406,8 @@ namespace usub::uvent::net
             return *this;
         Socket tmp(std::move(o));
         std::swap(this->header_, tmp.header_);
+        this->address = tmp.address;
+        this->ipv = tmp.ipv;
         return *this;
     }
 
@@ -433,6 +438,17 @@ namespace usub::uvent::net
 
             if (cfd >= 0)
             {
+                {
+                    int one = 1;
+                    int busy_us = 50;
+                    ::setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+#ifdef SO_BUSY_POLL
+                    ::setsockopt(cfd, SOL_SOCKET, SO_BUSY_POLL, &busy_us, sizeof(busy_us));
+#endif
+#ifdef SO_PREFER_BUSY_POLL
+                    ::setsockopt(cfd, SOL_SOCKET, SO_PREFER_BUSY_POLL, &one, sizeof(one));
+#endif
+                }
                 auto* h = new SocketHeader{.fd = cfd,
                                            .socket_info = uint8_t(Proto::TCP) | uint8_t(Role::ACTIVE),
                                            .state = (1ull & usub::utils::sync::refc::COUNT_MASK)};
@@ -501,6 +517,17 @@ namespace usub::uvent::net
                     ::accept4(this->header_->fd, reinterpret_cast<sockaddr*>(&ss), &sl, SOCK_NONBLOCK | SOCK_CLOEXEC);
                 if (cfd >= 0)
                 {
+                    {
+                        int one = 1;
+                        int busy_us = 50;
+                        ::setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+#ifdef SO_BUSY_POLL
+                        ::setsockopt(cfd, SOL_SOCKET, SO_BUSY_POLL, &busy_us, sizeof(busy_us));
+#endif
+#ifdef SO_PREFER_BUSY_POLL
+                        ::setsockopt(cfd, SOL_SOCKET, SO_PREFER_BUSY_POLL, &one, sizeof(one));
+#endif
+                    }
                     auto* h = new SocketHeader{.fd = cfd,
                                                .socket_info = uint8_t(Proto::TCP) | uint8_t(Role::ACTIVE),
                                                .state = (1ull & usub::utils::sync::refc::COUNT_MASK)};
@@ -518,7 +545,14 @@ namespace usub::uvent::net
                     if constexpr (std::is_void_v<std::invoke_result_t<F, TCPClientSocket>>)
                         on_accept(std::move(sc), std::forward<Args>(args)...);
                     else
+                    {
+#ifndef UVENT_ENABLE_REUSEADDR
                         system::co_spawn(on_accept(std::move(sc), std::forward<Args>(args)...));
+#else
+                        system::co_spawn_static(on_accept(std::move(sc), std::forward<Args>(args)...),
+                                                system::this_thread::detail::t_id);
+#endif
+                    }
                     continue;
                 }
 
@@ -955,16 +989,13 @@ namespace usub::uvent::net
     ssize_t Socket<p, r>::write(uint8_t* buf, size_t sz)
         requires((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP))
     {
-        auto buf_internal = std::unique_ptr<uint8_t[]>(new uint8_t[sz], std::default_delete<uint8_t[]>());
-        std::copy_n(buf, sz, buf_internal.get());
-
         ssize_t total_written = 0;
         int retries = 0;
 
-        while (total_written < sz)
+        while (total_written < static_cast<ssize_t>(sz))
         {
             ssize_t res =
-                ::send(this->header_->fd, buf_internal.get() + total_written, sz - total_written, MSG_DONTWAIT);
+                ::send(this->header_->fd, buf + total_written, sz - total_written, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (res > 0)
             {
                 total_written += res;
@@ -1000,21 +1031,23 @@ namespace usub::uvent::net
     Socket<p, r>::async_connect(std::string& host, std::string& port, std::chrono::milliseconds connect_timeout)
         requires(p == Proto::TCP && r == Role::ACTIVE)
     {
-        addrinfo hints{}, *res = nullptr;
+        addrinfo hints{};
         hints.ai_family = (this->ipv == utils::net::IPV::IPV4) ? AF_INET : AF_INET6;
         hints.ai_socktype = SOCK_STREAM;
         hints.ai_protocol = 0;
 
-        if (getaddrinfo(host.c_str(), port.c_str(), &hints, &res) != 0 || !res)
+        auto resolved = co_await async_resolve(host, port, hints);
+        if (!resolved || !*resolved)
         {
             this->header_->fd = -1;
             co_return usub::utils::errors::ConnectError::GetAddrInfoFailed;
         }
+        AddrInfoPtr res_holder = std::move(*resolved);
+        addrinfo* res = res_holder.get();
 
         this->header_->fd = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
         if (this->header_->fd < 0)
         {
-            freeaddrinfo(res);
             co_return usub::utils::errors::ConnectError::SocketCreationFailed;
         }
 
@@ -1039,15 +1072,12 @@ namespace usub::uvent::net
         {
             ::close(this->header_->fd);
             this->header_->fd = -1;
-            freeaddrinfo(res);
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
 
         system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::ALL);
 
         co_await detail::AwaiterWrite{this->header_};
-
-        freeaddrinfo(res);
 
         if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
         {
@@ -1074,7 +1104,12 @@ namespace usub::uvent::net
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
 
+#ifdef UVENT_ENABLE_REUSEADDR
+        system::this_thread::detail::wh.cancelTimer(this->header_->timer_id);
+#else
         system::this_thread::detail::wh.removeTimer(this->header_->timer_id);
+#endif
+        this->header_->timer_id = 0;
 
 #ifndef UVENT_ENABLE_REUSEADDR
         if (connect_timeout.count() > 0)
@@ -1100,21 +1135,23 @@ namespace usub::uvent::net
     Socket<p, r>::async_connect(std::string&& host, std::string&& port, std::chrono::milliseconds connect_timeout)
         requires(p == Proto::TCP && r == Role::ACTIVE)
     {
-        addrinfo hints{}, *res = nullptr;
+        addrinfo hints{};
         hints.ai_family = (this->ipv == utils::net::IPV::IPV4) ? AF_INET : AF_INET6;
         hints.ai_socktype = SOCK_STREAM;
         hints.ai_protocol = 0;
 
-        if (getaddrinfo(host.c_str(), port.c_str(), &hints, &res) != 0 || !res)
+        auto resolved = co_await async_resolve(host, port, hints);
+        if (!resolved || !*resolved)
         {
             this->header_->fd = -1;
             co_return usub::utils::errors::ConnectError::GetAddrInfoFailed;
         }
+        AddrInfoPtr res_holder = std::move(*resolved);
+        addrinfo* res = res_holder.get();
 
         this->header_->fd = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
         if (this->header_->fd < 0)
         {
-            freeaddrinfo(res);
             co_return usub::utils::errors::ConnectError::SocketCreationFailed;
         }
 
@@ -1139,15 +1176,12 @@ namespace usub::uvent::net
         {
             ::close(this->header_->fd);
             this->header_->fd = -1;
-            freeaddrinfo(res);
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
 
         system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::ALL);
 
         co_await detail::AwaiterWrite{this->header_};
-
-        freeaddrinfo(res);
 
         if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
         {
@@ -1174,7 +1208,12 @@ namespace usub::uvent::net
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
 
+#ifdef UVENT_ENABLE_REUSEADDR
+        system::this_thread::detail::wh.cancelTimer(this->header_->timer_id);
+#else
         system::this_thread::detail::wh.removeTimer(this->header_->timer_id);
+#endif
+        this->header_->timer_id = 0;
 
 #ifndef UVENT_ENABLE_REUSEADDR
         if (connect_timeout.count() > 0)
@@ -1200,9 +1239,6 @@ namespace usub::uvent::net
     Socket<p, r>::async_send(uint8_t* buf, size_t sz)
         requires((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP))
     {
-        auto buf_internal = std::unique_ptr<uint8_t[]>(new uint8_t[sz]);
-        std::memcpy(buf_internal.get(), buf, sz);
-
         ssize_t total_written = 0;
         int retries = 0;
 
@@ -1217,8 +1253,8 @@ namespace usub::uvent::net
 
                 if constexpr (p == Proto::TCP)
                 {
-                    res = ::send(this->header_->fd, buf_internal.get() + total_written,
-                                 sz - static_cast<size_t>(total_written), MSG_DONTWAIT);
+                    res = ::send(this->header_->fd, buf + total_written,
+                                 sz - static_cast<size_t>(total_written), MSG_DONTWAIT | MSG_NOSIGNAL);
                 }
                 else
                 {
@@ -1228,7 +1264,7 @@ namespace usub::uvent::net
                         {
                             auto& addr = std::get<sockaddr_in>(this->address);
                             socklen_t addr_len = sizeof(sockaddr_in);
-                            res = ::sendto(this->header_->fd, buf_internal.get() + total_written,
+                            res = ::sendto(this->header_->fd, buf + total_written,
                                            sz - static_cast<size_t>(total_written), MSG_DONTWAIT,
                                            reinterpret_cast<sockaddr*>(&addr), addr_len);
                         }
@@ -1236,7 +1272,7 @@ namespace usub::uvent::net
                         {
                             auto& addr = std::get<sockaddr_in6>(this->address);
                             socklen_t addr_len = sizeof(sockaddr_in6);
-                            res = ::sendto(this->header_->fd, buf_internal.get() + total_written,
+                            res = ::sendto(this->header_->fd, buf + total_written,
                                            sz - static_cast<size_t>(total_written), MSG_DONTWAIT,
                                            reinterpret_cast<sockaddr*>(&addr), addr_len);
                         }
@@ -1366,6 +1402,17 @@ namespace usub::uvent::net
     template <Proto p, Role r>
     void Socket<p, r>::shutdown()
     {
+#ifdef UVENT_ENABLE_REUSEADDR
+        if constexpr (p == Proto::TCP && r == Role::ACTIVE)
+        {
+            if (this->header_->timer_id != 0 &&
+                system::this_thread::detail::wh.cancelTimer(this->header_->timer_id))
+            {
+                this->header_->timer_id = 0;
+                this->release();
+            }
+        }
+#endif
         ::shutdown(this->header_->fd, SHUT_RDWR);
     }
 
@@ -1373,6 +1420,11 @@ namespace usub::uvent::net
     void Socket<p, r>::set_timeout_ms(timeout_t timeout) const
         requires(p == Proto::TCP && r == Role::ACTIVE)
     {
+        if (this->header_->timer_id != 0)
+        {
+            system::this_thread::detail::wh.updateTimer(this->header_->timer_id, timeout);
+            return;
+        }
 #ifndef UVENT_ENABLE_REUSEADDR
         {
             uint64_t s = this->header_->state.load(std::memory_order_relaxed);
@@ -1410,14 +1462,29 @@ namespace usub::uvent::net
 #if UVENT_DEBUG
         spdlog::debug("set_timeout_ms: {}", this->header_->get_counter());
 #endif
-        auto* timer = new utils::Timer(timeout);
-        timer->addFunction(detail::processSocketTimeout, this->header_);
+        auto* timer = &this->header_->timer;
+        timer->arm_embedded(timeout,
+                            [](void* hp)
+                            {
+                                std::any a{static_cast<SocketHeader*>(hp)};
+                                detail::processSocketTimeout(a);
+                            },
+                            this->header_);
         this->header_->timer_id = system::this_thread::detail::wh.addTimer(timer);
     }
 
     template <Proto p, Role r>
     void Socket<p, r>::destroy() noexcept
     {
+        if (this->header_->timer_id != 0)
+        {
+#ifdef UVENT_ENABLE_REUSEADDR
+            system::this_thread::detail::wh.cancelTimer(this->header_->timer_id);
+#else
+            system::this_thread::detail::wh.removeTimer(this->header_->timer_id);
+#endif
+            this->header_->timer_id = 0;
+        }
         this->header_->close_for_new_refs();
         system::this_thread::detail::pl.removeEvent(this->header_);
 #ifndef UVENT_ENABLE_REUSEADDR

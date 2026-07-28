@@ -27,6 +27,7 @@ namespace usub::uvent::system
     {
         this_thread::detail::t_id = this->index_;
         auto& local_pl = system::this_thread::detail::pl;
+        this->thread_local_storage_->set_poller(&local_pl);
         auto& local_wh = system::this_thread::detail::wh;
         auto& local_q = system::this_thread::detail::q;
         auto& local_q_c = system::this_thread::detail::q_c;
@@ -52,21 +53,21 @@ namespace usub::uvent::system
             if (local_pl.try_lock())
             {
                 auto next_timeout = local_wh.getNextTimeout();
-                local_pl.poll((local_q->empty()) ? (next_timeout > 0) ? next_timeout : settings::idle_fallback_ms : 0);
+                local_pl.poll((local_q.empty()) ? (next_timeout > 0) ? next_timeout : settings::idle_fallback_ms : 0);
                 local_pl.unlock();
             }
-            else if (local_q->empty() && local_q_c.empty())
+            else if (local_q.empty() && local_q_c.empty())
             {
                 auto next_timeout = local_wh.getNextTimeout();
-                local_pl.lock_poll((local_q->empty()) ? (next_timeout > 0) ? next_timeout : settings::idle_fallback_ms
+                local_pl.lock_poll((local_q.empty()) ? (next_timeout > 0) ? next_timeout : settings::idle_fallback_ms
                                                       : 0);
             }
 #else
             auto next_timeout = local_wh.getNextTimeout();
-            local_pl.poll(local_q->empty() ? (next_timeout > 0) ? next_timeout : settings::idle_fallback_ms : 0);
+            local_pl.poll(local_q.empty() ? (next_timeout > 0) ? next_timeout : settings::idle_fallback_ms : 0);
 #endif
             size_t n;
-            while ((n = local_q->dequeue_bulk(this->tmp_tasks_.data(), this->tmp_tasks_.size())) > 0)
+            while ((n = local_q.dequeue_bulk(this->tmp_tasks_.data(), this->tmp_tasks_.size())) > 0)
             {
                 for (size_t i = 0; i < n; ++i)
                 {
@@ -103,7 +104,7 @@ namespace usub::uvent::system
             if (st->getSize() > 0)
             {
                 if (std::coroutine_handle<> task; st->dequeue(task))
-                    local_q->enqueue(task);
+                    local_q.enqueue(task);
             }
 
             const size_t n_coroutines =
@@ -175,7 +176,7 @@ namespace usub::uvent::system
             for (size_t i = 0; i < n; ++i)
             {
                 if (buf[i])
-                    system::this_thread::detail::q->enqueue(buf[i]);
+                    system::this_thread::detail::q.enqueue(buf[i]);
             }
         }
     }

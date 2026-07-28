@@ -49,7 +49,7 @@ namespace usub::uvent::detail
 
     void AwaitableFrameBase::push_frame_into_task_queue(std::coroutine_handle<> h)
     {
-        system::this_thread::detail::q->enqueue(h);
+        system::this_thread::detail::q.enqueue(h);
 #if UVENT_DEBUG
         spdlog::trace("Coroutine returned into local queue: {}", h.address());
 #endif
@@ -67,6 +67,21 @@ namespace usub::uvent::detail
     void AwaitableFrameBase::push_frame_to_be_destroyed()
     {
         system::this_thread::detail::q_c.enqueue(this->coro_);
+    }
+
+    std::coroutine_handle<> AwaitableFrameBase::final_transfer() noexcept
+    {
+        this->push_frame_to_be_destroyed();
+        if (auto prev = std::exchange(this->prev_, std::coroutine_handle<>{}))
+            return prev;
+        return std::noop_coroutine();
+    }
+
+    std::coroutine_handle<> AwaitableFrameBase::yield_transfer() noexcept
+    {
+        if (this->prev_)
+            return this->prev_;
+        return std::noop_coroutine();
     }
 
     void AwaitableFrameBase::set_next_coroutine(std::coroutine_handle<> h)
@@ -91,19 +106,11 @@ namespace usub::uvent::detail
         return {};
     }
 
-    std::suspend_always AwaitableFrame<void>::final_suspend() noexcept
+    FinalAwaiter AwaitableFrame<void>::final_suspend() noexcept
     {
 #if UVENT_DEBUG
         spdlog::trace("Entering final_suspend for void coroutine {}", this->coro_.address());
 #endif
-        if (this->prev_)
-        {
-            auto c_temp = std::coroutine_handle<::usub::uvent::detail::AwaitableFrameBase>::from_address(
-                this->prev_.address());
-            AwaitableFrame<void>::push_frame_into_task_queue(static_cast<std::coroutine_handle<>>(c_temp));
-            std::exchange(this->prev_, nullptr);
-        }
-        this->push_frame_to_be_destroyed();
         return {};
     }
 

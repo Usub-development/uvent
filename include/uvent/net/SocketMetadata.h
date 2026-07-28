@@ -16,6 +16,10 @@
 #include "uvent/system/Defines.h"
 #include "uvent/utils/intrinsics/optimizations.h"
 #include "uvent/utils/sync/RefCountedSession.h"
+#include "uvent/utils/timer/Timer.h"
+#ifdef UVENT_ENABLE_IO_URING
+#include "uvent/poll/IOUringOps.h"
+#endif
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -51,6 +55,14 @@ namespace usub::uvent::net
         uint64_t timer_id{0};
         uint8_t socket_info;
         std::coroutine_handle<> first, second;
+        utils::Timer timer{0};
+#ifdef UVENT_ENABLE_IO_URING
+        void* read_op{nullptr};
+        void* write_op{nullptr};
+        core::detail::MultishotRecvOp ms_recv{};
+        bool first_read_done{false};
+        bool first_write_done{false};
+#endif
 #ifndef UVENT_ENABLE_REUSEADDR
         std::atomic<uint64_t> state;
 #else

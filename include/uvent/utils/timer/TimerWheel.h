@@ -10,6 +10,7 @@
 #include "Timer.h"
 
 #include <unordered_map>
+#include <unordered_set>
 #include <functional>
 #include <coroutine>
 #include <iostream>
@@ -41,6 +42,10 @@ namespace usub::uvent::utils
 
         bool removeTimer(uint64_t timerId);
 
+#ifdef UVENT_ENABLE_REUSEADDR
+        bool cancelTimer(uint64_t timerId);
+#endif
+
         void tick();
 
         int getNextTimeout() const;
@@ -61,19 +66,17 @@ namespace usub::uvent::utils
 
         void advance();
 
+        void processSlot(size_t level, size_t slot);
+
         void updateNextExpiryTime();
 
-        inline static bool is_due(timeout_t now, timeout_t expiry, uint64_t interval) noexcept
-        {
-            if (expiry <= now) return true;
-            return (expiry - now) < interval;
-        }
+        void refreshNextExpiry();
 
     private:
         struct Wheel
         {
             Wheel(size_t slots, uint64_t interval)
-                : slots_(slots), interval_(interval), currentSlot_(0)
+                : slots_(slots), interval_(interval)
             {
                 buckets_.resize(slots_);
                 for (auto& b : buckets_)
@@ -82,7 +85,6 @@ namespace usub::uvent::utils
 
             size_t slots_;
             uint64_t interval_;
-            size_t currentSlot_;
             std::vector<std::vector<Timer*>> buckets_;
         };
 
@@ -95,6 +97,7 @@ namespace usub::uvent::utils
         uint64_t                             timerIdCounter_{0};
 #endif
         timeout_t                            nextExpiryTime_;
+        bool                                 nextExpiryDirty_{false};
         size_t                               activeTimerCount_;
 #ifndef UVENT_ENABLE_REUSEADDR
         queue::concurrent::MPMCQueue<Op>     timer_operations_queue;
@@ -102,6 +105,10 @@ namespace usub::uvent::utils
         queue::single_thread::Queue<Op>      timer_operations_queue;
 #endif
         std::vector<Op>                      ops_;
+        std::vector<std::pair<raw_timer_fn, void*>> fired_raw_;
+#ifdef UVENT_ENABLE_REUSEADDR
+        std::unordered_set<uint64_t>         cancelledPending_;
+#endif
     };
 }
 

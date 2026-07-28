@@ -38,9 +38,9 @@ namespace usub::uvent::system
     {
 #ifndef UVENT_ENABLE_REUSEADDR
         /// \brief Wrapper over I/O notification mechanism provided by OS.
-        extern std::unique_ptr<core::PollerBase> pl;
+        extern core::PollerImpl pl;
         /// \brief Timer wheel used to handle multiple timers efficiently.
-        extern std::unique_ptr<utils::TimerWheel> wh;
+        extern utils::TimerWheel wh;
 #else
         /// \brief Wrapper over I/O notification mechanism provided by OS.
         thread_local extern core::PollerImpl pl;

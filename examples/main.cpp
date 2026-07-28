@@ -70,6 +70,35 @@ task::Awaitable<void> listeningCoro()
         co_await acceptor->async_accept(clientCoro);
 }
 
+task::Awaitable<void> oneShotCoro(net::TCPClientSocket socket)
+{
+    static constexpr size_t max_read_size = 64 * 1024;
+    utils::DynamicBuffer buffer;
+    buffer.reserve(max_read_size);
+
+    static const std::string_view httpResponse = "HTTP/1.1 200 OK\r\n"
+                                                 "Content-Type: application/json\r\n"
+                                                 "Content-Length: 20\r\n"
+                                                 "Connection: close\r\n"
+                                                 "\r\n"
+                                                 "{\"status\":\"success\"}";
+
+    socket.set_timeout_ms(5000);
+    ssize_t rdsz = co_await socket.async_read(buffer, max_read_size);
+    if (rdsz > 0)
+        co_await socket.async_write(
+            const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(httpResponse.data())), httpResponse.size());
+    socket.shutdown();
+    co_return;
+}
+
+task::Awaitable<void> oneShotListeningCoro()
+{
+    auto acceptor = new net::TCPServerSocket{"0.0.0.0", 45901};
+    for (;;)
+        co_await acceptor->async_accept(oneShotCoro);
+}
+
 task::Awaitable<void> sendingCoro()
 {
 #if UVENT_DEBUG
@@ -289,7 +318,10 @@ int main()
 
     usub::Uvent uvent(4);
     uvent.for_each_thread([&](int threadIndex, thread::ThreadLocalStorage* tls)
-                          { system::co_spawn_static(listeningCoro(), threadIndex); });
+                          {
+                              system::co_spawn_static(listeningCoro(), threadIndex);
+                              system::co_spawn_static(oneShotListeningCoro(), threadIndex);
+                          });
 
     system::co_spawn(sendingCoro());
     system::co_spawn(sendingCoroTimeout());

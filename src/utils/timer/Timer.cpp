@@ -30,4 +30,14 @@ namespace usub::uvent::utils
         this->coro = h;
         this->active = true;
     }
+
+    void Timer::arm_embedded(timer_duration_t dur, raw_timer_fn f, void* arg) noexcept
+    {
+        this->duration_ms = dur;
+        this->heap = false;
+        this->raw_fn = f;
+        this->raw_arg = arg;
+        this->coro = nullptr;
+        this->active = true;
+    }
 }
