@@ -59,6 +59,7 @@ nav:
       - Awaitable Frame: awaitable_frame.md
   - Networking:
       - Socket: socket.md
+      - Name Resolution & Happy Eyeballs: resolver.md
   - Delayed tasks:
       - Timers: timers.md
   - Settings:

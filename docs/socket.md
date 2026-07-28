@@ -198,6 +198,12 @@ Resolves address, creates non-blocking socket, initiates `connect`, waits for EP
 
 * Returns `std::nullopt` on success, or a specific `ConnectError` (`GetAddrInfoFailed`, `SocketCreationFailed`,
   `ConnectFailed` or `Unknown`).
+* Resolution is fully asynchronous: IP literals resolve inline (numeric fast path), hostnames go through the
+  resolver worker pool without blocking the event loop — see
+  [Name Resolution & Happy Eyeballs](resolver.md). The address family follows the socket's `ipv` field
+  (`IPV4` by default).
+* To race IPv6/IPv4 endpoints of a dual-stack host instead of connecting to the first resolved address,
+  use [`net::connect_happy`](resolver.md#happy-eyeballs-rfc-8305).
 
 ### Connect timeout support
 
