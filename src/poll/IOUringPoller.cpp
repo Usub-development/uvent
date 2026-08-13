@@ -2,8 +2,12 @@
 
 #include <system_error>
 #include <unistd.h>
+#include <poll.h>
+#include <sys/eventfd.h>
+#include <cstdlib>
 #include <cstring>
 
+#include "uvent/net/Socket.h"
 #include "uvent/system/SystemContext.h"
 #include "uvent/system/Settings.h"
 #include "uvent/tasks/AwaitableFrame.h"
@@ -12,15 +16,37 @@ namespace usub::uvent::core
 {
     using namespace usub::uvent::core::detail;
 
+    namespace
+    {
+        void drop_recv_ref(net::SocketHeader* h)
+        {
+            auto s = net::Socket<net::Proto::TCP, net::Role::ACTIVE>::from_existing(h);
+        }
+    } // namespace
+
     IOUringPoller::IOUringPoller(utils::TimerWheel& wheel_)
         : wheel(wheel_)
     {
         std::memset(&this->ring, 0, sizeof(this->ring));
 
-        struct io_uring_params params;
-        std::memset(&params, 0, sizeof(params));
+        const unsigned flag_sets[] = {
+            IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN,
+            IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_COOP_TASKRUN,
+            IORING_SETUP_COOP_TASKRUN,
+            0,
+        };
 
-        int ret = ::io_uring_queue_init_params(this->ring_entries, &this->ring, &params);
+        int ret = -EINVAL;
+        for (unsigned flags : flag_sets)
+        {
+            struct io_uring_params params;
+            std::memset(&params, 0, sizeof(params));
+            params.flags = flags;
+
+            ret = ::io_uring_queue_init_params(this->ring_entries, &this->ring, &params);
+            if (ret == 0)
+                break;
+        }
         if (ret < 0)
         {
 #if UVENT_DEBUG
@@ -33,14 +59,93 @@ namespace usub::uvent::core
 
         sigemptyset(&this->sigmask);
 
+        int bret = 0;
+        this->buf_ring_ = ::io_uring_setup_buf_ring(&this->ring, kBufCount, kBgid, 0, &bret);
+        if (this->buf_ring_)
+        {
+            this->buf_pool_ = static_cast<uint8_t*>(std::malloc(static_cast<size_t>(kBufCount) * kBufSize));
+            if (!this->buf_pool_)
+            {
+                ::io_uring_free_buf_ring(&this->ring, this->buf_ring_, kBufCount, kBgid);
+                this->buf_ring_ = nullptr;
+            }
+            else
+            {
+                for (unsigned i = 0; i < kBufCount; ++i)
+                    ::io_uring_buf_ring_add(this->buf_ring_,
+                                            this->buf_pool_ + static_cast<size_t>(i) * kBufSize, kBufSize,
+                                            static_cast<unsigned short>(i),
+                                            ::io_uring_buf_ring_mask(kBufCount), static_cast<int>(i));
+                ::io_uring_buf_ring_advance(this->buf_ring_, kBufCount);
+            }
+        }
+
+        this->wake_fd_ = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+        this->wake_op_.kind = IoOpKind::WakeFd;
+
 #if UVENT_DEBUG
-        spdlog::info("IOUringPoller ctor: entries={}", this->ring_entries);
+        spdlog::info("IOUringPoller ctor: entries={} buf_ring={}", this->ring_entries, (void*)this->buf_ring_);
 #endif
     }
 
     IOUringPoller::~IOUringPoller()
     {
+        if (this->buf_ring_)
+        {
+            ::io_uring_free_buf_ring(&this->ring, this->buf_ring_, kBufCount, kBgid);
+            std::free(this->buf_pool_);
+        }
+        if (this->wake_fd_ >= 0)
+            ::close(this->wake_fd_);
         ::io_uring_queue_exit(&this->ring);
+    }
+
+    void IOUringPoller::wake() noexcept
+    {
+        if (this->wake_fd_ < 0)
+            return;
+        if (!this->wake_pending_.exchange(true, std::memory_order_acq_rel))
+        {
+            uint64_t one = 1;
+            [[maybe_unused]] ssize_t r = ::write(this->wake_fd_, &one, sizeof(one));
+        }
+    }
+
+    void IOUringPoller::arm_wake()
+    {
+        if (this->wake_fd_ < 0)
+            return;
+
+        auto* sqe = ::io_uring_get_sqe(&this->ring);
+        if (!sqe)
+            return;
+
+        ::io_uring_prep_poll_multishot(sqe, this->wake_fd_, POLLIN);
+        ::io_uring_sqe_set_data(sqe, &this->wake_op_);
+        this->wake_armed_ = true;
+    }
+
+    void IOUringPoller::recycle_buf(uint16_t bid) noexcept
+    {
+        ::io_uring_buf_ring_add(this->buf_ring_,
+                                this->buf_pool_ + static_cast<size_t>(bid) * kBufSize, kBufSize, bid,
+                                ::io_uring_buf_ring_mask(kBufCount), 0);
+        ::io_uring_buf_ring_advance(this->buf_ring_, 1);
+    }
+
+    void IOUringPoller::submit_recv_multishot(MultishotRecvOp* op, int fd)
+    {
+        if (!op || fd < 0 || !this->buf_ring_) return;
+
+        auto* sqe = ::io_uring_get_sqe(&this->ring);
+        if (!sqe) return;
+
+        op->kind = IoOpKind::RecvMultishot;
+        ::io_uring_prep_recv_multishot(sqe, fd, nullptr, 0, 0);
+        sqe->flags |= IOSQE_BUFFER_SELECT;
+        sqe->buf_group = kBgid;
+        ::io_uring_sqe_set_data(sqe, op);
+        op->armed = true;
     }
 
     void IOUringPoller::addEvent(net::SocketHeader*, OperationType)
@@ -93,6 +198,18 @@ namespace usub::uvent::core
         ::io_uring_sqe_set_data(sqe, op);
     }
 
+    void IOUringPoller::submit_accept_multishot(MultishotAcceptOp* op, int fd)
+    {
+        if (!op || fd < 0) return;
+
+        auto* sqe = ::io_uring_get_sqe(&this->ring);
+        if (!sqe) return;
+
+        ::io_uring_prep_multishot_accept(sqe, fd, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
+        ::io_uring_sqe_set_data(sqe, op);
+        op->armed = true;
+    }
+
     void IOUringPoller::submit_sendfile(SendFileOp* op, int out_fd)
     {
         if (!op || out_fd < 0 || op->in_fd < 0) return;
@@ -128,10 +245,81 @@ namespace usub::uvent::core
         ::io_uring_sqe_set_data(sqe, op);
     }
 
+    void IOUringPoller::submit_cancel(void* target_op)
+    {
+        if (!target_op) return;
+
+        auto* sqe = ::io_uring_get_sqe(&this->ring);
+        if (!sqe) return;
+
+        ::io_uring_prep_cancel(sqe, target_op, 0);
+        ::io_uring_sqe_set_data(sqe, nullptr);
+    }
+
     void IOUringPoller::handle_cqe(struct io_uring_cqe* cqe)
     {
         auto* base = static_cast<IoOpBase*>(::io_uring_cqe_get_data(cqe));
         if (!base) return;
+
+        if (base->kind == IoOpKind::WakeFd)
+        {
+            this->wake_pending_.store(false, std::memory_order_release);
+            uint64_t v;
+            [[maybe_unused]] ssize_t r = ::read(this->wake_fd_, &v, sizeof(v));
+            if (!(cqe->flags & IORING_CQE_F_MORE))
+                this->wake_armed_ = false;
+            return;
+        }
+
+        if (base->kind == IoOpKind::RecvMultishot)
+        {
+            auto* op = static_cast<MultishotRecvOp*>(base);
+            const bool was_armed = op->armed;
+
+            if (cqe->res > 0 && (cqe->flags & IORING_CQE_F_BUFFER))
+            {
+                const uint16_t bid = static_cast<uint16_t>(cqe->flags >> IORING_CQE_BUFFER_SHIFT);
+                op->push({static_cast<uint32_t>(cqe->res), 0, bid});
+            }
+            else
+            {
+                op->has_terminal = true;
+                op->terminal = static_cast<int32_t>(cqe->res); // 0=EOF, <0=-errno
+            }
+
+            if (!(cqe->flags & IORING_CQE_F_MORE))
+                op->armed = false;
+
+            if (op->waiting && op->coro && !op->coro.done())
+            {
+                op->waiting = false;
+                usub::uvent::system::this_thread::detail::q.enqueue(op->coro);
+            }
+
+            if (was_armed && !op->armed)
+                drop_recv_ref(op->header);
+            return;
+        }
+
+        if (base->kind == IoOpKind::AcceptMultishot)
+        {
+            auto* op = static_cast<MultishotAcceptOp*>(base);
+            if (cqe->res >= 0)
+                op->pending_fds.push_back(cqe->res);
+            else
+            {
+                op->res = cqe->res;
+                op->err = -cqe->res;
+            }
+            if (!(cqe->flags & IORING_CQE_F_MORE))
+                op->armed = false;
+            if (op->waiting && op->coro && !op->coro.done())
+            {
+                op->waiting = false;
+                usub::uvent::system::this_thread::detail::q.enqueue(op->coro);
+            }
+            return;
+        }
 
         base->res = cqe->res;
         base->err = (cqe->res < 0) ? -cqe->res : 0;
@@ -139,7 +327,7 @@ namespace usub::uvent::core
 
         if (base->coro && !base->coro.done())
         {
-            usub::uvent::system::this_thread::detail::q->enqueue(base->coro);
+            usub::uvent::system::this_thread::detail::q.enqueue(base->coro);
         }
     }
 
@@ -154,6 +342,9 @@ namespace usub::uvent::core
             ts.tv_nsec = (timeout_ms % 1000) * 1'000'000L;
             tsp = &ts;
         }
+
+        if (!this->wake_armed_)
+            this->arm_wake();
 
         ::io_uring_submit(&this->ring);
 

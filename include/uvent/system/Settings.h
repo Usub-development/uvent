@@ -77,6 +77,13 @@ namespace usub::uvent::settings
      * when no work is currently available in its queue.
      */
     extern int idle_fallback_ms;
+
+    /**
+     * @brief Number of blocking resolver threads serving net::async_resolve.
+     *
+     * Read once, lazily, when the first non-numeric resolve is submitted.
+     */
+    extern int resolver_threads;
 } // namespace usub::uvent::settings
 
 #endif // UVENT_SETTINGS_H

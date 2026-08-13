@@ -13,6 +13,7 @@
 
 #include <uvent/poll/IocpPoller.h>
 #include "AwaiterOperations.h"
+#include "Resolver.h"
 #include "SocketMetadata.h"
 #include "uvent/base/Predefines.h"
 #include "uvent/system/Defines.h"
@@ -473,7 +474,7 @@ namespace usub::uvent::net
     }
 
     template <Proto p, Role r>
-    Socket<p, r>::Socket(const Socket& o) noexcept : header_(o.header_)
+    Socket<p, r>::Socket(const Socket& o) noexcept : address(o.address), ipv(o.ipv), header_(o.header_)
     {
         if (this->header_)
             this->add_ref();
@@ -485,7 +486,7 @@ namespace usub::uvent::net
     }
 
     template <Proto p, Role r>
-    Socket<p, r>::Socket(Socket&& o) noexcept : header_(o.header_)
+    Socket<p, r>::Socket(Socket&& o) noexcept : address(o.address), ipv(o.ipv), header_(o.header_)
     {
         o.header_ = nullptr;
 #if UVENT_DEBUG
@@ -501,6 +502,8 @@ namespace usub::uvent::net
             return *this;
         Socket tmp(o);
         std::swap(this->header_, tmp.header_);
+        this->address = tmp.address;
+        this->ipv = tmp.ipv;
 #if UVENT_DEBUG
         spdlog::debug("Socket copy-assign(win): header={}, fd={}", static_cast<void*>(this->header_),
                       this->header_ ? static_cast<std::uint64_t>(this->header_->fd) : 0ull);
@@ -515,6 +518,8 @@ namespace usub::uvent::net
             return *this;
         Socket tmp(std::move(o));
         std::swap(this->header_, tmp.header_);
+        this->address = tmp.address;
+        this->ipv = tmp.ipv;
 #if UVENT_DEBUG
         spdlog::debug("Socket move-assign(win): header={}, fd={}", static_cast<void*>(this->header_),
                       this->header_ ? static_cast<std::uint64_t>(this->header_->fd) : 0ull);
@@ -894,7 +899,14 @@ namespace usub::uvent::net
             if constexpr (std::is_void_v<std::invoke_result_t<F, TCPClientSocket, Args...>>)
                 on_accept(std::move(client), std::forward<Args>(args)...);
             else
+            {
+#ifndef UVENT_ENABLE_REUSEADDR
                 system::co_spawn(on_accept(std::move(client), std::forward<Args>(args)...));
+#else
+                system::co_spawn_static(on_accept(std::move(client), std::forward<Args>(args)...),
+                                        system::this_thread::detail::t_id);
+#endif
+            }
         }
     }
 
@@ -1541,12 +1553,15 @@ namespace usub::uvent::net
         spdlog::info("async_connect(win,lvalue): host='{}' port='{}'", host, port);
 #endif
 
-        addrinfo hints{}, *res = nullptr;
+        addrinfo hints{};
         hints.ai_family = (this->ipv == utils::net::IPV::IPV4) ? AF_INET : AF_INET6;
         hints.ai_socktype = SOCK_STREAM;
         hints.ai_protocol = IPPROTO_TCP;
 
-        if (::getaddrinfo(host.c_str(), port.c_str(), &hints, &res) != 0 || !res)
+        // getaddrinfo уезжает в резолвер-пул: DNS-таймаут больше не морозит
+        // воркер вместе с чужими соединениями (числовой host — инлайн, без пула).
+        auto resolved = co_await async_resolve(host, port, hints);
+        if (!resolved || !*resolved)
         {
 #if UVENT_DEBUG
             spdlog::error("async_connect(win,lvalue): getaddrinfo failed");
@@ -1554,6 +1569,8 @@ namespace usub::uvent::net
             this->header_->fd = INVALID_FD;
             co_return usub::utils::errors::ConnectError::GetAddrInfoFailed;
         }
+        AddrInfoPtr res_holder = std::move(*resolved);
+        addrinfo* res = res_holder.get();
 
         SOCKET s = ::WSASocket(res->ai_family, res->ai_socktype, res->ai_protocol, nullptr, 0, WSA_FLAG_OVERLAPPED);
         if (s == INVALID_SOCKET)
@@ -1561,7 +1578,6 @@ namespace usub::uvent::net
 #if UVENT_DEBUG
             spdlog::error("async_connect(win,lvalue): WSASocket failed, err={}", WSAGetLastError());
 #endif
-            ::freeaddrinfo(res);
             co_return usub::utils::errors::ConnectError::SocketCreationFailed;
         }
 
@@ -1614,7 +1630,6 @@ namespace usub::uvent::net
 #endif
             ::closesocket(s);
             this->header_->fd = INVALID_FD;
-            ::freeaddrinfo(res);
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
 
@@ -1631,7 +1646,6 @@ namespace usub::uvent::net
 #endif
             ::closesocket(s);
             this->header_->fd = INVALID_FD;
-            ::freeaddrinfo(res);
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
 
@@ -1660,7 +1674,6 @@ namespace usub::uvent::net
 #endif
                 ::closesocket(s);
                 this->header_->fd = INVALID_FD;
-                ::freeaddrinfo(res);
                 co_return usub::utils::errors::ConnectError::ConnectFailed;
             }
 #if UVENT_DEBUG
@@ -1678,8 +1691,6 @@ namespace usub::uvent::net
         spdlog::trace("async_connect(win,lvalue): await AwaiterWrite fd={}", (socket_fd_t)this->header_->fd);
 #endif
         co_await detail::AwaiterWrite{this->header_};
-
-        ::freeaddrinfo(res);
 
         if (this->header_->socket_info & static_cast<uint8_t>(net::AdditionalState::CONNECTION_FAILED))
         {
@@ -1705,7 +1716,12 @@ namespace usub::uvent::net
             this->header_->fd = INVALID_FD;
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
+#ifdef UVENT_ENABLE_REUSEADDR
+        system::this_thread::detail::wh.cancelTimer(this->header_->timer_id);
+#else
         system::this_thread::detail::wh.removeTimer(this->header_->timer_id);
+#endif
+        this->header_->timer_id = 0;
 
 #ifndef UVENT_ENABLE_REUSEADDR
         if (has_timeout)
@@ -1739,12 +1755,13 @@ namespace usub::uvent::net
         spdlog::info("async_connect(win,rvalue): host='{}' port='{}'", host, port);
 #endif
 
-        addrinfo hints{}, *res = nullptr;
+        addrinfo hints{};
         hints.ai_family = (this->ipv == utils::net::IPV::IPV4) ? AF_INET : AF_INET6;
         hints.ai_socktype = SOCK_STREAM;
         hints.ai_protocol = IPPROTO_TCP;
 
-        if (::getaddrinfo(host.c_str(), port.c_str(), &hints, &res) != 0 || !res)
+        auto resolved = co_await async_resolve(host, port, hints);
+        if (!resolved || !*resolved)
         {
 #if UVENT_DEBUG
             spdlog::error("async_connect(win,rvalue): getaddrinfo failed");
@@ -1752,6 +1769,8 @@ namespace usub::uvent::net
             this->header_->fd = INVALID_FD;
             co_return usub::utils::errors::ConnectError::GetAddrInfoFailed;
         }
+        AddrInfoPtr res_holder = std::move(*resolved);
+        addrinfo* res = res_holder.get();
 
         SOCKET s = ::WSASocket(res->ai_family, res->ai_socktype, res->ai_protocol, nullptr, 0, WSA_FLAG_OVERLAPPED);
         if (s == INVALID_SOCKET)
@@ -1759,7 +1778,6 @@ namespace usub::uvent::net
 #if UVENT_DEBUG
             spdlog::error("async_connect(win,rvalue): WSASocket failed, err={}", WSAGetLastError());
 #endif
-            ::freeaddrinfo(res);
             co_return usub::utils::errors::ConnectError::SocketCreationFailed;
         }
 
@@ -1812,7 +1830,6 @@ namespace usub::uvent::net
 #endif
             ::closesocket(s);
             this->header_->fd = INVALID_FD;
-            ::freeaddrinfo(res);
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
 
@@ -1829,7 +1846,6 @@ namespace usub::uvent::net
 #endif
             ::closesocket(s);
             this->header_->fd = INVALID_FD;
-            ::freeaddrinfo(res);
             co_return usub::utils::errors::ConnectError::ConnectFailed;
         }
 
@@ -1858,7 +1874,6 @@ namespace usub::uvent::net
 #endif
                 ::closesocket(s);
                 this->header_->fd = INVALID_FD;
-                ::freeaddrinfo(res);
                 co_return usub::utils::errors::ConnectError::ConnectFailed;
             }
 #if UVENT_DEBUG
@@ -1876,8 +1891,6 @@ namespace usub::uvent::net
         spdlog::trace("async_connect(win,rvalue): await AwaiterWrite fd={}", (socket_fd_t)this->header_->fd);
 #endif
         co_await detail::AwaiterWrite{this->header_};
-
-        ::freeaddrinfo(res);
 
         if (this->header_->socket_info & static_cast<uint8_t>(net::AdditionalState::CONNECTION_FAILED))
         {
@@ -1911,18 +1924,6 @@ namespace usub::uvent::net
         if (has_timeout)
         {
             this->update_timeout(settings::timeout_duration_ms);
-
-#ifndef UVENT_ENABLE_REUSEADDR
-            this->header_->state.fetch_sub(1, std::memory_order_acq_rel);
-#else
-            {
-                using namespace usub::utils::sync::refc;
-                uint64_t& st = this->header_->state;
-                const uint64_t cnt = st & COUNT_MASK;
-                if (cnt > 0)
-                    st = (st & ~COUNT_MASK) | ((cnt - 1) & COUNT_MASK);
-            }
-#endif
         }
 
 #if UVENT_DEBUG
@@ -2211,6 +2212,17 @@ namespace usub::uvent::net
 #if UVENT_DEBUG
         spdlog::info("shutdown(win): fd={}", (std::uint64_t)this->header_->fd);
 #endif
+#ifdef UVENT_ENABLE_REUSEADDR
+        if constexpr (p == Proto::TCP && r == Role::ACTIVE)
+        {
+            if (this->header_->timer_id != 0 &&
+                system::this_thread::detail::wh.cancelTimer(this->header_->timer_id))
+            {
+                this->header_->timer_id = 0;
+                this->release();
+            }
+        }
+#endif
         ::shutdown(this->header_->fd, SD_BOTH);
     }
 
@@ -2218,6 +2230,11 @@ namespace usub::uvent::net
     void Socket<p, r>::set_timeout_ms(timeout_t timeout) const
         requires(p == Proto::TCP && r == Role::ACTIVE)
     {
+        if (this->header_->timer_id != 0)
+        {
+            system::this_thread::detail::wh.updateTimer(this->header_->timer_id, timeout);
+            return;
+        }
 #ifndef UVENT_ENABLE_REUSEADDR
         {
             uint64_t s = this->header_->state.load(std::memory_order_relaxed);
@@ -2256,8 +2273,14 @@ namespace usub::uvent::net
         spdlog::debug("set_timeout_ms(win): fd={}, timeout_ms={}, counter={}", (std::uint64_t)this->header_->fd,
                       timeout, this->header_->get_counter());
 #endif
-        auto* timer = new utils::Timer(timeout);
-        timer->addFunction(detail::processSocketTimeout, this->header_);
+        auto* timer = &this->header_->timer;
+        timer->arm_embedded(timeout,
+                            [](void* hp)
+                            {
+                                std::any a{static_cast<SocketHeader*>(hp)};
+                                detail::processSocketTimeout(a);
+                            },
+                            this->header_);
         this->header_->timer_id = system::this_thread::detail::wh.addTimer(timer);
     }
 
@@ -2268,6 +2291,15 @@ namespace usub::uvent::net
         spdlog::info("Socket::destroy(win): header={}, fd={}", static_cast<void*>(this->header_),
                      this->header_ ? static_cast<std::uint64_t>(this->header_->fd) : 0ull);
 #endif
+        if (this->header_->timer_id != 0)
+        {
+#ifdef UVENT_ENABLE_REUSEADDR
+            system::this_thread::detail::wh.cancelTimer(this->header_->timer_id);
+#else
+            system::this_thread::detail::wh.removeTimer(this->header_->timer_id);
+#endif
+            this->header_->timer_id = 0;
+        }
         this->header_->close_for_new_refs();
         system::this_thread::detail::pl.removeEvent(this->header_, core::OperationType::ALL);
 #ifndef UVENT_ENABLE_REUSEADDR

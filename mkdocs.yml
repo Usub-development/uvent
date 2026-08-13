@@ -51,6 +51,7 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - Quick Start: quick-start.md
+  - Tutorial: tutorial.md
   - Core Runtime:
       - Uvent: uvent.md
       - System Primitives: system_primitives.md
@@ -59,6 +60,7 @@ nav:
       - Awaitable Frame: awaitable_frame.md
   - Networking:
       - Socket: socket.md
+      - Name Resolution & Happy Eyeballs: resolver.md
   - Delayed tasks:
       - Timers: timers.md
   - Settings:

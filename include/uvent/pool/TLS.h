@@ -8,6 +8,7 @@
 #include <atomic>
 #include <coroutine>
 #include <uvent/base/Predefines.h>
+#include <uvent/poll/PollerBase.h>
 #include <uvent/utils/datastructures/queue/ConcurrentQueues.h>
 #include <uvent/utils/datastructures/queue/FastQueue.h>
 
@@ -19,9 +20,15 @@ namespace usub::uvent::thread
 
         void push_task_inbox(std::coroutine_handle<> task);
 
+        void set_poller(core::PollerImpl* p) noexcept
+        {
+            this->poller_.store(p, std::memory_order_release);
+        }
+
     private:
         queue::concurrent::MPMCQueue<std::coroutine_handle<>> inbox_q_;
         std::atomic_bool is_added_new_{false};
+        std::atomic<core::PollerImpl*> poller_{nullptr};
     };
 } // namespace usub::uvent::thread
 

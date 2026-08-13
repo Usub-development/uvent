@@ -12,12 +12,34 @@ namespace usub::uvent::core
 {
     EPoller::EPoller(utils::TimerWheel& wheel) : wheel(wheel)
     {
-        this->poll_fd = epoll_create1(0);
-        int busy_us = 50;
-        setsockopt(this->poll_fd, SOL_SOCKET, SO_PREFER_BUSY_POLL, &busy_us, sizeof(busy_us));
+        this->poll_fd = epoll_create1(EPOLL_CLOEXEC);
+        this->events.resize(4096);
 
-        sigemptyset(&this->sigmask);
-        this->events.resize(1000);
+        this->wake_fd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+        if (this->wake_fd >= 0)
+        {
+            struct epoll_event wev{};
+            wev.data.ptr = this;
+            wev.events = EPOLLIN | EPOLLET;
+            epoll_ctl(this->poll_fd, EPOLL_CTL_ADD, this->wake_fd, &wev);
+        }
+    }
+
+    EPoller::~EPoller()
+    {
+        if (this->wake_fd >= 0)
+            ::close(this->wake_fd);
+    }
+
+    void EPoller::wake() noexcept
+    {
+        if (this->wake_fd < 0)
+            return;
+        if (!this->wake_pending.exchange(true, std::memory_order_acq_rel))
+        {
+            uint64_t one = 1;
+            [[maybe_unused]] ssize_t r = ::write(this->wake_fd, &one, sizeof(one));
+        }
     }
 
     void EPoller::addEvent(net::SocketHeader* header, OperationType initialState)
@@ -92,18 +114,24 @@ namespace usub::uvent::core
 
     bool EPoller::poll(int timeout)
     {
-        int n = epoll_pwait(this->poll_fd, this->events.data(), static_cast<int>(this->events.size()), timeout,
-                            &this->sigmask);
+        int n = ::epoll_wait(this->poll_fd, this->events.data(), static_cast<int>(this->events.size()), timeout);
 #ifndef UVENT_ENABLE_REUSEADDR
         system::this_thread::detail::g_qsbr.enter();
 #endif
 #if UVENT_DEBUG
         if (n < 0 && errno != EINTR)
-            throw std::system_error(errno, std::generic_category(), "epoll_pwait");
+            throw std::system_error(errno, std::generic_category(), "epoll_wait");
 #endif
         for (int i = 0; i < n; i++)
         {
             auto& event = this->events[i];
+            if (event.data.ptr == static_cast<void*>(this))
+            {
+                this->wake_pending.store(false, std::memory_order_release);
+                uint64_t v;
+                [[maybe_unused]] ssize_t r = ::read(this->wake_fd, &v, sizeof(v));
+                continue;
+            }
             auto* sock = static_cast<net::SocketHeader*>(event.data.ptr);
 #ifndef UVENT_ENABLE_REUSEADDR
             if (sock->is_busy_now() || sock->is_disconnected_now())
@@ -123,7 +151,7 @@ namespace usub::uvent::core
                 if (sock->first)
                 {
                     auto c = std::exchange(sock->first, nullptr);
-                    system::this_thread::detail::q->enqueue(c);
+                    system::this_thread::detail::q.enqueue(c);
                 }
                 else
                 {
@@ -140,7 +168,7 @@ namespace usub::uvent::core
                     if (sock->second)
                     {
                         auto c = std::exchange(sock->second, nullptr);
-                        system::this_thread::detail::q->enqueue(c);
+                        system::this_thread::detail::q.enqueue(c);
                     }
                     else
                     {
@@ -154,11 +182,22 @@ namespace usub::uvent::core
                     getsockopt(sock->fd, SOL_SOCKET, SO_ERROR, &err, &len);
                     sock->socket_info &= ~static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING);
                     if (err != 0)
+                    {
                         sock->socket_info |= static_cast<uint8_t>(net::AdditionalState::CONNECTION_FAILED);
+                        if (sock->second)
+                        {
+                            auto c = std::exchange(sock->second, nullptr);
+                            system::this_thread::detail::q.enqueue(c);
+                        }
+                        else
+                        {
+                            sock->mark_write_pending();
+                        }
+                    }
                     else if (sock->second)
                     {
                         auto c = std::exchange(sock->second, nullptr);
-                        system::this_thread::detail::q->enqueue(c);
+                        system::this_thread::detail::q.enqueue(c);
                     }
                     else
                     {
@@ -174,8 +213,6 @@ namespace usub::uvent::core
 #endif
             }
         }
-        if (n == this->events.size())
-            this->events.resize(this->events.size() << 1);
 #ifndef UVENT_ENABLE_REUSEADDR
         system::this_thread::detail::g_qsbr.leave();
 #endif

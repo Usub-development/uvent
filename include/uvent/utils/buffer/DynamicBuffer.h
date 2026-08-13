@@ -5,7 +5,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <vector>
 
 namespace usub::uvent::utils
 {
@@ -14,15 +13,42 @@ namespace usub::uvent::utils
     public:
         DynamicBuffer() = default;
 
+        DynamicBuffer(const DynamicBuffer&) = delete;
+        DynamicBuffer& operator=(const DynamicBuffer&) = delete;
+
+        DynamicBuffer(DynamicBuffer&& o) noexcept
+            : data_(o.data_), cap_(o.cap_), size_(o.size_)
+        {
+            o.data_ = nullptr;
+            o.cap_  = 0;
+            o.size_ = 0;
+        }
+        DynamicBuffer& operator=(DynamicBuffer&& o) noexcept
+        {
+            if (this != &o)
+            {
+                free_();
+                data_   = o.data_;
+                cap_    = o.cap_;
+                size_   = o.size_;
+                o.data_ = nullptr;
+                o.cap_  = 0;
+                o.size_ = 0;
+            }
+            return *this;
+        }
+
+        ~DynamicBuffer() { free_(); }
+
         void reserve(size_t n);
 
-        [[nodiscard]] size_t size() const noexcept;
-        [[nodiscard]] size_t capacity() const noexcept;
+        [[nodiscard]] size_t size() const noexcept { return size_; }
+        [[nodiscard]] size_t capacity() const noexcept { return cap_; }
 
-        [[nodiscard]] const uint8_t* data() const noexcept;
-        [[nodiscard]] uint8_t* data() noexcept;
+        [[nodiscard]] const uint8_t* data() const noexcept { return data_; }
+        [[nodiscard]] uint8_t* data() noexcept { return data_; }
 
-        void clear() noexcept;
+        void clear() noexcept { size_ = 0; }
 
         uint8_t* reserve_tail(size_t len);
         void commit(size_t n);
@@ -34,10 +60,12 @@ namespace usub::uvent::utils
 
     private:
         void grow_(size_t need);
+        void free_() noexcept;
 
     private:
-        std::vector<uint8_t> data_;
-        size_t size_{0};
+        uint8_t* data_{nullptr};
+        size_t   cap_{0};
+        size_t   size_{0};
     };
 }
 

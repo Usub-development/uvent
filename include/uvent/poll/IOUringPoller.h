@@ -10,67 +10,13 @@
 #include <liburing.h>
 
 #include "uvent/poll/PollerBase.h"
+#include "uvent/poll/IOUringOps.h"
 #include "uvent/system/Defines.h"
 #include "uvent/utils/timer/TimerWheel.h"
 #include "uvent/net/SocketMetadata.h"
 
 namespace usub::uvent::core
 {
-    namespace detail
-    {
-        enum class IoOpKind : uint8_t
-        {
-            Recv,
-            Send,
-            Accept,
-            SendFile,
-            Connect
-        };
-
-        struct IoOpBase
-        {
-            IoOpKind kind{};
-            net::SocketHeader* header{nullptr};
-            std::coroutine_handle<> coro{};
-            ssize_t res{0};
-            int err{0};
-            bool completed{false};
-            bool timed_out{false};
-
-            virtual ~IoOpBase() = default;
-        };
-
-        struct RecvOp : IoOpBase
-        {
-            uint8_t* buf{nullptr};
-            size_t len{0};
-        };
-
-        struct SendOp : IoOpBase
-        {
-            const uint8_t* buf{nullptr};
-            size_t len{0};
-        };
-
-        struct AcceptOp : IoOpBase
-        {
-            sockaddr_storage addr{};
-            socklen_t addrlen{sizeof(sockaddr_storage)};
-        };
-
-        struct SendFileOp : IoOpBase
-        {
-            int in_fd{-1};
-            off_t* offset{nullptr};
-            size_t count{0};
-        };
-
-        struct ConnectOp : IoOpBase
-        {
-            sockaddr_storage addr{};
-            socklen_t addrlen{0};
-        };
-    } // namespace detail
 
     class IOUringPoller
     {
@@ -91,13 +37,28 @@ namespace usub::uvent::core
         void submit_recv(detail::RecvOp* op, int fd);
         void submit_send(detail::SendOp* op, int fd);
         void submit_accept(detail::AcceptOp* op, int fd);
+        void submit_accept_multishot(detail::MultishotAcceptOp* op, int fd);
+        void submit_recv_multishot(detail::MultishotRecvOp* op, int fd);
         void submit_sendfile(detail::SendFileOp* op, int out_fd);
         void submit_connect(detail::ConnectOp* op, int fd);
 
+        [[nodiscard]] bool has_buf_ring() const noexcept { return this->buf_ring_ != nullptr; }
+        [[nodiscard]] uint8_t* buf_base(uint16_t bid) noexcept
+        {
+            return this->buf_pool_ + static_cast<size_t>(bid) * kBufSize;
+        }
+        void recycle_buf(uint16_t bid) noexcept;
+
+        void submit_cancel(void* target_op);
+
         void deregisterEvent(net::SocketHeader* header) const;
+
+        void wake() noexcept;
 
     private:
         void handle_cqe(struct io_uring_cqe* cqe);
+
+        void arm_wake();
 
     private:
         utils::TimerWheel& wheel;
@@ -107,6 +68,18 @@ namespace usub::uvent::core
 
         struct io_uring ring{};
         unsigned int ring_entries{1024};
+
+        static constexpr unsigned kBufCount = 256; // степень двойки
+        static constexpr unsigned kBufSize = 16384;
+        static constexpr int kBgid = 1;
+        struct io_uring_buf_ring* buf_ring_{nullptr};
+        uint8_t* buf_pool_{nullptr};
+
+        // Wake-канал (см. wake()).
+        int wake_fd_{-1};
+        bool wake_armed_{false};
+        std::atomic_bool wake_pending_{false};
+        detail::IoOpBase wake_op_{};
 
         sigset_t sigmask{};
     };

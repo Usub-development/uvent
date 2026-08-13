@@ -10,6 +10,17 @@ Cross-platform async I/O engine with native backends for:
 
 A single high-level API (`TCPServerSocket`, `TCPClientSocket`, `UDPSocket`) is used across all platforms.
 
+### Highlights
+
+- **C++23 coroutines end to end** — `co_await` on accept/read/write/connect, no callbacks, no manual state machines.
+- **Batch-draining accept** — `async_accept(handler)` drains the whole kernel backlog per wakeup and spawns a coroutine per connection (no lost edges in ET mode).
+- **Async DNS** — `net::async_resolve` never blocks the event loop: IP literals resolve inline, hostnames go through a lazy worker pool.
+- **Happy Eyeballs (RFC 8305)** — `net::connect_happy` races IPv6/IPv4 endpoints: parallel AAAA/A with resolution delay, staggered attempts, instant fallback on failure (early start).
+- **Instant cross-thread wakeups** — parked pollers are signalled via `eventfd` / `EVFILT_USER` / `PostQueuedCompletionStatus`; resumes never wait for the idle tick.
+- **Coroutine-native synchronization** — `AsyncMutex`, `AsyncSemaphore`, `AsyncEvent`, `WaitGroup`, `AsyncBarrier`, cancellation tokens; waiters suspend instead of blocking threads.
+- **Go-style channels** — buffered MPMC `AsyncChannel<Ts...>` with back-pressure and `select_recv` over multiple channels.
+- **Timer wheel** — millions of cheap one-shot timers, coroutine `sleep_for`, per-socket inactivity timeouts.
+
 ### Requests per second (RPS)
 
 | Threads | uvent   | Boost.Asio | libuv |
@@ -91,6 +102,30 @@ int main()
 `async_accept` accepts a coroutine function directly — no manual loop or `co_spawn` needed.
 Each accepted connection is automatically spawned as a separate coroutine.
 
+### Connecting out: Happy Eyeballs
+
+Dual-stack clients shouldn't hang on a broken IPv6 path. `connect_happy`
+implements RFC 8305: AAAA and A are resolved in parallel and the addresses are
+raced — the first successful connect wins, a fast failure starts the next
+address immediately:
+
+```cpp
+#include "uvent/net/HappyEyeballs.h"
+
+task::Awaitable<void> fetch()
+{
+    auto res = co_await net::connect_happy("example.org", "443");
+    if (!res)
+        co_return; // res.error(): last ConnectError
+
+    net::TCPClientSocket sock = std::move(*res);
+    // sock.ipv says which family won; use async_write/async_read as usual
+}
+```
+
+For a plain single-address connect, `TCPClientSocket::async_connect(host, port[, timeout])`
+resolves asynchronously and never blocks the loop.
+
 ### Backend selection
 
 Uvent automatically selects the best backend for your OS:
@@ -120,11 +155,13 @@ Requires Linux kernel **5.1+** and [liburing](https://github.com/axboe/liburing)
 
 - [Getting started (installation)](https://usub-foundation.github.io/uvent/getting-started/)
 - [Quick start](https://usub-foundation.github.io/uvent/quick-start/)
+- [Tutorial (step-by-step tour of everything)](https://usub-foundation.github.io/uvent/tutorial/)
 - [System primitives](https://usub-foundation.github.io/uvent/system_primitives/)
 - [Settings](https://usub-foundation.github.io/uvent/settings/)
 - [Awaitable](https://usub-foundation.github.io/uvent/awaitable/)
 - [Awaitable frame](https://usub-foundation.github.io/uvent/awaitable_frame/)
 - [Socket](https://usub-foundation.github.io/uvent/socket/)
+- [Name Resolution & Happy Eyeballs](https://usub-foundation.github.io/uvent/resolver/)
 - [Synchronization primitives & Channels](https://usub-foundation.github.io/uvent/synchronization/)
 
 ---

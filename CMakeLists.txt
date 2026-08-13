@@ -203,6 +203,48 @@ if (UVENT_BUILD_EXAMPLES)
             $<$<CONFIG:Debug>:spdlog::spdlog>
     )
 
+    # 6
+    add_executable(uvent_example_happy examples/main_happy_smoke.cpp)
+    target_compile_definitions(uvent_example_happy PRIVATE
+            $<$<CONFIG:Debug>:UVENT_DEBUG>
+    )
+    target_include_directories(uvent_example_happy
+            PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(uvent_example_happy PRIVATE
+            uvent
+            $<$<CONFIG:Debug>:spdlog::spdlog>
+    )
+
+    # 6b
+    add_executable(uvent_example_happy_netns examples/main_happy_netns.cpp)
+    target_compile_definitions(uvent_example_happy_netns PRIVATE
+            $<$<CONFIG:Debug>:UVENT_DEBUG>
+    )
+    target_include_directories(uvent_example_happy_netns
+            PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(uvent_example_happy_netns PRIVATE
+            uvent
+            $<$<CONFIG:Debug>:spdlog::spdlog>
+    )
+
+    # 5
+    add_executable(uvent_example_resolve examples/main_resolve_smoke.cpp)
+    target_compile_definitions(uvent_example_resolve PRIVATE
+            $<$<CONFIG:Debug>:UVENT_DEBUG>
+    )
+    target_include_directories(uvent_example_resolve
+            PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(uvent_example_resolve PRIVATE
+            uvent
+            $<$<CONFIG:Debug>:spdlog::spdlog>
+    )
+
     # 4
     add_executable(uvent_example_select examples/main_select_example.cpp)
     target_compile_definitions(uvent_example_select PRIVATE

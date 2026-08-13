@@ -112,3 +112,26 @@ Defines the maximum number of completed coroutine handles destroyed in one clean
 **Default:** `50` ms
 
 Idle worker threads wake up at this interval to check for new tasks when their local queues are empty.
+
+This is a fallback, not the wake latency for cross-thread work: resolver
+completions and inbox pushes signal the parked poller directly through its
+wake channel (`eventfd` / `EVFILT_USER` / `PostQueuedCompletionStatus`, see
+[Poller wake](resolver.md#poller-wake)) and are picked up near-instantly.
+
+---
+
+## DNS Resolver
+
+### `resolver_threads`
+
+**Type:** `int`
+**Default:** `2`
+
+Size of the blocking `getaddrinfo` worker pool used by `net::async_resolve`
+(see [Name Resolution & Happy Eyeballs](resolver.md)).
+
+The pool is created lazily on the first non-numeric lookup; IP literals are
+resolved inline and never touch it. Note that `net::connect_happy` issues two
+lookups per call (AAAA and A in parallel), so under a burst of concurrent
+`connect_happy` calls against a slow DNS server the default pool of 2 becomes
+the bottleneck — raise this value if that is a real workload for you.

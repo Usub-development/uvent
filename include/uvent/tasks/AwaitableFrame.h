@@ -42,9 +42,7 @@ namespace usub::uvent
 
             AwaitableFrameBase();
 
-            virtual ~AwaitableFrameBase() = default;
-
-            virtual bool await_ready();
+            bool await_ready();
 
             void destroy(DestroyingPolicy policy = DEFAULT);
 
@@ -64,6 +62,10 @@ namespace usub::uvent
 
             void push_frame_to_be_destroyed();
 
+            std::coroutine_handle<> final_transfer() noexcept;
+
+            std::coroutine_handle<> yield_transfer() noexcept;
+
             [[nodiscard]] int get_thread_id() const { return this->t_id_; }
 
             [[nodiscard]] int get_thread_id() { return this->t_id_; }
@@ -71,11 +73,39 @@ namespace usub::uvent
             void set_thread_id(int t_id) { this->t_id_ = t_id; }
 
         protected:
+            ~AwaitableFrameBase() = default;
+
             std::exception_ptr exception_{nullptr};
             std::coroutine_handle<> coro_{nullptr};
             std::coroutine_handle<> prev_{nullptr};
             std::coroutine_handle<> next_{nullptr};
             int t_id_{0};
+        };
+
+        struct FinalAwaiter
+        {
+            bool await_ready() const noexcept { return false; }
+
+            template <class Promise>
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> h) noexcept
+            {
+                return static_cast<AwaitableFrameBase&>(h.promise()).final_transfer();
+            }
+
+            void await_resume() const noexcept {}
+        };
+
+        struct YieldAwaiter
+        {
+            bool await_ready() const noexcept { return false; }
+
+            template <class Promise>
+            std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> h) noexcept
+            {
+                return static_cast<AwaitableFrameBase&>(h.promise()).yield_transfer();
+            }
+
+            void await_resume() const noexcept {}
         };
 
         template <class T>
@@ -84,7 +114,7 @@ namespace usub::uvent
         public:
             AwaitableFrame() noexcept = default;
 
-            ~AwaitableFrame() override;
+            ~AwaitableFrame();
 
             void unhandled_exception() { this->exception_ = std::current_exception(); }
 
@@ -110,9 +140,9 @@ namespace usub::uvent
 
             std::suspend_always initial_suspend() noexcept;
 
-            std::suspend_always final_suspend() noexcept;
+            FinalAwaiter final_suspend() noexcept;
 
-            std::suspend_always yield_value(T value) noexcept;
+            YieldAwaiter yield_value(T value) noexcept;
 
         private:
             bool has_result_ = false;
@@ -125,7 +155,7 @@ namespace usub::uvent
         public:
             AwaitableFrame() noexcept = default;
 
-            ~AwaitableFrame() override;
+            ~AwaitableFrame();
 
             auto get_return_object()
             {
@@ -147,7 +177,7 @@ namespace usub::uvent
 
             std::suspend_always initial_suspend() noexcept;
 
-            std::suspend_always final_suspend() noexcept;
+            FinalAwaiter final_suspend() noexcept;
 
             std::suspend_always yield_value() noexcept;
         };
@@ -158,7 +188,7 @@ namespace usub::uvent
         public:
             AwaitableIOFrame() noexcept = default;
 
-            ~AwaitableIOFrame() override;
+            ~AwaitableIOFrame();
 
             void unhandled_exception() { this->exception_ = std::current_exception(); }
 
@@ -184,7 +214,7 @@ namespace usub::uvent
 
             std::suspend_never initial_suspend() noexcept;
 
-            std::suspend_always final_suspend() noexcept;
+            FinalAwaiter final_suspend() noexcept;
 
         private:
             bool has_result_ = false;
@@ -192,18 +222,11 @@ namespace usub::uvent
         };
 
         template <typename T>
-        std::suspend_always AwaitableIOFrame<T>::final_suspend() noexcept
+        FinalAwaiter AwaitableIOFrame<T>::final_suspend() noexcept
         {
 #if UVENT_DEBUG
             spdlog::trace("Entering final_suspend for coroutine {}", this->coro_.address());
 #endif
-            if (this->prev_)
-            {
-                auto prev = std::exchange(this->prev_, nullptr);
-                auto parent = std::coroutine_handle<AwaitableFrameBase>::from_address(prev.address());
-                AwaitableFrameBase::push_frame_into_task_queue(static_cast<std::coroutine_handle<>>(parent));
-            }
-            this->push_frame_to_be_destroyed();
             return {};
         }
 
@@ -220,33 +243,19 @@ namespace usub::uvent
         }
 
         template <class T>
-        std::suspend_always AwaitableFrame<T>::final_suspend() noexcept
+        FinalAwaiter AwaitableFrame<T>::final_suspend() noexcept
         {
 #if UVENT_DEBUG
             spdlog::trace("Entering final_suspend for coroutine {}", this->coro_.address());
 #endif
-            if (this->prev_)
-            {
-                auto c_temp = std::coroutine_handle<::usub::uvent::detail::AwaitableFrameBase>::from_address(
-                    std::exchange(this->prev_, nullptr).address());
-                push_frame_into_task_queue(static_cast<std::coroutine_handle<>>(c_temp));
-            }
-            this->push_frame_to_be_destroyed();
             return {};
         }
 
         template <class T>
-        std::suspend_always AwaitableFrame<T>::yield_value(T value) noexcept
+        YieldAwaiter AwaitableFrame<T>::yield_value(T value) noexcept
         {
             new (&this->result_) T(std::move(value));
             this->has_result_ = true;
-
-            if (this->prev_)
-            {
-                auto parent = std::coroutine_handle<::usub::uvent::detail::AwaitableFrameBase>::from_address(
-                    this->prev_.address());
-                push_frame_into_task_queue(static_cast<std::coroutine_handle<>>(parent));
-            }
             return {};
         }
 
@@ -274,14 +283,14 @@ namespace usub::uvent
     namespace system::this_thread::detail
     {
         /// \brief Thread local task queue.
-        thread_local extern std::unique_ptr<queue::single_thread::Queue<std::coroutine_handle<>>> q;
+        thread_local extern queue::single_thread::Queue<std::coroutine_handle<>> q;
     } // namespace system::this_thread::detail
 
     namespace task
     {
         template <class FrameType>
         template <class U>
-        void Awaitable<void, FrameType>::await_suspend(std::coroutine_handle<U> h)
+        std::coroutine_handle<> Awaitable<void, FrameType>::await_suspend(std::coroutine_handle<U> h)
         {
             auto ph = std::coroutine_handle<detail::AwaitableFrameBase>::from_address(h.address());
             auto& p = ph.promise();
@@ -293,13 +302,14 @@ namespace usub::uvent
             if constexpr (!detail::DeferredFrame<FrameType>)
             {
                 if (child && !child.done())
-                    detail::AwaitableFrameBase::push_frame_into_task_queue(static_cast<std::coroutine_handle<>>(child));
+                    return child;
             }
+            return std::noop_coroutine();
         }
 
         template <class Value, class FrameType>
         template <class U>
-        void Awaitable<Value, FrameType>::await_suspend(std::coroutine_handle<U> h)
+        std::coroutine_handle<> Awaitable<Value, FrameType>::await_suspend(std::coroutine_handle<U> h)
         {
             auto& p = std::coroutine_handle<detail::AwaitableFrameBase>::from_address(h.address()).promise();
 
@@ -310,10 +320,9 @@ namespace usub::uvent
             if constexpr (!detail::DeferredFrame<FrameType>)
             {
                 if (child && !child.done())
-                {
-                    detail::AwaitableFrameBase::push_frame_into_task_queue(static_cast<std::coroutine_handle<>>(child));
-                }
+                    return child;
             }
+            return std::noop_coroutine();
         }
 
         template <class FrameType>

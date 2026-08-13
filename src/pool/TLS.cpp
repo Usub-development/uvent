@@ -4,6 +4,18 @@
 
 #include <uvent/pool/TLS.h>
 
+#ifdef OS_LINUX
+#ifndef UVENT_ENABLE_IO_URING
+#include <uvent/poll/EPoller.h>
+#else
+#include <uvent/poll/IOUringPoller.h>
+#endif
+#elif defined(OS_BSD) || defined(OS_APPLE)
+#include <uvent/poll/KPoller.h>
+#else
+#include <uvent/poll/IocpPoller.h>
+#endif
+
 namespace usub::uvent::thread
 {
     void ThreadLocalStorage::push_task_inbox(std::coroutine_handle<> task)
@@ -12,5 +24,8 @@ namespace usub::uvent::thread
             cpu_relax();
 
         this->is_added_new_.store(true, std::memory_order_release);
+
+        if (auto* p = this->poller_.load(std::memory_order_acquire))
+            p->wake();
     }
 } // namespace usub::uvent::thread

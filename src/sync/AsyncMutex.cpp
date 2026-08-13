@@ -106,7 +106,7 @@ namespace usub::uvent::sync
             const std::uintptr_t new_state = next ? this->ptr_tag(next) : kLockedNoWaiters;
             if (this->state_.compare_exchange_weak(s, new_state, std::memory_order_acquire, std::memory_order_acquire))
             {
-                system::this_thread::detail::q->enqueue(head->h);
+                system::this_thread::detail::q.enqueue(head->h);
                 return;
             }
         }

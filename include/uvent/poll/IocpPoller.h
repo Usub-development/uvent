@@ -47,9 +47,12 @@ namespace usub::uvent::core
 
         void lock_poll(int timeout_ms);
 
+        void wake() noexcept;
+
     private:
         std::binary_semaphore lock{1};
         std::atomic_bool is_locked{false};
+        std::atomic_bool wake_pending{false};
 
     private:
         HANDLE iocp_handle{nullptr};
