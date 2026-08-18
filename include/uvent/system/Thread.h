@@ -51,6 +51,12 @@ namespace usub::uvent::system
 
         void processInboxQueue();
 
+#ifdef UVENT_SOCKET_OWNER_FORWARDING
+        /// Apply socket maintenance ops forwarded to this worker as owner
+        /// (see thread::SocketOp / net::detail::apply_socket_op).
+        void processSocketOps();
+#endif
+
     private:
         int index_;
         std::jthread thread_;

@@ -26,6 +26,73 @@ namespace usub::uvent::net
     namespace detail
     {
         extern void processSocketTimeout(std::any arg);
+
+#ifndef UVENT_ENABLE_REUSEADDR
+        /// TimerWheel REMOVE done-callback: the wheel no longer references the embedded
+        /// Timer, so the enclosing SocketHeader may now be retired (freed after QSBR grace).
+        inline void retire_header_after_timer(void* header) noexcept
+        {
+            system::this_thread::detail::g_qsbr.retire(header, &delete_header);
+        }
+#endif
+
+#ifdef UVENT_SOCKET_OWNER_FORWARDING
+        /**
+         * \brief Owner-forwarding of socket maintenance (UVENT_ENABLE_REUSEADDR).
+         *
+         * Poller, timer wheel and the header delete queue are thread_local, and
+         * the socket timer is embedded in SocketHeader. If a coroutine that
+         * migrated to another worker cancels the timer / destroys the socket
+         * "locally", it hits a foreign wheel (no-op, id collision in
+         * cancelledPending_), a foreign epoll and frees a header the owner's
+         * wheel still points to (heap-use-after-free in TimerWheel::tick).
+         * Every wheel/poller/delete operation is therefore executed on the
+         * owner (SocketHeader::owner_tid, stamped by PollerImpl::addEvent);
+         * foreign callers enqueue a SocketOp and wake the owner.
+         *
+         * Refcount rules are unchanged: the thread that arms the timer takes the
+         * timer's reference, and the timer's reference is dropped exactly once —
+         * by whoever claims it first via SocketHeader::tflags (timeout callback
+         * on the owner, or shutdown() on any thread).
+         */
+        namespace tflags
+        {
+            /// the timer's reference has been consumed (fired or cancelled)
+            inline constexpr uint8_t TIMER_CLAIMED = 1u << 0;
+            /// Destroy has been forwarded to the owner; nobody may touch refs anymore
+            inline constexpr uint8_t TEARDOWN_PENDING = 1u << 1;
+            /// teardown done on the owner; delete once pending_ops == 0
+            inline constexpr uint8_t DESTROYED = 1u << 2;
+        } // namespace tflags
+
+        /// \return true if `h` belongs to another worker and ops must be forwarded.
+        UVENT_ALWAYS_INLINE_FN bool is_foreign_owner(const SocketHeader* h) noexcept
+        {
+            return h->owner_tid >= 0 && h->owner_tid != system::this_thread::detail::t_id &&
+                   system::global::detail::tls_registry != nullptr;
+        }
+
+        UVENT_ALWAYS_INLINE_FN void forward_socket_op(thread::SocketOp::Kind kind, SocketHeader* h,
+                                                      uint64_t timeout_ms = 0)
+        {
+            // keeps the header alive until the owner has applied this op
+            h->pending_ops.fetch_add(1, std::memory_order_acq_rel);
+            system::global::detail::tls_registry->getStorage(h->owner_tid)
+                ->push_socket_op(thread::SocketOp{.kind = kind, .header = h, .timeout_ms = timeout_ms});
+        }
+
+        /// Teardown on the owning thread: cancel timer, close fd, and free the header
+        /// now (or, if forwarded ops are still queued for it, after the last of them).
+        void teardown_socket_header_local(SocketHeader* h) noexcept;
+
+        /// Arm (timer_id == 0) or refresh the embedded socket timer on the current
+        /// thread's wheel. The caller must already hold the timer's reference when
+        /// arming. Shared by the local path and the owner-side op handler.
+        void arm_or_refresh_socket_timer(SocketHeader* h, uint64_t timeout_ms) noexcept;
+
+        /// Applied by the owner in its event loop (Thread::processSocketOps).
+        void apply_socket_op(const thread::SocketOp& op) noexcept;
+#endif
     }
 
     template <Proto p, Role r>
@@ -333,11 +400,7 @@ namespace usub::uvent::net
         this->header_ =
             new SocketHeader{.fd = utils::socket::createSocket(port, ip_addr, backlog, ipv, socketAddressType),
                              .socket_info = (uint8_t(p) | uint8_t(r)),
-#ifndef UVENT_ENABLE_REUSEADDR
                              .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))
-#else
-                             .state = (1ull & usub::utils::sync::refc::COUNT_MASK)
-#endif
             };
         utils::socket::makeSocketNonBlocking(this->header_->fd);
         system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::READ);
@@ -351,11 +414,7 @@ namespace usub::uvent::net
         this->header_ =
             new SocketHeader{.fd = utils::socket::createSocket(port, ip_addr, backlog, ipv, socketAddressType),
                              .socket_info = (static_cast<uint8_t>(p) | static_cast<uint8_t>(r)),
-#ifndef UVENT_ENABLE_REUSEADDR
                              .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))
-#else
-                             .state = (1ull & usub::utils::sync::refc::COUNT_MASK)
-#endif
             };
         utils::socket::makeSocketNonBlocking(this->header_->fd);
         system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::READ);
@@ -368,7 +427,7 @@ namespace usub::uvent::net
         {
             this->release();
 #if UVENT_DEBUG
-            spdlog::warn("Socket counter: {}, fd: {}", (this->header_->state & usub::utils::sync::refc::COUNT_MASK),
+            spdlog::warn("Socket counter: {}, fd: {}", (this->header_->state.load(std::memory_order_acquire) & usub::utils::sync::refc::COUNT_MASK),
                          this->header_->fd);
 #endif
         }
@@ -1107,24 +1166,15 @@ namespace usub::uvent::net
 #ifdef UVENT_ENABLE_REUSEADDR
         system::this_thread::detail::wh.cancelTimer(this->header_->timer_id);
 #else
-        system::this_thread::detail::wh.removeTimer(this->header_->timer_id);
+        // synchronous: the Timer is embedded in the header and may be re-armed right
+        // after connect (set_timeout_ms) — a queued REMOVE would race with that ADD
+        system::this_thread::detail::wh.cancelTimerSync(this->header_->timer_id);
 #endif
         this->header_->timer_id = 0;
 
-#ifndef UVENT_ENABLE_REUSEADDR
         if (connect_timeout.count() > 0)
             this->header_->state.fetch_sub(1, std::memory_order_acq_rel);
         this->header_->timeout_epoch_bump();
-#else
-        if (connect_timeout.count() > 0)
-        {
-            using namespace usub::utils::sync::refc;
-            uint64_t& st = this->header_->state;
-            const uint64_t cnt = st & COUNT_MASK;
-            if (cnt > 0)
-                st = (st & ~COUNT_MASK) | ((cnt - 1) & COUNT_MASK);
-        }
-#endif
 
         co_return std::nullopt;
     }
@@ -1211,24 +1261,15 @@ namespace usub::uvent::net
 #ifdef UVENT_ENABLE_REUSEADDR
         system::this_thread::detail::wh.cancelTimer(this->header_->timer_id);
 #else
-        system::this_thread::detail::wh.removeTimer(this->header_->timer_id);
+        // synchronous: the Timer is embedded in the header and may be re-armed right
+        // after connect (set_timeout_ms) — a queued REMOVE would race with that ADD
+        system::this_thread::detail::wh.cancelTimerSync(this->header_->timer_id);
 #endif
         this->header_->timer_id = 0;
 
-#ifndef UVENT_ENABLE_REUSEADDR
         if (connect_timeout.count() > 0)
             this->header_->state.fetch_sub(1, std::memory_order_acq_rel);
         this->header_->timeout_epoch_bump();
-#else
-        if (connect_timeout.count() > 0)
-        {
-            using namespace usub::utils::sync::refc;
-            uint64_t& st = this->header_->state;
-            const uint64_t cnt = st & COUNT_MASK;
-            if (cnt > 0)
-                st = (st & ~COUNT_MASK) | ((cnt - 1) & COUNT_MASK);
-        }
-#endif
 
         co_return std::nullopt;
     }
@@ -1396,6 +1437,17 @@ namespace usub::uvent::net
     template <Proto p, Role r>
     void Socket<p, r>::update_timeout(timer_duration_t new_duration) const
     {
+#ifdef UVENT_ENABLE_REUSEADDR
+        if (detail::is_foreign_owner(this->header_))
+        {
+            // The timer lives in the owner's wheel; a local updateTimer would be a
+            // silent no-op there and the connection would time out on the stale deadline.
+            if (this->header_->timer_id != 0)
+                detail::forward_socket_op(thread::SocketOp::Kind::Timeout, this->header_,
+                                          static_cast<uint64_t>(new_duration));
+            return;
+        }
+#endif
         system::this_thread::detail::wh.updateTimer(this->header_->timer_id, new_duration);
     }
 
@@ -1405,11 +1457,35 @@ namespace usub::uvent::net
 #ifdef UVENT_ENABLE_REUSEADDR
         if constexpr (p == Proto::TCP && r == Role::ACTIVE)
         {
-            if (this->header_->timer_id != 0 &&
-                system::this_thread::detail::wh.cancelTimer(this->header_->timer_id))
+            if (detail::is_foreign_owner(this->header_))
             {
-                this->header_->timer_id = 0;
-                this->release();
+                // Timer cancel and shutdown(2) both run on the owner (its wheel, its
+                // fd — a stale fd number here could belong to another socket by now).
+                // The timer's reference is dropped here iff nobody (timeout callback
+                // on the owner) claimed it first.
+                const bool had_timer = this->header_->timer_id != 0;
+                detail::forward_socket_op(thread::SocketOp::Kind::Shutdown, this->header_);
+                if (had_timer &&
+                    (this->header_->tflags.fetch_or(detail::tflags::TIMER_CLAIMED, std::memory_order_acq_rel) &
+                     detail::tflags::TIMER_CLAIMED) == 0)
+                {
+                    this->release(); // may destroy() -> forwarded to the owner as well
+                }
+                return;
+            }
+            if (this->header_->timer_id != 0)
+            {
+                if (system::this_thread::detail::wh.cancelTimer(this->header_->timer_id))
+                {
+                    this->header_->timer_id = 0;
+                    if ((this->header_->tflags.fetch_or(detail::tflags::TIMER_CLAIMED, std::memory_order_acq_rel) &
+                         detail::tflags::TIMER_CLAIMED) == 0)
+                    {
+                        ::shutdown(this->header_->fd, SHUT_RDWR);
+                        this->release();
+                        return;
+                    }
+                }
             }
         }
 #endif
@@ -1422,10 +1498,17 @@ namespace usub::uvent::net
     {
         if (this->header_->timer_id != 0)
         {
+#ifdef UVENT_ENABLE_REUSEADDR
+            if (detail::is_foreign_owner(this->header_))
+            {
+                detail::forward_socket_op(thread::SocketOp::Kind::Timeout, this->header_,
+                                          static_cast<uint64_t>(timeout));
+                return;
+            }
+#endif
             system::this_thread::detail::wh.updateTimer(this->header_->timer_id, timeout);
             return;
         }
-#ifndef UVENT_ENABLE_REUSEADDR
         {
             uint64_t s = this->header_->state.load(std::memory_order_relaxed);
             for (;;)
@@ -1444,24 +1527,20 @@ namespace usub::uvent::net
                 cpu_relax();
             }
         }
-#else
-        {
-            uint64_t& st = this->header_->state;
-
-            if ((st & usub::utils::sync::refc::CLOSED_MASK) == 0)
-            {
-                const uint64_t cnt = st & usub::utils::sync::refc::COUNT_MASK;
-                if (cnt != usub::utils::sync::refc::COUNT_MASK)
-                {
-                    st =
-                        (st & ~usub::utils::sync::refc::COUNT_MASK) | ((cnt + 1) & usub::utils::sync::refc::COUNT_MASK);
-                }
-            }
-        }
-#endif
 #if UVENT_DEBUG
         spdlog::debug("set_timeout_ms: {}", this->header_->get_counter());
 #endif
+#ifdef UVENT_ENABLE_REUSEADDR
+        // fresh timer: its reference is unclaimed
+        this->header_->tflags.fetch_and(static_cast<uint8_t>(~detail::tflags::TIMER_CLAIMED),
+                                        std::memory_order_acq_rel);
+        if (detail::is_foreign_owner(this->header_))
+        {
+            detail::forward_socket_op(thread::SocketOp::Kind::Timeout, this->header_, static_cast<uint64_t>(timeout));
+            return;
+        }
+        detail::arm_or_refresh_socket_timer(this->header_, static_cast<uint64_t>(timeout));
+#else
         auto* timer = &this->header_->timer;
         timer->arm_embedded(timeout,
                             [](void* hp)
@@ -1471,26 +1550,39 @@ namespace usub::uvent::net
                             },
                             this->header_);
         this->header_->timer_id = system::this_thread::detail::wh.addTimer(timer);
+#endif
     }
 
     template <Proto p, Role r>
     void Socket<p, r>::destroy() noexcept
     {
-        if (this->header_->timer_id != 0)
-        {
 #ifdef UVENT_ENABLE_REUSEADDR
-            system::this_thread::detail::wh.cancelTimer(this->header_->timer_id);
-#else
-            system::this_thread::detail::wh.removeTimer(this->header_->timer_id);
-#endif
-            this->header_->timer_id = 0;
+        if (detail::is_foreign_owner(this->header_))
+        {
+            // Last reference dropped on a foreign worker: the owner's wheel may still
+            // hold &header_->timer and the fd is registered in the owner's epoll, so
+            // cancel/removeEvent/delete have to run there. Nobody else references the
+            // header any more (refcount == 0), only the owner's timeout callback could
+            // race — TEARDOWN_PENDING makes it a no-op.
+            this->header_->tflags.fetch_or(detail::tflags::TEARDOWN_PENDING, std::memory_order_acq_rel);
+            detail::forward_socket_op(thread::SocketOp::Kind::Destroy, this->header_);
+            return;
         }
+        detail::teardown_socket_header_local(this->header_);
+#else
         this->header_->close_for_new_refs();
         system::this_thread::detail::pl.removeEvent(this->header_);
-#ifndef UVENT_ENABLE_REUSEADDR
-        system::this_thread::detail::g_qsbr.retire(static_cast<void*>(this->header_), &delete_header);
-#else
-        system::this_thread::detail::q_sh.enqueue(this->header_);
+        if (this->header_->timer_id != 0)
+        {
+            // The Timer is embedded in the header and REMOVE is asynchronous (drained by
+            // whichever thread ticks the shared wheel next): retire the header only once
+            // the wheel has dropped the node, otherwise tick() reads freed memory.
+            const uint64_t id = this->header_->timer_id;
+            this->header_->timer_id = 0;
+            system::this_thread::detail::wh.removeTimer(id, &detail::retire_header_after_timer, this->header_);
+        }
+        else
+            system::this_thread::detail::g_qsbr.retire(static_cast<void*>(this->header_), &delete_header);
 #endif
     }
 

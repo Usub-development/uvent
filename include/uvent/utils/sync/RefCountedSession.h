@@ -45,7 +45,6 @@ namespace usub::utils::sync::refc
         bool try_add_ref() noexcept
         {
             auto& st = state();
-#ifndef UVENT_ENABLE_REUSEADDR
             uint64_t s = st.load(std::memory_order_relaxed);
             for (;;) {
                 if (is_closed(s)) return false;
@@ -55,48 +54,25 @@ namespace usub::utils::sync::refc
                     return true;
                 cpu_relax();
             }
-#else
-            const uint64_t s = st;
-            if (is_closed(s)) return false;
-            if ((s & COUNT_MASK) == COUNT_MASK) return false;
-            st = (s & ~COUNT_MASK) | ((s & COUNT_MASK) + 1);
-            return true;
-#endif
         }
 
         void add_ref() noexcept
         {
-#ifndef UVENT_ENABLE_REUSEADDR
 #if defined(UVENT_DEBUG)
             uint64_t s = state().load(std::memory_order_relaxed);
             if (is_closed(s)) __builtin_trap();
 #endif
             state().fetch_add(1, std::memory_order_relaxed);
-#else
-            ++state();
-#endif
         }
 
         void release() noexcept
         {
-#ifndef UVENT_ENABLE_REUSEADDR
-            uint64_t prev = state().fetch_sub(1, std::memory_order_release);
+            // acq_rel (not release + standalone acquire fence): the last releaser
+            // must observe every other thread's prior accesses before destroy(),
+            // and standalone fences are invisible to TSan.
+            uint64_t prev = state().fetch_sub(1, std::memory_order_acq_rel);
             if ((prev & COUNT_MASK) == 1)
-            {
-                std::atomic_thread_fence(std::memory_order_acquire);
                 destroy();
-            }
-#else
-            uint64_t& st = this->state();
-            const uint64_t prev = st;
-            const uint64_t cnt = prev & COUNT_MASK;
-            // if (cnt == 0) __builtin_trap();
-
-            st = (prev & ~COUNT_MASK) | ((cnt - 1) & COUNT_MASK);
-            if (cnt == 1)
-                destroy();
-
-#endif
         }
 
         UVENT_ALWAYS_INLINE_FN void close_for_new_refs() noexcept
@@ -107,11 +83,7 @@ namespace usub::utils::sync::refc
         [[nodiscard]] UVENT_ALWAYS_INLINE_FN bool is_disconnected_now() const noexcept
         {
             using namespace usub::utils::sync::refc;
-#ifndef UVENT_ENABLE_REUSEADDR
             return (this->state().load(std::memory_order_acquire) & DISCONNECTED_MASK) != 0;
-#else
-            return this->state() & DISCONNECTED_MASK;
-#endif
         }
 
     protected:
@@ -127,23 +99,11 @@ namespace usub::utils::sync::refc
         virtual void destroy() noexcept { delete static_cast<Derived*>(this); }
 
     private:
-#ifndef UVENT_ENABLE_REUSEADDR
         std::atomic<uint64_t>& state() noexcept { return static_cast<Derived*>(this)->header_->state; }
         [[nodiscard]] const std::atomic<uint64_t>& state() const noexcept
         {
             return static_cast<const Derived*>(this)->header_->state;
         }
-#else
-        uint64_t& state() noexcept
-        {
-            return static_cast<Derived*>(this)->header_->state;
-        }
-
-        [[nodiscard]] const uint64_t& state() const noexcept
-        {
-            return static_cast<const Derived*>(this)->header_->state;
-        }
-#endif
     };
 }
 

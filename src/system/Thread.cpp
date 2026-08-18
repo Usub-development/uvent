@@ -126,6 +126,9 @@ namespace usub::uvent::system
                 delete this->tmp_sockets_[i];
 #endif
             this->processInboxQueue();
+#ifdef UVENT_SOCKET_OWNER_FORWARDING
+            this->processSocketOps();
+#endif
         }
 
         for (;;)
@@ -142,6 +145,11 @@ namespace usub::uvent::system
             }
         }
 #ifdef UVENT_ENABLE_REUSEADDR
+#ifdef UVENT_SOCKET_OWNER_FORWARDING
+        // ops forwarded by other workers may still be pending; apply them so their
+        // headers land in q_sh and get freed below
+        this->processSocketOps();
+#endif
         for (;;)
         {
             const size_t n_sockets = local_q_sh.dequeue_bulk(this->tmp_sockets_.data(), this->tmp_sockets_.size());
@@ -180,6 +188,28 @@ namespace usub::uvent::system
             }
         }
     }
+
+#ifdef UVENT_SOCKET_OWNER_FORWARDING
+    void Thread::processSocketOps()
+    {
+        auto* tls = this->thread_local_storage_;
+
+        if (!tls->has_sock_ops_.exchange(false, std::memory_order_acq_rel))
+            return;
+
+        constexpr size_t BATCH = 64;
+        thread::SocketOp buf[BATCH];
+
+        for (;;)
+        {
+            const size_t n = tls->sock_ops_q_.try_dequeue_bulk(buf, BATCH);
+            if (n == 0)
+                break;
+            for (size_t i = 0; i < n; ++i)
+                net::detail::apply_socket_op(buf[i]);
+        }
+    }
+#endif
 
     Thread::~Thread() {}
 

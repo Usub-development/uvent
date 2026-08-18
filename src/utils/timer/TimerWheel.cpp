@@ -33,7 +33,7 @@ namespace usub::uvent::utils
         timer->id = ++this->timerIdCounter_;
 #endif
 
-        Op op{ .op = OpType::ADD, .timer = timer };
+        Op op{ .op = OpType::ADD, .timer = timer, .add_id = timer->id };
 #ifndef UVENT_ENABLE_REUSEADDR
         while (!this->timer_operations_queue.try_enqueue(op)) cpu_relax();
 #else
@@ -53,9 +53,9 @@ namespace usub::uvent::utils
         return true;
     }
 
-    bool TimerWheel::removeTimer(uint64_t timerId)
+    bool TimerWheel::removeTimer(uint64_t timerId, raw_timer_fn done, void* done_arg)
     {
-        Op op{ .op = OpType::REMOVE, .id_only = timerId };
+        Op op{ .op = OpType::REMOVE, .id_only = timerId, .done_arg = done_arg, .done = done };
 #ifndef UVENT_ENABLE_REUSEADDR
         while (!this->timer_operations_queue.try_enqueue(op)) cpu_relax();
 #else
@@ -64,7 +64,6 @@ namespace usub::uvent::utils
         return true;
     }
 
-#ifdef UVENT_ENABLE_REUSEADDR
     bool TimerWheel::cancelTimer(uint64_t timerId)
     {
         if (timerId == 0)
@@ -73,8 +72,14 @@ namespace usub::uvent::utils
         auto it = this->timerMap_.find(timerId);
         if (it == this->timerMap_.end())
         {
-            this->cancelledPending_.insert(timerId);
-            return true;
+            // ADD still queued (id newer than anything drained) -> drop it when it arrives;
+            // otherwise the timer already fired/was removed and there is nothing to cancel
+            if (timerId > this->maxAddedId_)
+            {
+                this->cancelledPending_.insert(timerId);
+                return true;
+            }
+            return false;
         }
 
         Timer* t = it->second;
@@ -91,7 +96,6 @@ namespace usub::uvent::utils
             delete t;
         return true;
     }
-#endif
 
     int TimerWheel::getNextTimeout() const
     {
@@ -240,8 +244,9 @@ namespace usub::uvent::utils
                 case OpType::ADD:
                 {
                     Timer* t = op.timer;
-#ifdef UVENT_ENABLE_REUSEADDR
-                    if (!this->cancelledPending_.empty() && this->cancelledPending_.erase(t->id))
+                    if (op.add_id > this->maxAddedId_)
+                        this->maxAddedId_ = op.add_id;
+                    if (!this->cancelledPending_.empty() && this->cancelledPending_.erase(op.add_id))
                     {
                         if (t->coro)
                             t->coro.destroy();
@@ -249,7 +254,6 @@ namespace usub::uvent::utils
                             delete t;
                         break;
                     }
-#endif
                     addTimerToWheel(t, t->expiryTime);
                     this->timerMap_[t->id] = t;
                     ++this->activeTimerCount_;
@@ -289,6 +293,16 @@ namespace usub::uvent::utils
                             if (t->heap) delete t;
                         }
                     }
+                    else if (op.id_only > this->maxAddedId_)
+                    {
+                        // not in the map and its ADD is still queued behind us (same producer,
+                        // FIFO) — remember the id so that ADD is dropped without touching the
+                        // (possibly already freed, embedded) Timer. Ids <= maxAddedId_ were
+                        // already drained (fired/removed) — nothing to remember.
+                        this->cancelledPending_.insert(op.id_only);
+                    }
+                    if (op.done)
+                        op.done(op.done_arg);
                     break;
                 }
                 }

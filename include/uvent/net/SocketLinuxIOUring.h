@@ -34,6 +34,15 @@ namespace usub::uvent::net
     {
         extern void processSocketTimeout(std::any arg);
 
+#ifndef UVENT_ENABLE_REUSEADDR
+        /// TimerWheel REMOVE done-callback: the wheel no longer references the embedded
+        /// Timer, so the enclosing SocketHeader may now be retired (freed after QSBR grace).
+        inline void retire_header_after_timer(void* header) noexcept
+        {
+            system::this_thread::detail::g_qsbr.retire(header, &delete_header);
+        }
+#endif
+
         using core::IOUringPoller;
         using core::detail::AcceptOp;
         using core::detail::ConnectOp;
@@ -47,7 +56,6 @@ namespace usub::uvent::net
         inline void add_ref_for_ms_recv(SocketHeader* header) noexcept
         {
             using namespace usub::utils::sync::refc;
-#ifndef UVENT_ENABLE_REUSEADDR
             uint64_t s = header->state.load(std::memory_order_relaxed);
             for (;;)
             {
@@ -62,15 +70,6 @@ namespace usub::uvent::net
                     break;
                 cpu_relax();
             }
-#else
-            uint64_t& st = header->state;
-            if ((st & CLOSED_MASK) == 0)
-            {
-                const uint64_t cnt = st & COUNT_MASK;
-                if (cnt != COUNT_MASK)
-                    st = (st & ~COUNT_MASK) | ((cnt + 1) & COUNT_MASK);
-            }
-#endif
         }
 
         struct MultishotRecvAwaiter
@@ -510,11 +509,7 @@ namespace usub::uvent::net
         this->header_ =
             new SocketHeader{.fd = utils::socket::createSocket(port, ip_addr, backlog, ipv_, socketAddressType),
                              .socket_info = (uint8_t(p) | uint8_t(r)),
-#ifndef UVENT_ENABLE_REUSEADDR
                              .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))
-#else
-                             .state = (1ull & usub::utils::sync::refc::COUNT_MASK)
-#endif
             };
         utils::socket::makeSocketNonBlocking(this->header_->fd);
         system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::READ);
@@ -528,11 +523,7 @@ namespace usub::uvent::net
         this->header_ =
             new SocketHeader{.fd = utils::socket::createSocket(port, ip_addr, backlog, ipv_, socketAddressType),
                              .socket_info = (static_cast<uint8_t>(p) | static_cast<uint8_t>(r)),
-#ifndef UVENT_ENABLE_REUSEADDR
                              .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))
-#else
-                             .state = (1ull & usub::utils::sync::refc::COUNT_MASK)
-#endif
             };
         utils::socket::makeSocketNonBlocking(this->header_->fd);
         system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::READ);
@@ -549,7 +540,7 @@ namespace usub::uvent::net
         if (this->header_)
         {
 #if UVENT_DEBUG
-            const auto cnt = (this->header_->state & usub::utils::sync::refc::COUNT_MASK);
+            const auto cnt = (this->header_->state.load(std::memory_order_acquire) & usub::utils::sync::refc::COUNT_MASK);
             const auto fd = this->header_->fd;
 #endif
 
@@ -1068,23 +1059,14 @@ namespace usub::uvent::net
 #ifdef UVENT_ENABLE_REUSEADDR
         system::this_thread::detail::wh.cancelTimer(this->header_->timer_id);
 #else
-        system::this_thread::detail::wh.removeTimer(this->header_->timer_id);
+        // synchronous: the Timer is embedded in the header and may be re-armed right
+        // after connect (set_timeout_ms) — a queued REMOVE would race with that ADD
+        system::this_thread::detail::wh.cancelTimerSync(this->header_->timer_id);
 #endif
         this->header_->timer_id = 0;
 
-#ifndef UVENT_ENABLE_REUSEADDR
         if (connect_timeout.count() > 0)
             this->header_->state.fetch_sub(1, std::memory_order_acq_rel);
-#else
-        if (connect_timeout.count() > 0)
-        {
-            using namespace usub::utils::sync::refc;
-            uint64_t& st = this->header_->state;
-            const uint64_t cnt = st & COUNT_MASK;
-            if (cnt > 0)
-                st = (st & ~COUNT_MASK) | ((cnt - 1) & COUNT_MASK);
-        }
-#endif
 
         if (c < 0)
         {
@@ -1187,23 +1169,14 @@ namespace usub::uvent::net
 #ifdef UVENT_ENABLE_REUSEADDR
         system::this_thread::detail::wh.cancelTimer(this->header_->timer_id);
 #else
-        system::this_thread::detail::wh.removeTimer(this->header_->timer_id);
+        // synchronous: the Timer is embedded in the header and may be re-armed right
+        // after connect (set_timeout_ms) — a queued REMOVE would race with that ADD
+        system::this_thread::detail::wh.cancelTimerSync(this->header_->timer_id);
 #endif
         this->header_->timer_id = 0;
 
-#ifndef UVENT_ENABLE_REUSEADDR
         if (connect_timeout.count() > 0)
             this->header_->state.fetch_sub(1, std::memory_order_acq_rel);
-#else
-        if (connect_timeout.count() > 0)
-        {
-            using namespace usub::utils::sync::refc;
-            uint64_t& st = this->header_->state;
-            const uint64_t cnt = st & COUNT_MASK;
-            if (cnt > 0)
-                st = (st & ~COUNT_MASK) | ((cnt - 1) & COUNT_MASK);
-        }
-#endif
 
         if (c < 0)
         {
@@ -1363,7 +1336,6 @@ namespace usub::uvent::net
             system::this_thread::detail::wh.updateTimer(this->header_->timer_id, timeout);
             return;
         }
-#ifndef UVENT_ENABLE_REUSEADDR
         {
             uint64_t s = this->header_->state.load(std::memory_order_relaxed);
             for (;;)
@@ -1382,21 +1354,6 @@ namespace usub::uvent::net
                 cpu_relax();
             }
         }
-#else
-        {
-            uint64_t& st = this->header_->state;
-
-            if ((st & usub::utils::sync::refc::CLOSED_MASK) == 0)
-            {
-                const uint64_t cnt = st & usub::utils::sync::refc::COUNT_MASK;
-                if (cnt != usub::utils::sync::refc::COUNT_MASK)
-                {
-                    st =
-                        (st & ~usub::utils::sync::refc::COUNT_MASK) | ((cnt + 1) & usub::utils::sync::refc::COUNT_MASK);
-                }
-            }
-        }
-#endif
 #if UVENT_DEBUG
         spdlog::debug("set_timeout_ms(io_uring): {}", this->header_->get_counter());
 #endif
@@ -1417,15 +1374,18 @@ namespace usub::uvent::net
         if (!this->header_)
             return;
 
+#ifdef UVENT_ENABLE_REUSEADDR
         if (this->header_->timer_id != 0)
         {
-#ifdef UVENT_ENABLE_REUSEADDR
             system::this_thread::detail::wh.cancelTimer(this->header_->timer_id);
-#else
-            system::this_thread::detail::wh.removeTimer(this->header_->timer_id);
-#endif
             this->header_->timer_id = 0;
         }
+#else
+        // embedded Timer + asynchronous REMOVE on the shared wheel: the header must
+        // outlive the REMOVE, so it is retired from the wheel's done-callback below
+        const uint64_t pending_timer_id = this->header_->timer_id;
+        this->header_->timer_id = 0;
+#endif
 
         this->header_->close_for_new_refs();
 
@@ -1452,7 +1412,11 @@ namespace usub::uvent::net
         }
 
 #ifndef UVENT_ENABLE_REUSEADDR
-        system::this_thread::detail::g_qsbr.retire(static_cast<void*>(this->header_), &delete_header);
+        if (pending_timer_id != 0)
+            system::this_thread::detail::wh.removeTimer(pending_timer_id, &detail::retire_header_after_timer,
+                                                       this->header_);
+        else
+            system::this_thread::detail::g_qsbr.retire(static_cast<void*>(this->header_), &delete_header);
 #else
         system::this_thread::detail::q_sh.enqueue(this->header_);
 #endif

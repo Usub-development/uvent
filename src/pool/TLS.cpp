@@ -28,4 +28,17 @@ namespace usub::uvent::thread
         if (auto* p = this->poller_.load(std::memory_order_acquire))
             p->wake();
     }
+
+#ifdef UVENT_SOCKET_OWNER_FORWARDING
+    void ThreadLocalStorage::push_socket_op(const SocketOp& op)
+    {
+        while (!this->sock_ops_q_.try_enqueue(op))
+            cpu_relax();
+
+        this->has_sock_ops_.store(true, std::memory_order_release);
+
+        if (auto* p = this->poller_.load(std::memory_order_acquire))
+            p->wake();
+    }
+#endif
 } // namespace usub::uvent::thread

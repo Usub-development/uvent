@@ -363,11 +363,7 @@ namespace usub::uvent::net
             new SocketHeader{.fd = INVALID_FD,
                              .socket_info = (static_cast<uint8_t>(Proto::TCP) | static_cast<uint8_t>(Role::ACTIVE) |
                                              static_cast<uint8_t>(AdditionalState::CONNECTION_PENDING)),
-#ifndef UVENT_ENABLE_REUSEADDR
                              .state = std::atomic<uint64_t>(1 & usub::utils::sync::refc::COUNT_MASK)
-#else
-                             .state = (1 & usub::utils::sync::refc::COUNT_MASK)
-#endif
             };
 #if UVENT_DEBUG
         spdlog::debug("Socket() default ctor(win): header={}, fd={}", static_cast<void*>(this->header_),
@@ -383,11 +379,7 @@ namespace usub::uvent::net
             new SocketHeader{.fd = fd,
                              .socket_info = (static_cast<uint8_t>(Proto::TCP) | static_cast<uint8_t>(Role::ACTIVE) |
                                              static_cast<uint8_t>(AdditionalState::CONNECTION_PENDING)),
-#ifndef UVENT_ENABLE_REUSEADDR
                              .state = std::atomic<uint64_t>(1 & usub::utils::sync::refc::COUNT_MASK)
-#else
-                             .state = (1 & usub::utils::sync::refc::COUNT_MASK)
-#endif
             };
 #if UVENT_DEBUG
         spdlog::debug("Socket(fd) ctor(win): header={}, fd={}", static_cast<void*>(this->header_),
@@ -408,11 +400,7 @@ namespace usub::uvent::net
         this->header_ =
             new SocketHeader{.fd = utils::socket::createSocket(port, ip_addr, backlog, ipv_, socketAddressType),
                              .socket_info = (uint8_t(p) | uint8_t(r)),
-#ifndef UVENT_ENABLE_REUSEADDR
                              .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))
-#else
-                             .state = (1ull & usub::utils::sync::refc::COUNT_MASK)
-#endif
             };
 
         u_long mode = 1;
@@ -461,7 +449,7 @@ namespace usub::uvent::net
             this->release();
 #if UVENT_DEBUG
             spdlog::warn("Socket counter(after release): {}, fd: {}",
-                         (this->header_->state & usub::utils::sync::refc::COUNT_MASK),
+                         (this->header_->state.load(std::memory_order_acquire) & usub::utils::sync::refc::COUNT_MASK),
                          (std::uint64_t)this->header_->fd);
 #endif
         }
@@ -1723,20 +1711,9 @@ namespace usub::uvent::net
 #endif
         this->header_->timer_id = 0;
 
-#ifndef UVENT_ENABLE_REUSEADDR
         if (has_timeout)
             this->header_->state.fetch_sub(1, std::memory_order_acq_rel);
         this->header_->timeout_epoch_bump();
-#else
-        if (has_timeout)
-        {
-            using namespace usub::utils::sync::refc;
-            uint64_t& st = this->header_->state;
-            const uint64_t cnt = st & COUNT_MASK;
-            if (cnt > 0)
-                st = (st & ~COUNT_MASK) | ((cnt - 1) & COUNT_MASK);
-        }
-#endif
 
 #if UVENT_DEBUG
         spdlog::info("async_connect(win,lvalue): connected fd={}", (socket_fd_t)this->header_->fd);
@@ -2235,7 +2212,6 @@ namespace usub::uvent::net
             system::this_thread::detail::wh.updateTimer(this->header_->timer_id, timeout);
             return;
         }
-#ifndef UVENT_ENABLE_REUSEADDR
         {
             uint64_t s = this->header_->state.load(std::memory_order_relaxed);
             for (;;)
@@ -2254,21 +2230,6 @@ namespace usub::uvent::net
                 cpu_relax();
             }
         }
-#else
-        {
-            uint64_t& st = this->header_->state;
-
-            if ((st & usub::utils::sync::refc::CLOSED_MASK) == 0)
-            {
-                const uint64_t cnt = st & usub::utils::sync::refc::COUNT_MASK;
-                if (cnt != usub::utils::sync::refc::COUNT_MASK)
-                {
-                    st =
-                        (st & ~usub::utils::sync::refc::COUNT_MASK) | ((cnt + 1) & usub::utils::sync::refc::COUNT_MASK);
-                }
-            }
-        }
-#endif
 #if UVENT_DEBUG
         spdlog::debug("set_timeout_ms(win): fd={}, timeout_ms={}, counter={}", (std::uint64_t)this->header_->fd,
                       timeout, this->header_->get_counter());

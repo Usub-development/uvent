@@ -55,6 +55,13 @@ namespace usub::uvent::core
 #endif
 
         epoll_ctl(this->poll_fd, EPOLL_CTL_ADD, header->fd, &event);
+#ifdef UVENT_SOCKET_OWNER_FORWARDING
+        // The poller is thread_local: whoever registers the fd owns the header
+        // (its timer lives in this thread's wheel, its delete goes through this
+        // thread's q_sh). Foreign-thread teardown is forwarded here, see
+        // ThreadLocalStorage::push_socket_op.
+        header->owner_tid = system::this_thread::detail::t_id;
+#endif
     }
 
 

@@ -92,7 +92,10 @@ namespace usub::uvent::utils
             struct
             {
                 Timer* timer;
-                uint64_t _unused0;
+                /// id snapshot taken at addTimer(): lets the wheel drop a queued ADD whose
+                /// timer was cancelled meanwhile without dereferencing `timer` (it may be
+                /// embedded in a SocketHeader that is already gone)
+                uint64_t add_id;
             };
 
             struct
@@ -104,9 +107,16 @@ namespace usub::uvent::utils
             struct
             {
                 uint64_t id_only;
-                uint64_t _unused1;
+                /// REMOVE: argument for `done`
+                void* done_arg;
             };
         };
+
+        /// REMOVE only: called by the wheel right after the node has been dropped
+        /// (found & removed, already fired, or queued-ADD cancelled). Lets the owner
+        /// of an embedded Timer free its enclosing object only when the wheel can no
+        /// longer touch it (non-REUSEADDR: SocketHeader retired via QSBR from here).
+        raw_timer_fn done{nullptr};
     };
 
     static_assert(std::is_trivially_copyable_v<Op>, "Op must be POD");

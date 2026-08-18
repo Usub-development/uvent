@@ -324,11 +324,7 @@ namespace usub::uvent::net
         this->header_ =
             new SocketHeader{.fd = utils::socket::createSocket(port, ip_addr, backlog, ipv_, socketAddressType),
                              .socket_info = (uint8_t(p) | uint8_t(r)),
-#ifndef UVENT_ENABLE_REUSEADDR
                              .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))
-#else
-                             .state = (1ull & usub::utils::sync::refc::COUNT_MASK)
-#endif
             };
         utils::socket::makeSocketNonBlocking(this->header_->fd);
         system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::READ);
@@ -342,11 +338,7 @@ namespace usub::uvent::net
         this->header_ =
             new SocketHeader{.fd = utils::socket::createSocket(port, ip_addr, backlog, ipv_, socketAddressType),
                              .socket_info = (static_cast<uint8_t>(p) | static_cast<uint8_t>(r)),
-#ifndef UVENT_ENABLE_REUSEADDR
                              .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))
-#else
-                             .state = (1ull & usub::utils::sync::refc::COUNT_MASK)
-#endif
             };
         utils::socket::makeSocketNonBlocking(this->header_->fd);
         system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::READ);
@@ -359,7 +351,7 @@ namespace usub::uvent::net
         {
             this->release();
 #if UVENT_DEBUG
-            spdlog::warn("Socket counter: {}, fd: {}", (this->header_->state & usub::utils::sync::refc::COUNT_MASK),
+            spdlog::warn("Socket counter: {}, fd: {}", (this->header_->state.load(std::memory_order_acquire) & usub::utils::sync::refc::COUNT_MASK),
                          this->header_->fd);
 #endif
         }
@@ -1169,20 +1161,9 @@ namespace usub::uvent::net
 #endif
         this->header_->timer_id = 0;
 
-#ifndef UVENT_ENABLE_REUSEADDR
         if (connect_timeout.count() > 0)
             this->header_->state.fetch_sub(1, std::memory_order_acq_rel);
         this->header_->timeout_epoch_bump();
-#else
-        if (connect_timeout.count() > 0)
-        {
-            using namespace usub::utils::sync::refc;
-            uint64_t& st = this->header_->state;
-            const uint64_t cnt = st & COUNT_MASK;
-            if (cnt > 0)
-                st = (st & ~COUNT_MASK) | ((cnt - 1) & COUNT_MASK);
-        }
-#endif
 
         co_return std::nullopt;
     }
@@ -1245,20 +1226,9 @@ namespace usub::uvent::net
 #endif
         this->header_->timer_id = 0;
 
-#ifndef UVENT_ENABLE_REUSEADDR
         if (connect_timeout.count() > 0)
             this->header_->state.fetch_sub(1, std::memory_order_acq_rel);
         this->header_->timeout_epoch_bump();
-#else
-        if (connect_timeout.count() > 0)
-        {
-            using namespace usub::utils::sync::refc;
-            uint64_t& st = this->header_->state;
-            const uint64_t cnt = st & COUNT_MASK;
-            if (cnt > 0)
-                st = (st & ~COUNT_MASK) | ((cnt - 1) & COUNT_MASK);
-        }
-#endif
 
         co_return std::nullopt;
     }
@@ -1546,7 +1516,6 @@ namespace usub::uvent::net
             system::this_thread::detail::wh.updateTimer(this->header_->timer_id, timeout);
             return;
         }
-#ifndef UVENT_ENABLE_REUSEADDR
         {
             uint64_t s = this->header_->state.load(std::memory_order_relaxed);
             for (;;)
@@ -1565,21 +1534,6 @@ namespace usub::uvent::net
                 cpu_relax();
             }
         }
-#else
-        {
-            uint64_t& st = this->header_->state;
-
-            if ((st & usub::utils::sync::refc::CLOSED_MASK) == 0)
-            {
-                const uint64_t cnt = st & usub::utils::sync::refc::COUNT_MASK;
-                if (cnt != usub::utils::sync::refc::COUNT_MASK)
-                {
-                    st =
-                        (st & ~usub::utils::sync::refc::COUNT_MASK) | ((cnt + 1) & usub::utils::sync::refc::COUNT_MASK);
-                }
-            }
-        }
-#endif
 #if UVENT_DEBUG
         spdlog::debug("set_timeout_ms: {}", this->header_->get_counter());
 #endif

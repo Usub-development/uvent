@@ -40,10 +40,28 @@ namespace usub::uvent::utils
 
         bool updateTimer(uint64_t timerId, timer_duration_t new_duration);
 
-        bool removeTimer(uint64_t timerId);
+        /**
+         * Queue a REMOVE for `timerId`. If `done` is given it is invoked by the wheel
+         * (on the ticking thread) once the timer node is guaranteed unreferenced by
+         * the wheel — the only safe moment to free an object with an embedded Timer.
+         */
+        bool removeTimer(uint64_t timerId, raw_timer_fn done = nullptr, void* done_arg = nullptr);
 
-#ifdef UVENT_ENABLE_REUSEADDR
+        /**
+         * Synchronous cancel: drops the node from the wheel right now (or marks a
+         * still-queued ADD to be dropped). Returns true iff the timer had not fired
+         * yet (the caller then owns whatever reference the timer held).
+         * REUSEADDR: wheel is thread_local — call on the owning worker only.
+         * Non-REUSEADDR: the wheel is shared — the caller must hold `mtx`
+         * (see cancelTimerSync); never call from inside a timer callback (tick holds mtx).
+         */
         bool cancelTimer(uint64_t timerId);
+#ifndef UVENT_ENABLE_REUSEADDR
+        bool cancelTimerSync(uint64_t timerId)
+        {
+            std::lock_guard<std::mutex> lk(this->mtx);
+            return cancelTimer(timerId);
+        }
 #endif
 
         void tick();
@@ -106,8 +124,12 @@ namespace usub::uvent::utils
 #endif
         std::vector<Op>                      ops_;
         std::vector<std::pair<raw_timer_fn, void*>> fired_raw_;
-#ifdef UVENT_ENABLE_REUSEADDR
+        /// ids whose cancel/remove arrived before their ADD was drained; the ADD is dropped
         std::unordered_set<uint64_t>         cancelledPending_;
+        /// largest id whose ADD has been drained (ids are monotonic per wheel): a
+        /// cancel/remove for id <= this cannot have a queued ADD -> nothing to remember
+        uint64_t                             maxAddedId_{0};
+#ifdef UVENT_ENABLE_REUSEADDR
 #endif
     };
 }
