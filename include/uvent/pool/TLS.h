@@ -10,8 +10,9 @@
 #include <cstdint>
 #include <uvent/base/Predefines.h>
 #include <uvent/poll/PollerBase.h>
+#include <uvent/tasks/AwaitableFrame.h>
 #include <uvent/utils/datastructures/queue/ConcurrentQueues.h>
-#include <uvent/utils/datastructures/queue/FastQueue.h>
+#include <uvent/utils/datastructures/queue/IntrusiveMPSC.h>
 
 namespace usub::uvent::net
 {
@@ -76,10 +77,10 @@ namespace usub::uvent::thread
         }
 
     private:
-        queue::concurrent::MPMCQueue<std::coroutine_handle<>> inbox_q_;
+        queue::concurrent::IntrusiveMPSCQueue<detail::AwaitableFrameBase> inbox_q_;
         std::atomic_bool is_added_new_{false};
 #ifdef UVENT_SOCKET_OWNER_FORWARDING
-        queue::concurrent::MPMCQueue<SocketOp> sock_ops_q_{4096};
+        queue::concurrent::SegmentedMPMCQueue<SocketOp> sock_ops_q_;
         std::atomic_bool has_sock_ops_{false};
 #endif
         std::atomic<core::PollerImpl*> poller_{nullptr};

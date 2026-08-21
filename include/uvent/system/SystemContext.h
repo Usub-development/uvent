@@ -239,16 +239,14 @@ namespace usub::uvent::system
     template <bool is_thread_id_set>
     inline void co_spawn_static(std::coroutine_handle<> h, int threadIndex)
     {
-        global::detail::tls_registry->getStorage(threadIndex)->push_task_inbox(h);
+        if (!h)
+            return;
         if constexpr (is_thread_id_set)
         {
             auto handle = std::coroutine_handle<detail::AwaitableFrameBase>::from_address(h.address());
             handle.promise().set_thread_id(threadIndex);
-            if (handle)
-                global::detail::tls_registry->getStorage(threadIndex)->push_task_inbox(handle);
         }
-        else
-            global::detail::tls_registry->getStorage(threadIndex)->push_task_inbox(h);
+        global::detail::tls_registry->getStorage(threadIndex)->push_task_inbox(h);
     }
 
     /**

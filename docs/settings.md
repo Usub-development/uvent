@@ -104,6 +104,31 @@ Defines the maximum number of completed coroutine handles destroyed in one clean
 
 ---
 
+## Coroutine Hand-off Stack Guard
+
+### `max_transfer_stack_depth`
+
+**Type:** `std::size_t`
+**Default:** `512 * 1024` bytes
+
+Coroutine hand-offs (`co_await` into a child, return to the awaiting parent
+on completion, `co_yield`) use symmetric transfer. Optimising compilers turn
+that into a tail call, so a long chain of synchronously completing awaits runs
+on a flat native stack. Without optimisations (`-O0`/`-O1`, sanitizer builds)
+every hand-off nests a `resume()` call instead, and such chains overflow the
+stack.
+
+Worker threads record their stack base at start-up and compare it against the
+current stack pointer at each hand-off. Past this depth the continuation is
+pushed to the worker's local run queue and resumed from the scheduler with a
+fresh stack. The check is a thread-local load and a subtraction; on optimised
+builds it effectively never triggers.
+
+Only runtime workers perform the check — threads outside the runtime have no
+run queue to fall back to.
+
+---
+
 ## Worker Thread Idle Behavior
 
 ### `idle_fallback_ms`

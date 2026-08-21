@@ -5,6 +5,7 @@
 #ifndef UVENT_SETTINGS_H
 #define UVENT_SETTINGS_H
 
+#include <cstddef>
 #include <cstdint>
 
 namespace usub::uvent::settings
@@ -69,6 +70,18 @@ namespace usub::uvent::settings
      * per cleanup iteration.
      */
     extern int max_pre_allocated_tmp_coroutines_items;
+
+    /**
+     * @brief Stack depth (bytes) past which symmetric coroutine transfers are
+     * bounced through the scheduler instead of continued inline.
+     *
+     * Without optimisations (-O0/-O1, sanitizer builds) the compiler does not
+     * turn `await_suspend`/`final_suspend` handle returns into tail calls, so
+     * long chains of synchronously completing awaits nest the native stack.
+     * When the current depth from the worker's stack base exceeds this value
+     * the continuation is enqueued into the thread-local run queue instead.
+     */
+    extern std::size_t max_transfer_stack_depth;
 
     /**
      * @brief Idle wait duration in milliseconds for worker threads.

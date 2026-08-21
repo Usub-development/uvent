@@ -14,6 +14,7 @@ namespace usub::uvent::settings
     int max_pre_allocated_tasks_items = 1024;
     int max_pre_allocated_tmp_sockets_items = 1024;
     int max_pre_allocated_tmp_coroutines_items = 256;
+    std::size_t max_transfer_stack_depth = 512 * 1024;
     int idle_fallback_ms = 50;
     int resolver_threads = 2;
 }

@@ -390,6 +390,31 @@ Non-blocking variants (`try_send`, `try_recv_into`) and the `operator<<` sugar
 are covered in [Channels](channels/channels.md) and
 [Select](channels/select.md).
 
+### Unbounded variant
+
+`AsyncUnboundedChannel<Ts...>` (`<uvent/sync/AsyncUnboundedChannel.h>`) has the
+same receive-side API and works with `select_recv`, but is backed by a
+lock-free segmented queue with no capacity limit:
+
+- `send`/`try_send` never suspend and never fail because of a full buffer —
+  the only failure is a closed channel. There is **no back-pressure**; watch
+  `size_relaxed()` if producers can outrun consumers.
+- Because sending never touches the scheduler, `try_send` is safe to call from
+  plain threads outside the runtime (e.g. a logging thread feeding a coroutine
+  consumer).
+- Do not mix bounded and unbounded channels in one `select_recv` call.
+
+```cpp
+sync::AsyncUnboundedChannel<std::string> log_lines;   // no capacity argument
+
+// any thread:
+log_lines.try_send("hello");
+
+// coroutine:
+while (auto line = co_await log_lines.recv())
+    write(std::get<0>(*line));
+```
+
 ---
 
 ## Step 9 — Tune the runtime
@@ -401,7 +426,14 @@ before `uvent.run()`:
 settings::timeout_duration_ms = 20000; // default socket inactivity timeout
 settings::resolver_threads    = 4;     // getaddrinfo pool (connect_happy uses 2 lookups/call)
 settings::idle_fallback_ms    = 50;    // idle poll tick; cross-thread wakeups don't wait for it
+settings::max_transfer_stack_depth = 512 * 1024; // bounce symmetric transfers via the scheduler past this depth
 ```
+
+`max_transfer_stack_depth` exists because unoptimised builds (-O0/-O1,
+sanitizers) do not tail-call coroutine hand-offs; without the guard a loop of
+synchronously completing `co_await`s would grow the native stack until it
+overflows. Workers measure their stack depth at each hand-off and, past the
+threshold, enqueue the continuation instead of resuming it inline.
 
 The full list (timer wheel depth, EINTR retry budgets, batch sizes) is in
 [Settings](settings.md).

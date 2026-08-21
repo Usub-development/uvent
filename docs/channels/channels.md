@@ -149,6 +149,51 @@ task::Awaitable<void> consumer() {
 
 ---
 
+# Unbounded Variant: `AsyncUnboundedChannel`
+
+```cpp
+#include <uvent/sync/AsyncUnboundedChannel.h>
+
+AsyncUnboundedChannel<int> ch;                 // no capacity argument
+AsyncUnboundedChannel<int, std::string> log;
+```
+
+`AsyncUnboundedChannel<Ts...>` shares the receive side API of `AsyncChannel`
+(`recv`, `recv_into`, `try_recv`, `try_recv_into`, `close`, `operator<<`,
+`select_recv`) but is backed by a lock-free segmented queue that grows on
+demand (`SegmentedMPMCQueue`, 1024-element segments, hazard-pointer
+reclamation).
+
+What changes on the send side:
+
+| | `AsyncChannel` | `AsyncUnboundedChannel` |
+|---|---|---|
+| `send()` suspends when full | yes (back-pressure) | never |
+| `try_send()` fails when full | yes | never — `false` only after `close()` |
+| `capacity()` | fixed, power of two | n/a |
+| `send`/`try_send` from a non-runtime thread | not supported | supported (`try_send`) |
+
+There is **no back-pressure**: if producers can outrun consumers, watch
+`size_relaxed()` and throttle at the call site. `send()` still returns an
+`Awaitable<bool>` so code can be written against either channel type, but it
+completes synchronously.
+
+```cpp
+AsyncUnboundedChannel<std::string> lines;
+
+// from any thread, e.g. a logging callback:
+lines.try_send("hello");
+
+// consumer coroutine:
+while (auto msg = co_await lines.recv())
+    handle(std::get<0>(*msg));
+```
+
+Do not mix bounded and unbounded channels in one `select_recv` call — the
+channels passed to `select_recv` must be of the same class.
+
+---
+
 # Performance Notes
 
 * No heap allocation during steady-state operation

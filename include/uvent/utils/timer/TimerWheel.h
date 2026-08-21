@@ -118,7 +118,7 @@ namespace usub::uvent::utils
         bool                                 nextExpiryDirty_{false};
         size_t                               activeTimerCount_;
 #ifndef UVENT_ENABLE_REUSEADDR
-        queue::concurrent::MPMCQueue<Op>     timer_operations_queue;
+        queue::concurrent::SegmentedMPMCQueue<Op> timer_operations_queue;
 #else
         queue::single_thread::Queue<Op>      timer_operations_queue;
 #endif

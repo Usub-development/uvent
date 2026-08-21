@@ -5,6 +5,7 @@
 #include "uvent/system/Thread.h"
 #include <utility>
 #include "uvent/net/Socket.h"
+#include "uvent/system/StackGuard.h"
 
 namespace usub::uvent::system
 {
@@ -26,6 +27,10 @@ namespace usub::uvent::system
     void Thread::threadFunction(std::stop_token token)
     {
         this_thread::detail::t_id = this->index_;
+        {
+            char stack_probe;
+            system::stack_guard::set_stack_base(&stack_probe);
+        }
         auto& local_pl = system::this_thread::detail::pl;
         this->thread_local_storage_->set_poller(&local_pl);
         auto& local_wh = system::this_thread::detail::wh;
@@ -172,21 +177,8 @@ namespace usub::uvent::system
         if (!tls->is_added_new_.exchange(false, std::memory_order_acq_rel))
             return;
 
-        constexpr size_t BATCH = 64;
-        std::coroutine_handle<> buf[BATCH];
-
-        for (;;)
-        {
-            size_t n = tls->inbox_q_.try_dequeue_bulk(buf, BATCH);
-            if (n == 0)
-                break;
-
-            for (size_t i = 0; i < n; ++i)
-            {
-                if (buf[i])
-                    system::this_thread::detail::q.enqueue(buf[i]);
-            }
-        }
+        while (auto* frame = tls->inbox_q_.pop())
+            system::this_thread::detail::q.enqueue(frame->get_coroutine_handle());
     }
 
 #ifdef UVENT_SOCKET_OWNER_FORWARDING
@@ -211,7 +203,14 @@ namespace usub::uvent::system
     }
 #endif
 
-    Thread::~Thread() {}
+    Thread::~Thread()
+    {
+        if (this->thread_.joinable())
+        {
+            this->thread_.request_stop();
+            this->thread_.join();
+        }
+    }
 
     void Thread::run_current() { threadFunction(this->stop_source_.get_token()); }
 

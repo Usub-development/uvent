@@ -150,6 +150,13 @@ install(EXPORT uventTargets
 )
 
 option(UVENT_BUILD_EXAMPLES "Uvent build main executable for testing" OFF)
+option(UVENT_BUILD_TESTS "Uvent build unit tests and benchmarks" OFF)
+set(UVENT_TESTS_SANITIZER "" CACHE STRING "Sanitizer for tests: address,undefined | thread")
+
+if (UVENT_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif ()
 option(UVENT_ENABLE_SANITIZERS "Uvent build sanitizer executables" OFF)
 
 if (UVENT_BUILD_EXAMPLES)

@@ -35,7 +35,7 @@ namespace usub::uvent::utils
 
         Op op{ .op = OpType::ADD, .timer = timer, .add_id = timer->id };
 #ifndef UVENT_ENABLE_REUSEADDR
-        while (!this->timer_operations_queue.try_enqueue(op)) cpu_relax();
+        this->timer_operations_queue.enqueue(op);
 #else
         this->timer_operations_queue.enqueue(op);
 #endif
@@ -46,7 +46,7 @@ namespace usub::uvent::utils
     {
         Op op{ .op = OpType::UPDATE, .id = timerId, .new_dur = new_duration };
 #ifndef UVENT_ENABLE_REUSEADDR
-        while (!this->timer_operations_queue.try_enqueue(op)) cpu_relax();
+        this->timer_operations_queue.enqueue(op);
 #else
         this->timer_operations_queue.enqueue(op);
 #endif
@@ -57,7 +57,7 @@ namespace usub::uvent::utils
     {
         Op op{ .op = OpType::REMOVE, .id_only = timerId, .done_arg = done_arg, .done = done };
 #ifndef UVENT_ENABLE_REUSEADDR
-        while (!this->timer_operations_queue.try_enqueue(op)) cpu_relax();
+        this->timer_operations_queue.enqueue(op);
 #else
         this->timer_operations_queue.enqueue(op);
 #endif

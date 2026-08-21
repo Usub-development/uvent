@@ -73,14 +73,28 @@ namespace usub::uvent::detail
     {
         this->push_frame_to_be_destroyed();
         if (auto prev = std::exchange(this->prev_, std::coroutine_handle<>{}))
+        {
+            if (system::stack_guard::stack_too_deep()) [[unlikely]]
+            {
+                push_frame_into_task_queue(prev);
+                return std::noop_coroutine();
+            }
             return prev;
+        }
         return std::noop_coroutine();
     }
 
     std::coroutine_handle<> AwaitableFrameBase::yield_transfer() noexcept
     {
         if (this->prev_)
+        {
+            if (system::stack_guard::stack_too_deep()) [[unlikely]]
+            {
+                push_frame_into_task_queue(this->prev_);
+                return std::noop_coroutine();
+            }
             return this->prev_;
+        }
         return std::noop_coroutine();
     }
 

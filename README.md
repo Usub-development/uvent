@@ -18,7 +18,7 @@ A single high-level API (`TCPServerSocket`, `TCPClientSocket`, `UDPSocket`) is u
 - **Happy Eyeballs (RFC 8305)** — `net::connect_happy` races IPv6/IPv4 endpoints: parallel AAAA/A with resolution delay, staggered attempts, instant fallback on failure (early start).
 - **Instant cross-thread wakeups** — parked pollers are signalled via `eventfd` / `EVFILT_USER` / `PostQueuedCompletionStatus`; resumes never wait for the idle tick.
 - **Coroutine-native synchronization** — `AsyncMutex`, `AsyncSemaphore`, `AsyncEvent`, `WaitGroup`, `AsyncBarrier`, cancellation tokens; waiters suspend instead of blocking threads.
-- **Go-style channels** — buffered MPMC `AsyncChannel<Ts...>` with back-pressure and `select_recv` over multiple channels.
+- **Go-style channels** — buffered MPMC `AsyncChannel<Ts...>` with back-pressure, unbounded `AsyncUnboundedChannel<Ts...>` for fire-and-forget producers (including non-runtime threads), and `select_recv` over multiple channels.
 - **Timer wheel** — millions of cheap one-shot timers, coroutine `sleep_for`, per-socket inactivity timeouts.
 
 ### Requests per second (RPS)

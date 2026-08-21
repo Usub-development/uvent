@@ -31,7 +31,7 @@ namespace usub::uvent::task {
         std::size_t getSize();
 
     private:
-        std::unique_ptr<queue::concurrent::MPMCQueue<std::coroutine_handle<>>> detachedTasks;
+        std::unique_ptr<queue::concurrent::SegmentedMPMCQueue<std::coroutine_handle<>>> detachedTasks;
     };
 }
 

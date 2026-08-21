@@ -13,7 +13,9 @@
 
 #include "Awaitable.h"
 #include "uvent/base/Predefines.h"
+#include "uvent/system/StackGuard.h"
 #include "uvent/utils/datastructures/queue/FastQueue.h"
+#include "uvent/utils/datastructures/queue/IntrusiveMPSC.h"
 
 namespace usub::uvent
 {
@@ -34,7 +36,7 @@ namespace usub::uvent
         template <class F>
         concept DeferredFrame = std::derived_from<no_cvr_t<F>, deferred_task_tag>;
 
-        class AwaitableFrameBase
+        class AwaitableFrameBase : public queue::concurrent::MPSCNode
         {
         public:
             template <class, class>
@@ -302,7 +304,14 @@ namespace usub::uvent
             if constexpr (!detail::DeferredFrame<FrameType>)
             {
                 if (child && !child.done())
+                {
+                    if (system::stack_guard::stack_too_deep()) [[unlikely]]
+                    {
+                        detail::AwaitableFrameBase::push_frame_into_task_queue(child);
+                        return std::noop_coroutine();
+                    }
                     return child;
+                }
             }
             return std::noop_coroutine();
         }
@@ -320,7 +329,14 @@ namespace usub::uvent
             if constexpr (!detail::DeferredFrame<FrameType>)
             {
                 if (child && !child.done())
+                {
+                    if (system::stack_guard::stack_too_deep()) [[unlikely]]
+                    {
+                        detail::AwaitableFrameBase::push_frame_into_task_queue(child);
+                        return std::noop_coroutine();
+                    }
                     return child;
+                }
             }
             return std::noop_coroutine();
         }
