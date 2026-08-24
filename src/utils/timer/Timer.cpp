@@ -6,12 +6,7 @@
 
 namespace usub::uvent::utils
 {
-    Timer::Timer(timer_duration_t duration) :
-        duration_ms(duration),
-        expiryTime(0),
-        active(true), id(0)
-    {
-    }
+    Timer::Timer(timer_duration_t duration) : duration_ms(duration), expiryTime(0), active(true), id(0) {}
 
     void Timer::addFunction(std::function<void(std::any&)> f, std::any arg)
     {
@@ -31,6 +26,15 @@ namespace usub::uvent::utils
         this->active = true;
     }
 
+    void Timer::arm_raw(timer_duration_t dur, raw_timer_fn f, void* arg) noexcept
+    {
+        this->duration_ms = dur;
+        this->raw_fn = f;
+        this->raw_arg = arg;
+        this->coro = nullptr;
+        this->active = true;
+    }
+
     void Timer::arm_embedded(timer_duration_t dur, raw_timer_fn f, void* arg) noexcept
     {
         this->duration_ms = dur;
@@ -40,4 +44,4 @@ namespace usub::uvent::utils
         this->coro = nullptr;
         this->active = true;
     }
-}
+} // namespace usub::uvent::utils

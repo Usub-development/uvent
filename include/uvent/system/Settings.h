@@ -84,6 +84,16 @@ namespace usub::uvent::settings
     extern std::size_t max_transfer_stack_depth;
 
     /**
+     * @brief Cooperative budget: number of fast-path completions a coroutine may
+     * take per scheduler resume before it is forced through the run queue.
+     *
+     * Bounds how long one hot coroutine (a pipelined socket, a busy channel
+     * consumer) can monopolise its worker. Checked by channel operations and
+     * socket reads/writes via system::coop::consume().
+     */
+    extern int32_t coop_budget;
+
+    /**
      * @brief Idle wait duration in milliseconds for worker threads.
      *
      * Defines how often an idle worker thread wakes up to check for new tasks

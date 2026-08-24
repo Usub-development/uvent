@@ -5,16 +5,16 @@
 #ifndef UVENT_THREAD_H
 #define UVENT_THREAD_H
 
-#include <ctime>
-#include <thread>
-#include <chrono>
 #include <barrier>
+#include <chrono>
+#include <ctime>
 #include <functional>
 #include <stop_token>
+#include <thread>
+#include <uvent/pool/TLSRegistry.h>
+#include "uvent/base/Predefines.h"
 #include "uvent/system/Defines.h"
 #include "uvent/system/SystemContext.h"
-#include "uvent/base/Predefines.h"
-#include <uvent/pool/TLSRegistry.h>
 
 namespace usub::uvent::system
 {
@@ -51,6 +51,8 @@ namespace usub::uvent::system
 
         void processInboxQueue();
 
+        void processCancelKicks();
+
 #ifdef UVENT_SOCKET_OWNER_FORWARDING
         /// Apply socket maintenance ops forwarded to this worker as owner
         /// (see thread::SocketOp / net::detail::apply_socket_op).
@@ -68,7 +70,7 @@ namespace usub::uvent::system
         std::vector<std::coroutine_handle<>> tmp_coroutines_;
         thread::ThreadLocalStorage* thread_local_storage_;
     };
-}
+} // namespace usub::uvent::system
 
 
-#endif //UVENT_THREAD_H
+#endif // UVENT_THREAD_H

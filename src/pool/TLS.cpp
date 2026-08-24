@@ -31,6 +31,22 @@ namespace usub::uvent::thread
             p->wake();
     }
 
+    void ThreadLocalStorage::wake_poller() noexcept
+    {
+        if (auto* p = this->poller_.load(std::memory_order_acquire))
+            p->wake();
+    }
+
+    void ThreadLocalStorage::push_cancel_kick(uvent::task::TaskStateBase* t)
+    {
+        this->kick_q_.push(t);
+
+        this->has_kicks_.store(true, std::memory_order_release);
+
+        if (auto* p = this->poller_.load(std::memory_order_acquire))
+            p->wake();
+    }
+
 #ifdef UVENT_SOCKET_OWNER_FORWARDING
     void ThreadLocalStorage::push_socket_op(const SocketOp& op)
     {

@@ -1,144 +1,177 @@
 #ifndef UVENT_SYNC_CANCELLATION_H
 #define UVENT_SYNC_CANCELLATION_H
 
-#include <atomic>
 #include <coroutine>
+#include <variant>
 
+#include "uvent/sync/CancelState.h"
 #include "uvent/sync/SyncCommon.h"
-#include "uvent/utils/sync/TaggedPtr.h"
-#include "uvent/system/SystemContext.h"
+#include "uvent/sync/Wait.h"
 
-namespace usub::uvent::sync {
+namespace usub::uvent::sync
+{
 
-    struct CancelState {
-        enum class NodeState : uint8_t {
-            Waiting   = 0,
-            Cancelled = 1,
-            Claimed   = 2
-        };
+    struct CancelOp
+    {
+        CancelState* s;
 
-        struct WaitNode {
-            std::coroutine_handle<>  h{};
-            WaitNode*                next{};
-            int                      thread_id{-1};
-            std::atomic<NodeState>   st{NodeState::Waiting};
-        };
+        using result_type = std::monostate;
 
-        std::atomic<bool>       requested{false};
-        TaggedPtr<WaitNode>     head{nullptr};
+        static const char* wait_reason() noexcept { return "cancel.wait"; }
 
-        ~CancelState() {
-            auto snap = head.load(std::memory_order_acquire);
-            while (snap.ptr) {
-                if (head.compare_exchange_weak(snap, nullptr)) {
-                    WaitNode* list = snap.ptr;
-                    while (list) {
-                        WaitNode* next = list->next;
-                        delete list;
-                        list = next;
-                    }
-                    break;
-                }
-            }
+        bool try_complete(std::monostate&) const noexcept { return s->requested.load(std::memory_order_acquire); }
+
+        bool attach(Waiter* w) noexcept
+        {
+            s->cancel_waiters.lock();
+            s->cancel_waiters.push_locked(w);
+            s->cancel_waiters.unlock();
+            detail::notify_fence();
+            return !s->requested.load(std::memory_order_seq_cst);
         }
 
-        void push_waiter(WaitNode* n) noexcept {
-            auto snap = head.load(std::memory_order_relaxed);
-            do {
-                n->next = snap.ptr;
-            } while (!head.compare_exchange_weak(
-                snap, n,
-                std::memory_order_release,
-                std::memory_order_relaxed));
-        }
+        bool detach(Waiter* w) noexcept { return s->cancel_waiters.remove(w); }
 
-        WaitNode* exchange_all() noexcept {
-            auto snap = head.load(std::memory_order_acquire);
-            while (snap.ptr) {
-                if (head.compare_exchange_weak(snap, nullptr))
-                    return snap.ptr;
-            }
-            return nullptr;
-        }
+        void finalize() noexcept {}
     };
 
-    class CancellationToken {
-        CancelState* s_{};
+    class CancellationToken
+    {
+        CancelState* s_{nullptr};
 
     public:
-        explicit CancellationToken(CancelState* s = nullptr) noexcept : s_(s) {}
+        CancellationToken() = default;
 
-        bool stop_requested() const noexcept {
+        explicit CancellationToken(CancelState* s, bool add_ref = true) noexcept : s_(s)
+        {
+            if (s_ && add_ref)
+                s_->add_ref();
+        }
+
+        CancellationToken(const CancellationToken& o) noexcept : s_(o.s_)
+        {
+            if (s_)
+                s_->add_ref();
+        }
+
+        CancellationToken(CancellationToken&& o) noexcept : s_(o.s_) { o.s_ = nullptr; }
+
+        CancellationToken& operator=(const CancellationToken& o) noexcept
+        {
+            if (this != &o)
+            {
+                if (o.s_)
+                    o.s_->add_ref();
+                if (s_)
+                    s_->release();
+                s_ = o.s_;
+            }
+            return *this;
+        }
+
+        CancellationToken& operator=(CancellationToken&& o) noexcept
+        {
+            if (this != &o)
+            {
+                if (s_)
+                    s_->release();
+                s_ = o.s_;
+                o.s_ = nullptr;
+            }
+            return *this;
+        }
+
+        ~CancellationToken()
+        {
+            if (s_)
+                s_->release();
+        }
+
+        [[nodiscard]] bool valid() const noexcept { return s_ != nullptr; }
+
+        [[nodiscard]] bool stop_requested() const noexcept
+        {
             return s_ && s_->requested.load(std::memory_order_acquire);
         }
 
-        struct Awaiter {
-            CancelState*              s;
-            CancelState::WaitNode*    node{};
+        [[nodiscard]] CancelState* state() const noexcept { return s_; }
 
-            bool await_ready() noexcept {
-                return s->requested.load(std::memory_order_acquire);
+        [[nodiscard]] CancelOp on_cancel_op() const noexcept { return CancelOp{s_}; }
+
+        struct OnCancelAwaiter
+        {
+            CancelOp op;
+            OpWait<CancelOp> wait{&op};
+
+            bool await_ready() noexcept
+            {
+                std::monostate m;
+                return op.try_complete(m);
             }
 
-            bool await_suspend(std::coroutine_handle<> h) noexcept {
-                using NodeState = CancelState::NodeState;
+            bool await_suspend(std::coroutine_handle<> h) noexcept { return wait.await_suspend(h); }
 
-                node = new CancelState::WaitNode{};
-                node->h         = h;
-                node->thread_id = detail::current_thread_id();
-                node->st.store(NodeState::Waiting, std::memory_order_relaxed);
-
-                s->push_waiter(node);
-
-                if (s->requested.load(std::memory_order_acquire)) {
-                    NodeState exp = NodeState::Waiting;
-                    if (node->st.compare_exchange_strong(
-                            exp, NodeState::Cancelled,
-                            std::memory_order_acq_rel,
-                            std::memory_order_relaxed)) {
-                        return false;
-                    }
+            bool await_resume() noexcept
+            {
+                std::monostate m;
+                if (op.try_complete(m))
                     return true;
-                }
-                return true;
+                return false;
             }
-
-            void await_resume() noexcept {}
         };
 
-        Awaiter on_cancel() const noexcept { return Awaiter{s_}; }
+        [[nodiscard]] OnCancelAwaiter on_cancel() const noexcept { return OnCancelAwaiter{CancelOp{s_}}; }
     };
 
-    class CancellationSource {
-        CancelState state_;
+    class CancellationSource
+    {
+        CancelState* s_{nullptr};
 
     public:
-        CancellationToken token() noexcept {
-            return CancellationToken(&state_);
+        CancellationSource() : s_(new CancelState()) {}
+
+        explicit CancellationSource(const CancellationToken& parent) : s_(new CancelState())
+        {
+            if (parent.state())
+                CancelState::link(parent.state(), s_);
         }
 
-        void request_cancel() noexcept {
-            using NodeState = CancelState::NodeState;
+        CancellationSource(const CancellationSource&) = delete;
+        CancellationSource& operator=(const CancellationSource&) = delete;
 
-            bool was = state_.requested.exchange(true, std::memory_order_acq_rel);
-            if (was) return;
+        CancellationSource(CancellationSource&& o) noexcept : s_(o.s_) { o.s_ = nullptr; }
 
-            CancelState::WaitNode* list = state_.exchange_all();
-            while (list) {
-                auto* n  = list;
-                list     = list->next;
-
-                NodeState exp = NodeState::Waiting;
-                if (n->st.compare_exchange_strong(
-                        exp, NodeState::Claimed,
-                        std::memory_order_acq_rel,
-                        std::memory_order_relaxed)) {
-                    detail::resume_on(n->h, n->thread_id);
-                }
-                delete n;
+        CancellationSource& operator=(CancellationSource&& o) noexcept
+        {
+            if (this != &o)
+            {
+                if (s_)
+                    s_->release();
+                s_ = o.s_;
+                o.s_ = nullptr;
             }
+            return *this;
+        }
+
+        ~CancellationSource()
+        {
+            if (s_)
+                s_->release();
+        }
+
+        [[nodiscard]] CancellationToken token() const noexcept { return CancellationToken(s_); }
+
+        void request_cancel() noexcept
+        {
+            if (s_)
+                s_->request_cancel();
         }
     };
+
+    inline CancellationToken current_token() noexcept
+    {
+        return CancellationToken(system::this_thread::detail::current_cancel);
+    }
 
 } // namespace usub::uvent::sync
 

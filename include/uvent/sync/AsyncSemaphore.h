@@ -4,132 +4,96 @@
 #include <atomic>
 #include <coroutine>
 #include <cstdint>
+#include <variant>
 
 #include "uvent/sync/SyncCommon.h"
-#include "uvent/utils/sync/TaggedPtr.h"
-#include "uvent/system/SystemContext.h"
+#include "uvent/sync/Wait.h"
+#include "uvent/sync/WaitList.h"
 
-namespace usub::uvent::sync {
+namespace usub::uvent::sync
+{
 
-    class AsyncSemaphore {
-        enum class NodeState : uint8_t {
-            Waiting   = 0,
-            Cancelled = 1,
-            Claimed   = 2
-        };
-
-        struct WaitNode {
-            std::coroutine_handle<>    h{};
-            WaitNode*                  next{};
-            int                        thread_id{-1};
-            std::atomic<NodeState>     st{NodeState::Waiting};
-        };
-
-        std::atomic<int32_t>   count_;
-        TaggedPtr<WaitNode>    head_;
-
-        void push_waiter(WaitNode* n) noexcept {
-            auto snap = head_.load(std::memory_order_relaxed);
-            do {
-                n->next = snap.ptr;
-            } while (!head_.compare_exchange_weak(
-                snap, n,
-                std::memory_order_release,
-                std::memory_order_relaxed));
-        }
-
-        WaitNode* pop_waiter() noexcept {
-            for (;;) {
-                auto snap = head_.load(std::memory_order_acquire);
-                if (!snap.ptr) return nullptr;
-                WaitNode* next = snap.ptr->next;
-                if (head_.compare_exchange_weak(snap, next))
-                    return snap.ptr;
-            }
-        }
-
-        bool try_take_token() noexcept {
-            int32_t c = count_.load(std::memory_order_relaxed);
-            while (c > 0) {
-                if (count_.compare_exchange_weak(
-                        c, c - 1,
-                        std::memory_order_acquire,
-                        std::memory_order_relaxed))
-                    return true;
-            }
-            return false;
-        }
+    class AsyncSemaphore
+    {
+        std::atomic<int32_t> count_;
+        WaitList waiters_;
 
     public:
-        explicit AsyncSemaphore(int32_t initial) noexcept
-            : count_(initial), head_(nullptr) {}
+        explicit AsyncSemaphore(int32_t initial) noexcept : count_(initial) {}
 
-        ~AsyncSemaphore() {
-            while (WaitNode* n = pop_waiter())
-                delete n;
-        }
-
-        AsyncSemaphore(const AsyncSemaphore&)            = delete;
+        AsyncSemaphore(const AsyncSemaphore&) = delete;
         AsyncSemaphore& operator=(const AsyncSemaphore&) = delete;
 
-        struct AcquireAwaiter {
-            AsyncSemaphore* self{};
-            WaitNode*       node{};
+        [[nodiscard]] int32_t available() const noexcept { return this->count_.load(std::memory_order_acquire); }
 
-            bool await_ready() noexcept {
-                return self->try_take_token();
-            }
-
-            bool await_suspend(std::coroutine_handle<> h) noexcept {
-                node = new WaitNode{};
-                node->h         = h;
-                node->thread_id = detail::current_thread_id();
-                node->st.store(NodeState::Waiting, std::memory_order_relaxed);
-
-                self->push_waiter(node);
-
-                if (self->try_take_token()) {
-                    NodeState expected = NodeState::Waiting;
-                    if (node->st.compare_exchange_strong(
-                            expected, NodeState::Cancelled,
-                            std::memory_order_acq_rel,
-                            std::memory_order_relaxed)) {
-                        return false;
-                    }
+        bool try_acquire() noexcept
+        {
+            int32_t c = this->count_.load(std::memory_order_relaxed);
+            for (;;)
+            {
+                if (c <= 0)
+                    return false;
+                if (this->count_.compare_exchange_weak(c, c - 1, std::memory_order_acquire, std::memory_order_relaxed))
                     return true;
-                }
-                return true;
+                cpu_relax();
+            }
+        }
+
+        void release(int32_t k = 1) noexcept
+        {
+            this->count_.fetch_add(k, std::memory_order_seq_cst);
+            detail::notify_fence();
+            if (this->waiters_.empty_relaxed())
+                return;
+            this->waiters_.lock();
+            while (k > 0)
+            {
+                Waiter* w = this->waiters_.pop_front_locked();
+                if (!w)
+                    break;
+                if (detail::fire_waiter(w))
+                    --k;
+            }
+            this->waiters_.unlock();
+        }
+
+        struct AcquireOp
+        {
+            AsyncSemaphore* s;
+
+            using result_type = std::monostate;
+
+            static const char* wait_reason() noexcept { return "semaphore.acquire"; }
+
+            bool try_complete(std::monostate&) const noexcept { return s->try_acquire(); }
+
+            bool attach(Waiter* w) noexcept
+            {
+                s->waiters_.lock();
+                s->waiters_.push_locked(w);
+                s->waiters_.unlock();
+                detail::notify_fence();
+                return s->count_.load(std::memory_order_seq_cst) <= 0;
             }
 
-            void await_resume() noexcept {}
+            bool detach(Waiter* w) noexcept { return s->waiters_.remove(w); }
+
+            void finalize() noexcept {}
         };
 
-        AcquireAwaiter acquire() noexcept { return AcquireAwaiter{this}; }
+        [[nodiscard]] AcquireOp acquire_op() noexcept { return AcquireOp{this}; }
 
-        bool try_acquire() noexcept { return try_take_token(); }
-
-        void release(int32_t k = 1) noexcept {
-            for (int32_t i = 0; i < k; ++i) {
-                for (;;) {
-                    WaitNode* n = pop_waiter();
-                    if (!n) {
-                        count_.fetch_add(1, std::memory_order_release);
-                        break;
-                    }
-
-                    NodeState expected = NodeState::Waiting;
-                    if (!n->st.compare_exchange_strong(
-                            expected, NodeState::Claimed,
-                            std::memory_order_acq_rel,
-                            std::memory_order_relaxed)) {
-                        delete n;
-                        continue;
-                    }
-
-                    detail::resume_on(n->h, n->thread_id);
-                    delete n;
-                    break;
-                }
+        task::Awaitable<bool> acquire() noexcept
+        {
+            for (;;)
+            {
+                AcquireOp op{this};
+                std::monostate m;
+                if (op.try_complete(m))
+                    co_return true;
+                OpWait<AcquireOp> w{&op};
+                if (!co_await w)
+                    co_return false;
             }
         }
     };

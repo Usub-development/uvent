@@ -55,9 +55,12 @@ nav:
   - Core Runtime:
       - Uvent: uvent.md
       - System Primitives: system_primitives.md
+      - Introspection: introspection.md
   - Coroutines:
       - Awaitable: awaitable.md
       - Awaitable Frame: awaitable_frame.md
+      - Tasks & Structured Concurrency: tasks.md
+      - Cancellation: cancellation.md
   - Networking:
       - Socket: socket.md
       - Name Resolution & Happy Eyeballs: resolver.md

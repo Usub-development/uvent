@@ -124,8 +124,25 @@ pushed to the worker's local run queue and resumed from the scheduler with a
 fresh stack. The check is a thread-local load and a subtraction; on optimised
 builds it effectively never triggers.
 
-Only runtime workers perform the check — threads outside the runtime have no
+Only runtime workers perform the check – threads outside the runtime have no
 run queue to fall back to.
+
+---
+
+## Cooperative Scheduling
+
+### `coop_budget`
+
+* **Type:** `int32_t`
+* **Default:** `128`
+
+Number of immediately-ready fast-path completions (channel receives/sends, socket reads/writes) a coroutine may take
+per scheduler resume before it is forced through the run queue via `this_coroutine::yield()`. Bounds how long one hot
+coroutine can monopolise its worker; lower values improve tail latency of neighbours at a small throughput cost.
+
+```cpp
+usub::uvent::settings::coop_budget = 64;
+```
 
 ---
 
@@ -159,4 +176,4 @@ The pool is created lazily on the first non-numeric lookup; IP literals are
 resolved inline and never touch it. Note that `net::connect_happy` issues two
 lookups per call (AAAA and A in parallel), so under a burst of concurrent
 `connect_happy` calls against a slow DNS server the default pool of 2 becomes
-the bottleneck — raise this value if that is a real workload for you.
+the bottleneck – raise this value if that is a real workload for you.

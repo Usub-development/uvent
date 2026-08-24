@@ -164,12 +164,17 @@ system::spawn_timer(t);
 
 ## Summary
 
-| Function                          | Purpose                                  | Context          |
-|-----------------------------------|------------------------------------------|------------------|
-| `sleep_for(duration)`             | Suspend coroutine for the specified time | Coroutine        |
-| `co_spawn(f)`                     | Schedule coroutine in global task queue  | Runtime running  |
-| `co_spawn_static(f, threadIndex)` | Queue coroutine for a specific thread    | Pre-runtime      |
-| `spawn_timer(timer)`              | Register custom timer for execution      | Timer management |
+| Function                           | Purpose                                                                      | Context          |
+|------------------------------------|------------------------------------------------------------------------------|------------------|
+| `sleep_for(duration)`              | Suspend for the given time; `false` if cancelled                             | Coroutine        |
+| `yield()`                          | Reschedule at the back of the run queue                                      | Coroutine        |
+| `coop::consume()`                  | Cooperative-budget accounting for fast paths                                 | Coroutine        |
+| `cancel_requested()`               | Check the current task's cancellation flag                                   | Coroutine        |
+| `set_trace_id(id)` / `set_name(n)` | Tag the current task for logs and introspection                              | Coroutine        |
+| `co_spawn(f)`                      | Schedule coroutine in global task queue (detached; rejects `LocalAwaitable`) | Runtime running  |
+| `co_spawn_static(f, threadIndex)`  | Queue coroutine for a specific thread (detached)                             | Any time         |
+| `task::spawn(f[, tid])`            | Spawn an owned, cancellable task (see [Tasks](tasks.md))                     | Any time         |
+| `spawn_timer(timer)`               | Register custom timer for execution                                          | Timer management |
 
 These primitives form the low-level foundation of **uvent’s coroutine runtime**, allowing safe, event-driven execution
 and timed suspension within the thread pool.

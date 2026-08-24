@@ -1,15 +1,10 @@
 #include "uvent/sync/AsyncMutex.h"
+#include "uvent/sync/SyncCommon.h"
 #include "uvent/system/SystemContext.h"
+#include "uvent/tasks/AwaitableFrame.h"
 
 namespace usub::uvent::sync
 {
-    AsyncMutex::WaitNode* AsyncMutex::ptr_untag(std::uintptr_t s) noexcept
-    {
-        return reinterpret_cast<WaitNode*>(s & ~TAG);
-    }
-
-    std::uintptr_t AsyncMutex::ptr_tag(WaitNode* p) noexcept { return reinterpret_cast<std::uintptr_t>(p) | TAG; }
-
     AsyncMutex::Guard::Guard(AsyncMutex* m) noexcept : m_(m) {}
 
     AsyncMutex::Guard::Guard(Guard&& o) noexcept : m_(o.m_) { o.m_ = nullptr; }
@@ -46,69 +41,76 @@ namespace usub::uvent::sync
 
     bool AsyncMutex::LockAwaiter::await_ready() noexcept
     {
-        auto exp = kUnlocked;
-        return this->m->state_.compare_exchange_strong(exp, kLockedNoWaiters, std::memory_order_acquire,
-                                                       std::memory_order_relaxed);
+        this->acquired = this->m->try_lock_raw();
+        return this->acquired;
     }
 
     bool AsyncMutex::LockAwaiter::await_suspend(std::coroutine_handle<> h) noexcept
     {
-        this->node.h = h;
-        this->node.thread_id = detail::current_thread_id();
-        for (;;)
+        auto* f = &uvent::detail::frame_of(h);
+        if (f->cancel_requested())
         {
-            auto s = this->m->state_.load(std::memory_order_acquire);
-            if (s == kUnlocked)
-            {
-                if (this->m->state_.compare_exchange_weak(s, kLockedNoWaiters, std::memory_order_acquire,
-                                                          std::memory_order_acquire))
-                    return false;
-                continue;
-            }
-
-            WaitNode* head = this->m->ptr_untag(s);
-            this->node.next = head;
-            const auto new_state = this->m->ptr_tag(&this->node);
-            if (this->m->state_.compare_exchange_weak(s, new_state, std::memory_order_release,
-                                                      std::memory_order_acquire))
-                return true;
+            this->cancelled = true;
+            return false;
         }
+        this->node.reset(h, detail::current_thread_id());
+        this->m->waiters_.lock();
+        if (this->m->try_lock_raw())
+        {
+            this->m->waiters_.unlock();
+            this->acquired = true;
+            return false;
+        }
+        this->m->waiters_.push_locked(&this->node);
+        this->m->waiters_.unlock();
+        if (f->arm_cancel(&LockAwaiter::on_cancel, this, "mutex.lock"))
+        {
+            if (this->m->waiters_.remove(&this->node))
+            {
+                f->disarm_cancel();
+                this->cancelled = true;
+                return false;
+            }
+        }
+        return true;
     }
 
-    AsyncMutex::Guard AsyncMutex::LockAwaiter::await_resume() noexcept { return Guard{this->m}; }
+    AsyncMutex::Guard AsyncMutex::LockAwaiter::await_resume() noexcept
+    {
+        if (this->acquired)
+            return Guard{this->m};
+        if (this->cancelled || this->node.cancel_claimed())
+            return {};
+        return Guard{this->m};
+    }
+
+    void AsyncMutex::LockAwaiter::on_cancel(uvent::detail::AwaitableFrameBase* f, void* arg) noexcept
+    {
+        auto* a = static_cast<LockAwaiter*>(arg);
+        if (a->m->waiters_.remove(&a->node))
+        {
+            a->node.own.store(Waiter::kCancelledIndex, std::memory_order_relaxed);
+            system::this_thread::detail::q.enqueue(f->get_coroutine_handle());
+        }
+    }
 
     AsyncMutex::LockAwaiter AsyncMutex::lock() noexcept { return LockAwaiter{this}; }
 
     AsyncMutex::Guard AsyncMutex::try_lock() noexcept
     {
-        auto exp = kUnlocked;
-        if (this->state_.compare_exchange_strong(exp, kLockedNoWaiters, std::memory_order_acquire,
-                                                 std::memory_order_relaxed))
+        if (this->try_lock_raw())
             return Guard{this};
         return {};
     }
 
     void AsyncMutex::unlock() noexcept
     {
-        for (;;)
-        {
-            auto s = this->state_.load(std::memory_order_acquire);
-            if (s == kLockedNoWaiters)
-            {
-                if (this->state_.compare_exchange_weak(s, kUnlocked, std::memory_order_release,
-                                                       std::memory_order_relaxed))
-                    return;
-                continue;
-            }
-
-            WaitNode* head = this->ptr_untag(s);
-            WaitNode* next = head->next;
-            const std::uintptr_t new_state = next ? this->ptr_tag(next) : kLockedNoWaiters;
-            if (this->state_.compare_exchange_weak(s, new_state, std::memory_order_acquire, std::memory_order_acquire))
-            {
-                system::this_thread::detail::q.enqueue(head->h);
-                return;
-            }
-        }
+        this->waiters_.lock();
+        Waiter* w = this->waiters_.pop_front_locked();
+        if (!w)
+            this->state_.store(0, std::memory_order_release);
+        this->waiters_.unlock();
+        if (w)
+            detail::resume_on(w->h, w->tid);
     }
 } // namespace usub::uvent::sync

@@ -1,110 +1,132 @@
-# Channel Select
+# Select
 
-`select_recv` allows a coroutine to wait for messages from **multiple channels at once**, similar to Go's `select`.  
-This enables fan-in patterns, multiplexed consumers, and prioritizing fastest data sources.
+`sync::select` waits on several heterogeneous operations at once and resumes
+when the first one completes — Go's `select` for uvent coroutines. Branches
+are *ops*: lightweight descriptors obtained from channels, tokens, events,
+semaphores, wait groups, or timers.
+
+Header: `uvent/sync/Select.h` (included by `uvent/Uvent.h`).
 
 ---
 
 # Overview
 
 ```cpp
-auto res = co_await select_recv(ch1, ch2, ch3);
+sync::AsyncUnboundedChannel<Job> jobs;
+sync::CancellationToken tok = ...;
+
+auto r = co_await sync::select(jobs.recv_op(),
+                               tok.on_cancel_op(),
+                               sync::sleep_op(std::chrono::seconds(5)));
+
+if (r.cancelled())            // the *current task* was cancelled
+    co_return;
+switch (r.index)
+{
+case 0: use(*r.get<0>()); break;   // job received (std::optional<Job> — nullopt = channel closed)
+case 1: co_return;                 // token fired
+case 2: on_idle_timeout(); break;  // 5s passed
+}
 ```
 
-`select_recv` returns:
+`select` registers one waiter per branch, parks the coroutine once, and the
+first branch to fire wins a CAS on a shared word; losers never resume the
+coroutine twice. Between rounds each branch is polled directly, so an
+already-ready branch completes without suspending at all.
+
+# SelectResult
 
 ```cpp
-std::optional<std::pair<size_t, value_type>>
+template <class... Ops> struct SelectResult
+{
+    int32_t index;                 // winning branch, -1 when cancelled
+    std::variant<std::monostate, typename Ops::result_type...> value;
+
+    bool cancelled() const;        // own task cancelled while selecting
+    template <std::size_t I> auto& get();     // result of branch I
+    template <std::size_t I> bool is() const; // index == I
+};
 ```
 
-Where:
+Branch result types:
 
-* `size_t` — index of the channel that produced a message
-* `value_type` — `std::tuple<Ts...>` associated with that channel
+| Op                         | `result_type`                                                |
+|----------------------------|--------------------------------------------------------------|
+| `channel.recv_op()`        | `std::optional<value_type>` (`nullopt` = closed and drained) |
+| `channel.send_op(v)`       | `bool` (`false` = closed)                                    |
+| `token.on_cancel_op()`     | `std::monostate`                                             |
+| `event.wait_op()`          | `std::monostate`                                             |
+| `sem.acquire_op()`         | `std::monostate` (the permit is held on completion)          |
+| `wg.wait_op()`             | `std::monostate`                                             |
+| `sync::sleep_op(duration)` | `std::monostate`                                             |
 
-If **all channels are closed and empty**, the result is `nullopt`.
+# Fairness
 
----
+Polling starts from a per-thread rotating index, so two永 always-ready
+branches are taken alternately rather than the first one starving the rest.
 
-# Requirements
+# Cancellation
 
-* All channels passed to `select_recv` must have the **same `value_type`**.
-* Channels may have different capacities and producers.
-* `select_recv` internally uses an event-based wake mechanism (`AsyncEvent`), not busy polling.
+If the task executing `select` is cancelled, the wait is abandoned and the
+result has `index == -1` (`cancelled() == true`). A *token branch*
+(`on_cancel_op`) is the way to react to some **other** token; the implicit
+path only reacts to the current task's own cancellation.
 
----
+# Semantics notes
 
-# Usage Example
+* Ops are level-triggered: a wake is a hint, the branch is re-polled before
+  being reported, and the coroutine re-parks if the state was consumed by a
+  competing consumer. Exactly one branch is reported per `select`.
+* `sleep_op` arms its timer on the first park and keeps the original
+  deadline across re-parks inside the same `select` call.
+* A `select` in a loop creates fresh ops each iteration — a `sleep_op`
+  restarts its timeout per iteration by design.
+* All ops borrow their source (channel, token, …); the source must outlive
+  the `select` call.
+
+# select_recv (homogeneous shortcut)
+
+The older API is still available for the common "N same-typed channels" case
+and now rides on the same waiter machinery (no global wake event, no
+thundering herd):
 
 ```cpp
-AsyncChannel<int> ch1{4};
-AsyncChannel<int> ch2{4};
+task::Awaitable<void> consume(AsyncUnboundedChannel<Msg>& a, AsyncUnboundedChannel<Msg>& b)
+{
+    for (;;)
+    {
+        auto r = co_await sync::select_recv(a, b);   // optional<pair<index, value>>
+        if (!r)
+            break;                                    // every channel closed and drained
+        handle(r->first, std::move(r->second));
+    }
+}
+```
 
-task::Awaitable<void> consumer() {
-    for (;;) {
-        auto res = co_await select_recv(ch1, ch2);
-        if (!res) {
-            std::cout << "all channels closed\n";
-            co_return;
+* Returns `std::nullopt` when **all** channels are closed and drained, or
+  when the current task is cancelled.
+* Channels that become closed-and-drained are dropped from the wait set;
+  remaining channels keep being served.
+
+# Example: worker with idle tick and shutdown
+
+```cpp
+task::Awaitable<void> worker(sync::AsyncUnboundedChannel<Job>& q)
+{
+    for (;;)
+    {
+        auto r = co_await sync::select(q.recv_op(), sync::sleep_op(1s));
+        if (r.cancelled())
+            co_return;                       // scope.cancel_and_join() reached us
+        if (r.is<1>())
+        {
+            heartbeat();
+            continue;
         }
-
-        auto [idx, tup] = *res;
-        auto& [v] = tup;
-
-        std::cout << "received " << v << " from ch" << (idx + 1) << "\n";
+        auto& job = r.get<0>();
+        if (!job)
+            co_return;                       // queue closed
+        process(*job);
     }
 }
 ```
-
----
-
-# Behavior Summary
-
-### Ready value
-
-If any channel already has data, `select_recv` returns immediately.
-
-### Empty channels
-
-If none have data, the coroutine suspends on a shared `AsyncEvent`.
-
-### Wake-up
-
-A wake-up occurs when:
-
-* any channel receives a new message
-* any channel is closed
-
-### Closed channels
-
-A channel contributes messages until its buffer is empty.
-If **all channels are closed and empty**, the select returns `nullopt`.
-
----
-
-# Example: Multiplexing Producers
-
-```cpp
-AsyncChannel<int> A{8};
-AsyncChannel<int> B{8};
-
-task::Awaitable<void> multiplexer() {
-    for (;;) {
-        auto r = co_await select_recv(A, B);
-        if (!r) break;
-
-        auto [index, tup] = *r;
-        auto& [value] = tup;
-
-        std::cout << "got " << value << " from channel " << index << "\n";
-    }
-}
-```
-
----
-
-# Notes
-
-* `select_recv` does not guarantee fairness; it is optimized for throughput.
-* Only receive-selection is supported (not send-selection).
-* Ideal for fan-in patterns, pipeline aggregation, and merging asynchronous streams.

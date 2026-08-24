@@ -61,9 +61,9 @@ private:
 
 ### Notes
 
-* `duration_ms` — delay before the timer fires.
-* `addFunction` — attach a callback that receives a `std::any&` payload.
-* `addCoroutine` — attaches a uvent coroutine; it is resumed exactly once.
+* `duration_ms` – delay before the timer fires.
+* `addFunction` – attach a callback that receives a `std::any&` payload.
+* `addCoroutine` – attaches a uvent coroutine; it is resumed exactly once.
 * Timers cannot be copied or moved.
 * Timers are scheduled into the thread-local `TimerWheel`.
 
@@ -137,6 +137,25 @@ task::Awaitable<void> delayed() {
     co_return;
 }
 ```
+
+---
+
+## Cancelling timers
+
+`TimerWheel` offers two cancel flavours:
+
+```cpp
+bool cancelTimer(uint64_t id);        // wheel-owned: destroys a bound coroutine, deletes a heap timer
+bool cancelTimerDetach(uint64_t id);  // ownership transfer: the wheel forgets the timer, caller keeps it
+```
+
+`cancelTimerDetach` removes the timer from the wheel **without** destroying the bound coroutine and **without**
+deleting the object; `true` means the wheel will never touch it again and the caller now owns the `Timer` (and must
+resume/destroy whatever it references). This is what `sleep_for` cancellation and `sync::sleep_op` use internally.
+In the shared runtime the mutex-taking variants are `cancelTimerSync` / `cancelTimerSyncDetach`.
+
+`arm_raw(dur, fn, arg)` arms a heap timer with a raw callback while keeping wheel ownership (the wheel deletes it
+after firing) – unlike `arm_embedded`, which marks the timer as embedded in an external object.
 
 ---
 

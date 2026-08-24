@@ -1,7 +1,9 @@
 # Async Channels
 
-`AsyncChannel<Ts...>` is an asynchronous, coroutine-friendly communication primitive designed for high-performance message passing inside the **uvent** ecosystem.  
-It provides back-pressured, buffered, multi-producer/multi-consumer communication without locking or manual coroutine management.
+`AsyncChannel<Ts...>` is an asynchronous, coroutine-friendly communication primitive designed for high-performance
+message passing inside the **uvent** ecosystem.  
+It provides back-pressured, buffered, multi-producer/multi-consumer communication without locking or manual coroutine
+management.
 
 Channels behave similarly to Go channels while preserving full C++ performance and type safety.
 
@@ -9,14 +11,14 @@ Channels behave similarly to Go channels while preserving full C++ performance a
 
 ## Key Features
 
-- Lock-free MPMC ring buffer  
-- Coroutine-awaitable `send()` and `recv()`  
-- Fully non-blocking try-operations  
-- Back-pressure when the buffer is full  
-- Graceful `close()` semantics  
-- Variadic message types (`AsyncChannel<Ts...>`)  
-- Tuple-based messaging  
-- Convenient `operator<<` syntax  
+- Lock-free MPMC ring buffer
+- Coroutine-awaitable `send()` and `recv()`
+- Fully non-blocking try-operations
+- Back-pressure when the buffer is full
+- Graceful `close()` semantics
+- Variadic message types (`AsyncChannel<Ts...>`)
+- Tuple-based messaging
+- Convenient `operator<<` syntax
 - Designed for massive concurrency and low latency
 
 ---
@@ -166,12 +168,12 @@ reclamation).
 
 What changes on the send side:
 
-| | `AsyncChannel` | `AsyncUnboundedChannel` |
-|---|---|---|
-| `send()` suspends when full | yes (back-pressure) | never |
-| `try_send()` fails when full | yes | never — `false` only after `close()` |
-| `capacity()` | fixed, power of two | n/a |
-| `send`/`try_send` from a non-runtime thread | not supported | supported (`try_send`) |
+|                                             | `AsyncChannel`      | `AsyncUnboundedChannel`              |
+|---------------------------------------------|---------------------|--------------------------------------|
+| `send()` suspends when full                 | yes (back-pressure) | never                                |
+| `try_send()` fails when full                | yes                 | never — `false` only after `close()` |
+| `capacity()`                                | fixed, power of two | n/a                                  |
+| `send`/`try_send` from a non-runtime thread | not supported       | supported (`try_send`)               |
 
 There is **no back-pressure**: if producers can outrun consumers, watch
 `size_relaxed()` and throttle at the call site. `send()` still returns an
@@ -198,6 +200,7 @@ channels passed to `select_recv` must be of the same class.
 
 * No heap allocation during steady-state operation
 * Lock-free MPMC queue for minimal contention
-* Async waits rely on `AsyncEvent` without spinning
+* Async waits park in per-channel intrusive waiter lists (no allocation per wait, no global wake event); senders wake
+  exactly one receiver
 * Zero-copy tuple passing
 * Ideal for pipelines, fan-in/out, and coroutine orchestration

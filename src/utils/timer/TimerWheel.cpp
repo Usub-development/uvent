@@ -8,9 +8,8 @@
 
 namespace usub::uvent::utils
 {
-    TimerWheel::TimerWheel()
-        : currentTime_(getCurrentTime()), timerIdCounter_(0),
-          nextExpiryTime_(0), activeTimerCount_(0)
+    TimerWheel::TimerWheel() :
+        currentTime_(getCurrentTime()), timerIdCounter_(0), nextExpiryTime_(0), activeTimerCount_(0)
     {
         /**
          @brief by default used 4 levels:
@@ -33,7 +32,7 @@ namespace usub::uvent::utils
         timer->id = ++this->timerIdCounter_;
 #endif
 
-        Op op{ .op = OpType::ADD, .timer = timer, .add_id = timer->id };
+        Op op{.op = OpType::ADD, .timer = timer, .add_id = timer->id};
 #ifndef UVENT_ENABLE_REUSEADDR
         this->timer_operations_queue.enqueue(op);
 #else
@@ -44,7 +43,7 @@ namespace usub::uvent::utils
 
     bool TimerWheel::updateTimer(uint64_t timerId, timer_duration_t new_duration)
     {
-        Op op{ .op = OpType::UPDATE, .id = timerId, .new_dur = new_duration };
+        Op op{.op = OpType::UPDATE, .id = timerId, .new_dur = new_duration};
 #ifndef UVENT_ENABLE_REUSEADDR
         this->timer_operations_queue.enqueue(op);
 #else
@@ -55,7 +54,7 @@ namespace usub::uvent::utils
 
     bool TimerWheel::removeTimer(uint64_t timerId, raw_timer_fn done, void* done_arg)
     {
-        Op op{ .op = OpType::REMOVE, .id_only = timerId, .done_arg = done_arg, .done = done };
+        Op op{.op = OpType::REMOVE, .id_only = timerId, .done_arg = done_arg, .done = done};
 #ifndef UVENT_ENABLE_REUSEADDR
         this->timer_operations_queue.enqueue(op);
 #else
@@ -97,13 +96,42 @@ namespace usub::uvent::utils
         return true;
     }
 
+    bool TimerWheel::cancelTimerDetach(uint64_t timerId)
+    {
+        if (timerId == 0)
+            return false;
+
+        auto it = this->timerMap_.find(timerId);
+        if (it == this->timerMap_.end())
+        {
+            if (timerId > this->maxAddedId_)
+            {
+                this->detachedPending_.insert(timerId);
+                return true;
+            }
+            return false;
+        }
+
+        Timer* t = it->second;
+        if (!t->active)
+            return false;
+
+        t->active = false;
+        removeTimerFromWheel(t);
+        this->timerMap_.erase(it);
+        --this->activeTimerCount_;
+        return true;
+    }
+
     int TimerWheel::getNextTimeout() const
     {
-        const timeout_t now  = getCurrentTime();
+        const timeout_t now = getCurrentTime();
         const timeout_t next = this->nextExpiryTime_;
 
-        if (next == 0) return -1;
-        if (next <= now) return 0;
+        if (next == 0)
+            return -1;
+        if (next <= now)
+            return 0;
 
         uint64_t diff = next - now;
         if (diff > static_cast<uint64_t>(std::numeric_limits<int>::max()))
@@ -115,31 +143,24 @@ namespace usub::uvent::utils
     timeout_t TimerWheel::getCurrentTime()
     {
         using namespace std::chrono;
-        return duration_cast<milliseconds>(
-                   steady_clock::now().time_since_epoch())
-            .count();
+        return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
     }
 
     void TimerWheel::addTimerToWheel(Timer* timer, timeout_t expiryTime)
     {
-        const uint64_t diff = (expiryTime > this->currentTime_)
-                                  ? (expiryTime - this->currentTime_)
-                                  : 0;
+        const uint64_t diff = (expiryTime > this->currentTime_) ? (expiryTime - this->currentTime_) : 0;
 
         size_t level = 0;
-        while (level + 1 < this->wheels_.size() &&
-               diff >= this->wheels_[level].interval_ * this->wheels_[level].slots_)
+        while (level + 1 < this->wheels_.size() && diff >= this->wheels_[level].interval_ * this->wheels_[level].slots_)
             ++level;
 
-        Wheel&       wheel = this->wheels_[level];
-        const size_t mask  = wheel.slots_ - 1;
+        Wheel& wheel = this->wheels_[level];
+        const size_t mask = wheel.slots_ - 1;
 
-        const size_t slot = (diff == 0)
-                                ? ((this->currentTime_ + 1) & mask)
-                                : ((expiryTime / wheel.interval_) & mask);
+        const size_t slot = (diff == 0) ? ((this->currentTime_ + 1) & mask) : ((expiryTime / wheel.interval_) & mask);
 
-        timer->level       = level;
-        timer->slotIndex   = slot;
+        timer->level = level;
+        timer->slotIndex = slot;
         timer->posInBucket = wheel.buckets_[slot].size();
         wheel.buckets_[slot].push_back(timer);
 
@@ -152,8 +173,8 @@ namespace usub::uvent::utils
         if (timer->level >= this->wheels_.size())
             return;
 
-        Wheel& wheel  = this->wheels_[timer->level];
-        auto&  bucket = wheel.buckets_[timer->slotIndex];
+        Wheel& wheel = this->wheels_[timer->level];
+        auto& bucket = wheel.buckets_[timer->slotIndex];
 
         const size_t pos = timer->posInBucket;
         if (pos < bucket.size() && bucket[pos] == timer)
@@ -161,7 +182,7 @@ namespace usub::uvent::utils
             const size_t last = bucket.size() - 1;
             if (pos != last)
             {
-                bucket[pos]              = bucket[last];
+                bucket[pos] = bucket[last];
                 bucket[pos]->posInBucket = pos;
             }
             bucket.pop_back();
@@ -171,11 +192,11 @@ namespace usub::uvent::utils
             auto it = std::find(bucket.begin(), bucket.end(), timer);
             if (it != bucket.end())
             {
-                const size_t idx  = static_cast<size_t>(it - bucket.begin());
+                const size_t idx = static_cast<size_t>(it - bucket.begin());
                 const size_t last = bucket.size() - 1;
                 if (idx != last)
                 {
-                    bucket[idx]              = bucket[last];
+                    bucket[idx] = bucket[last];
                     bucket[idx]->posInBucket = idx;
                 }
                 bucket.pop_back();
@@ -195,7 +216,8 @@ namespace usub::uvent::utils
             {
                 for (const auto* t : bucket)
                 {
-                    if (!t->active) continue;
+                    if (!t->active)
+                        continue;
                     if (this->nextExpiryTime_ == 0 || t->expiryTime < this->nextExpiryTime_)
                         this->nextExpiryTime_ = t->expiryTime;
                 }
@@ -228,13 +250,12 @@ namespace usub::uvent::utils
         {
             const size_t cap = this->ops_.size();
 #ifndef UVENT_ENABLE_REUSEADDR
-            size_t n = this->timer_operations_queue.try_dequeue_bulk(
-                this->ops_.data(), cap);
+            size_t n = this->timer_operations_queue.try_dequeue_bulk(this->ops_.data(), cap);
 #else
-            const size_t n = this->timer_operations_queue.dequeue_bulk(
-                this->ops_.data(), cap);
+            const size_t n = this->timer_operations_queue.dequeue_bulk(this->ops_.data(), cap);
 #endif
-            if (n == 0) break;
+            if (n == 0)
+                break;
 
             for (size_t i = 0; i < n; ++i)
             {
@@ -242,69 +263,73 @@ namespace usub::uvent::utils
                 switch (op.op)
                 {
                 case OpType::ADD:
-                {
-                    Timer* t = op.timer;
-                    if (op.add_id > this->maxAddedId_)
-                        this->maxAddedId_ = op.add_id;
-                    if (!this->cancelledPending_.empty() && this->cancelledPending_.erase(op.add_id))
                     {
-                        if (t->coro)
-                            t->coro.destroy();
-                        if (t->heap)
-                            delete t;
+                        Timer* t = op.timer;
+                        if (op.add_id > this->maxAddedId_)
+                            this->maxAddedId_ = op.add_id;
+                        if (!this->detachedPending_.empty() && this->detachedPending_.erase(op.add_id))
+                            break;
+                        if (!this->cancelledPending_.empty() && this->cancelledPending_.erase(op.add_id))
+                        {
+                            if (t->coro)
+                                t->coro.destroy();
+                            if (t->heap)
+                                delete t;
+                            break;
+                        }
+                        addTimerToWheel(t, t->expiryTime);
+                        this->timerMap_[t->id] = t;
+                        ++this->activeTimerCount_;
                         break;
                     }
-                    addTimerToWheel(t, t->expiryTime);
-                    this->timerMap_[t->id] = t;
-                    ++this->activeTimerCount_;
-                    break;
-                }
 
                 case OpType::UPDATE:
-                {
-                    auto it = timerMap_.find(op.id);
-                    if (it != timerMap_.end())
                     {
-                        Timer* t = it->second;
-                        if (t->active)
+                        auto it = timerMap_.find(op.id);
+                        if (it != timerMap_.end())
                         {
-                            removeTimerFromWheel(t);
-                            t->duration_ms = op.new_dur;
-                            t->expiryTime  = getCurrentTime() + t->duration_ms;
-                            addTimerToWheel(t, t->expiryTime);
+                            Timer* t = it->second;
+                            if (t->active)
+                            {
+                                removeTimerFromWheel(t);
+                                t->duration_ms = op.new_dur;
+                                t->expiryTime = getCurrentTime() + t->duration_ms;
+                                addTimerToWheel(t, t->expiryTime);
+                            }
                         }
+                        break;
                     }
-                    break;
-                }
 
                 case OpType::REMOVE:
-                {
-                    auto it = timerMap_.find(op.id_only);
-                    if (it != this->timerMap_.end())
                     {
-                        Timer* t = it->second;
-                        if (t->active)
+                        auto it = timerMap_.find(op.id_only);
+                        if (it != this->timerMap_.end())
                         {
-                            t->active = false;
-                            removeTimerFromWheel(t);
-                            this->timerMap_.erase(it);
-                            --this->activeTimerCount_;
-                            if (t->coro) t->coro.destroy();
-                            if (t->heap) delete t;
+                            Timer* t = it->second;
+                            if (t->active)
+                            {
+                                t->active = false;
+                                removeTimerFromWheel(t);
+                                this->timerMap_.erase(it);
+                                --this->activeTimerCount_;
+                                if (t->coro)
+                                    t->coro.destroy();
+                                if (t->heap)
+                                    delete t;
+                            }
                         }
+                        else if (op.id_only > this->maxAddedId_)
+                        {
+                            // not in the map and its ADD is still queued behind us (same producer,
+                            // FIFO) — remember the id so that ADD is dropped without touching the
+                            // (possibly already freed, embedded) Timer. Ids <= maxAddedId_ were
+                            // already drained (fired/removed) — nothing to remember.
+                            this->cancelledPending_.insert(op.id_only);
+                        }
+                        if (op.done)
+                            op.done(op.done_arg);
+                        break;
                     }
-                    else if (op.id_only > this->maxAddedId_)
-                    {
-                        // not in the map and its ADD is still queued behind us (same producer,
-                        // FIFO) — remember the id so that ADD is dropped without touching the
-                        // (possibly already freed, embedded) Timer. Ids <= maxAddedId_ were
-                        // already drained (fired/removed) — nothing to remember.
-                        this->cancelledPending_.insert(op.id_only);
-                    }
-                    if (op.done)
-                        op.done(op.done_arg);
-                    break;
-                }
                 }
             }
         }
@@ -355,7 +380,7 @@ namespace usub::uvent::utils
             const size_t last = bucket.size() - 1;
             if (at != last)
             {
-                bucket[at]              = bucket[last];
+                bucket[at] = bucket[last];
                 bucket[at]->posInBucket = at;
             }
             bucket.pop_back();
@@ -395,14 +420,11 @@ namespace usub::uvent::utils
         }
     }
 
-    bool TimerWheel::empty() const
-    {
-        return this->activeTimerCount_ == 0;
-    }
+    bool TimerWheel::empty() const { return this->activeTimerCount_ == 0; }
 
     task::Awaitable<void> timeout_coroutine(std::function<void(std::any&)> f, std::any arg)
     {
         f(arg);
         co_return;
     }
-}
+} // namespace usub::uvent::utils

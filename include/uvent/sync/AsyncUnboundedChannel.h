@@ -1,7 +1,3 @@
-//
-// Created by kirill on 21/08/26.
-//
-
 #ifndef UVENT_SYNC_ASYNC_UNBOUNDED_CHANNEL_H
 #define UVENT_SYNC_ASYNC_UNBOUNDED_CHANNEL_H
 
@@ -12,7 +8,6 @@
 #include <utility>
 
 #include "uvent/sync/AsyncChannel.h"
-#include "uvent/sync/AsyncEvent.h"
 #include "uvent/tasks/AwaitableFrame.h"
 #include "uvent/utils/datastructures/queue/ConcurrentQueues.h"
 
@@ -24,18 +19,17 @@ namespace usub::uvent::sync
     public:
         using value_type = std::tuple<std::decay_t<Ts>...>;
 
+        static_assert((!is_thread_affine_v<std::decay_t<Ts>> && ...),
+                      "AsyncUnboundedChannel payload must not be a thread-affine type (socket, timer)");
+
     private:
         using Queue = usub::queue::concurrent::SegmentedMPMCQueue<value_type>;
 
         Queue queue_;
-        AsyncEvent can_recv_{Reset::Manual, false};
+        WaitList recv_waiters_;
         std::atomic<bool> closed_{false};
 
-        void notify_recv() noexcept
-        {
-            can_recv_.set();
-            g_select_recv_event.set();
-        }
+        void notify_recv() noexcept { detail::wake_one_waiter(this->recv_waiters_); }
 
     public:
         AsyncUnboundedChannel() = default;
@@ -50,13 +44,24 @@ namespace usub::uvent::sync
 
         void close() noexcept
         {
-            if (closed_.exchange(true, std::memory_order_acq_rel))
+            if (closed_.exchange(true, std::memory_order_seq_cst))
                 return;
-            notify_recv();
+            detail::wake_all_waiters(this->recv_waiters_);
         }
 
         [[nodiscard]] std::size_t size_relaxed() const noexcept { return queue_.size_relaxed(); }
         [[nodiscard]] bool empty_relaxed() const noexcept { return queue_.empty_relaxed(); }
+
+        bool attach_recv(Waiter* w) noexcept
+        {
+            this->recv_waiters_.lock();
+            this->recv_waiters_.push_locked(w);
+            this->recv_waiters_.unlock();
+            detail::notify_fence();
+            return this->queue_.empty_relaxed() && !this->is_closed();
+        }
+
+        bool detach_recv(Waiter* w) noexcept { return this->recv_waiters_.remove(w); }
 
         template <class... Us>
         bool try_send(Us&&... vs)
@@ -109,26 +114,26 @@ namespace usub::uvent::sync
             return true;
         }
 
+        [[nodiscard]] ChannelRecvOp<AsyncUnboundedChannel> recv_op() noexcept
+        {
+            return ChannelRecvOp<AsyncUnboundedChannel>{this};
+        }
+
         task::Awaitable<std::optional<value_type>> recv()
         {
-            value_type tmp;
+            ChannelRecvOp<AsyncUnboundedChannel> op{this};
             for (;;)
             {
-                if (queue_.try_dequeue(tmp))
-                    co_return std::optional<value_type>{std::move(tmp)};
-
-                if (is_closed() && queue_.empty_relaxed())
+                std::optional<value_type> r;
+                if (op.try_complete(r))
+                {
+                    if (!system::coop::consume())
+                        co_await system::this_coroutine::yield();
+                    co_return r;
+                }
+                OpWait<ChannelRecvOp<AsyncUnboundedChannel>> w{&op};
+                if (!co_await w)
                     co_return std::nullopt;
-
-                can_recv_.reset();
-
-                if (queue_.try_dequeue(tmp))
-                    co_return std::optional<value_type>{std::move(tmp)};
-
-                if (is_closed() && queue_.empty_relaxed())
-                    co_return std::nullopt;
-
-                co_await can_recv_.wait();
             }
         }
 
@@ -136,11 +141,23 @@ namespace usub::uvent::sync
         task::Awaitable<bool> recv_into(Us&... out)
         {
             static_assert(sizeof...(Ts) == sizeof...(Us), "recv_into: argument count mismatch");
-            auto r = co_await recv();
-            if (!r)
-                co_return false;
-            assign_from_tuple(*r, out...);
-            co_return true;
+            ChannelRecvOp<AsyncUnboundedChannel> op{this};
+            for (;;)
+            {
+                std::optional<value_type> r;
+                if (op.try_complete(r))
+                {
+                    if (!system::coop::consume())
+                        co_await system::this_coroutine::yield();
+                    if (!r)
+                        co_return false;
+                    assign_from_tuple(*r, out...);
+                    co_return true;
+                }
+                OpWait<ChannelRecvOp<AsyncUnboundedChannel>> w{&op};
+                if (!co_await w)
+                    co_return false;
+            }
         }
 
     private:

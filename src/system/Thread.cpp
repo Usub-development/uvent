@@ -6,6 +6,7 @@
 #include <utility>
 #include "uvent/net/Socket.h"
 #include "uvent/system/StackGuard.h"
+#include "uvent/tasks/TaskState.h"
 
 namespace usub::uvent::system
 {
@@ -65,7 +66,7 @@ namespace usub::uvent::system
             {
                 auto next_timeout = local_wh.getNextTimeout();
                 local_pl.lock_poll((local_q.empty()) ? (next_timeout > 0) ? next_timeout : settings::idle_fallback_ms
-                                                      : 0);
+                                                     : 0);
             }
 #else
             auto next_timeout = local_wh.getNextTimeout();
@@ -92,6 +93,11 @@ namespace usub::uvent::system
 #if UVENT_DEBUG
                             spdlog::info("Coroutine resumed: {}", c.address());
 #endif
+                            auto& pr = c.promise();
+                            pr.on_loop_resume();
+                            this_thread::detail::current_cancel = pr.cancel_state();
+                            this_thread::detail::current_trace = pr.trace_id();
+                            this_thread::detail::coop_left = settings::coop_budget;
                             c.resume();
                         }
                     }
@@ -109,7 +115,18 @@ namespace usub::uvent::system
             if (st->getSize() > 0)
             {
                 if (std::coroutine_handle<> task; st->dequeue(task))
+                {
+                    auto& pr =
+                        std::coroutine_handle<detail::AwaitableFrameBase>::from_address(task.address()).promise();
+                    pr.set_thread_id(this->index_);
+                    if (auto* ts = pr.task_state())
+                    {
+                        ts->owner_tid.store(this->index_, std::memory_order_seq_cst);
+                        if (ts->requested.load(std::memory_order_seq_cst))
+                            ts->kick();
+                    }
                     local_q.enqueue(task);
+                }
             }
 
             const size_t n_coroutines =
@@ -131,10 +148,13 @@ namespace usub::uvent::system
                 delete this->tmp_sockets_[i];
 #endif
             this->processInboxQueue();
+            this->processCancelKicks();
 #ifdef UVENT_SOCKET_OWNER_FORWARDING
             this->processSocketOps();
 #endif
         }
+
+        this->processCancelKicks();
 
         for (;;)
         {
@@ -179,6 +199,17 @@ namespace usub::uvent::system
 
         while (auto* frame = tls->inbox_q_.pop())
             system::this_thread::detail::q.enqueue(frame->get_coroutine_handle());
+    }
+
+    void Thread::processCancelKicks()
+    {
+        auto* tls = this->thread_local_storage_;
+
+        if (!tls->has_kicks_.exchange(false, std::memory_order_acq_rel))
+            return;
+
+        while (auto* t = tls->kick_q_.pop())
+            t->process_kick();
     }
 
 #ifdef UVENT_SOCKET_OWNER_FORWARDING

@@ -11,6 +11,7 @@
 #include <uvent/base/Predefines.h>
 #include <uvent/poll/PollerBase.h>
 #include <uvent/tasks/AwaitableFrame.h>
+#include <uvent/tasks/TaskState.h>
 #include <uvent/utils/datastructures/queue/ConcurrentQueues.h>
 #include <uvent/utils/datastructures/queue/IntrusiveMPSC.h>
 
@@ -62,6 +63,8 @@ namespace usub::uvent::thread
 
         void push_task_inbox(std::coroutine_handle<> task);
 
+        void push_cancel_kick(uvent::task::TaskStateBase* t);
+
 #ifdef UVENT_SOCKET_OWNER_FORWARDING
         /**
          * \brief Forward a socket maintenance op to this (owner) worker and wake it.
@@ -71,14 +74,15 @@ namespace usub::uvent::thread
         void push_socket_op(const SocketOp& op);
 #endif
 
-        void set_poller(core::PollerImpl* p) noexcept
-        {
-            this->poller_.store(p, std::memory_order_release);
-        }
+        void set_poller(core::PollerImpl* p) noexcept { this->poller_.store(p, std::memory_order_release); }
+
+        void wake_poller() noexcept;
 
     private:
         queue::concurrent::IntrusiveMPSCQueue<detail::AwaitableFrameBase> inbox_q_;
         std::atomic_bool is_added_new_{false};
+        queue::concurrent::IntrusiveMPSCQueue<uvent::task::TaskStateBase> kick_q_;
+        std::atomic_bool has_kicks_{false};
 #ifdef UVENT_SOCKET_OWNER_FORWARDING
         queue::concurrent::SegmentedMPMCQueue<SocketOp> sock_ops_q_;
         std::atomic_bool has_sock_ops_{false};

@@ -9,6 +9,7 @@ set(CMAKE_C_FLAGS_DEBUG "-g -O0 -rdynamic -fPIC" CACHE STRING "Debug flags" FORC
 set(UVENT_CHANNEL_DEBUG 1)
 
 option(UVENT_ENABLE_REUSEADDR "Use SO_REUSEADDR (portable)" ON)
+option(UVENT_TASK_INTROSPECTION "Track live coroutines for runtime introspection" OFF)
 option(UVENT_PIN_THREADS "Use thread PINNING" ON)
 option(UVENT_ENABLE_IO_URING "Use io_uring backend on Linux" OFF)
 
@@ -107,6 +108,7 @@ target_compile_definitions(uvent PUBLIC
         $<$<BOOL:${UVENT_PIN_THREADS}>:UVENT_PIN_THREADS>
         $<$<BOOL:${UVENT_ENABLE_REUSEADDR}>:UVENT_ENABLE_REUSEADDR>
         $<$<BOOL:${UVENT_ENABLE_IO_URING}>:UVENT_ENABLE_IO_URING>
+        $<$<BOOL:${UVENT_TASK_INTROSPECTION}>:UVENT_TASK_INTROSPECTION>
 )
 
 if (UNIX AND NOT APPLE AND UVENT_ENABLE_IO_URING)
@@ -263,6 +265,20 @@ if (UVENT_BUILD_EXAMPLES)
             ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
     target_link_libraries(uvent_example_select PRIVATE
+            uvent
+            $<$<CONFIG:Debug>:spdlog::spdlog>
+    )
+
+    # 5
+    add_executable(uvent_example_structured examples/main_structured.cpp)
+    target_compile_definitions(uvent_example_structured PRIVATE
+            $<$<CONFIG:Debug>:UVENT_DEBUG>
+    )
+    target_include_directories(uvent_example_structured
+            PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(uvent_example_structured PRIVATE
             uvent
             $<$<CONFIG:Debug>:spdlog::spdlog>
     )

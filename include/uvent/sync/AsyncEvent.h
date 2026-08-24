@@ -3,164 +3,126 @@
 
 #include <atomic>
 #include <coroutine>
-#include <cstdint>
+#include <variant>
 
 #include "uvent/sync/SyncCommon.h"
-#include "uvent/utils/sync/TaggedPtr.h"
-#include "uvent/system/SystemContext.h"
+#include "uvent/sync/Wait.h"
+#include "uvent/sync/WaitList.h"
 
-namespace usub::uvent::sync {
+namespace usub::uvent::sync
+{
 
-    enum class Reset { Auto, Manual };
+    enum class Reset
+    {
+        Auto,
+        Manual
+    };
 
-    class AsyncEvent {
-        enum class NodeState : uint8_t {
-            Waiting   = 0,
-            Cancelled = 1,
-            Claimed   = 2
-        };
+    class AsyncEvent
+    {
+        const Reset reset_;
+        std::atomic<bool> set_{false};
+        WaitList waiters_;
 
-        struct WaitNode {
-            std::coroutine_handle<>  h{};
-            WaitNode*                next{};
-            int                      thread_id{-1};
-            std::atomic<NodeState>   st{NodeState::Waiting};
-        };
-
-        const Reset              reset_;
-        std::atomic<bool>        set_{false};
-        TaggedPtr<WaitNode>      head_;
-
-        void push_waiter(WaitNode* n) noexcept {
-            auto snap = head_.load(std::memory_order_relaxed);
-            do {
-                n->next = snap.ptr;
-            } while (!head_.compare_exchange_weak(
-                snap, n,
-                std::memory_order_release,
-                std::memory_order_relaxed));
+        void wake_one() noexcept
+        {
+            if (this->waiters_.empty_relaxed())
+                return;
+            this->waiters_.lock();
+            while (Waiter* w = this->waiters_.pop_front_locked())
+                if (detail::fire_waiter(w))
+                    break;
+            this->waiters_.unlock();
         }
 
-        WaitNode* pop_one() noexcept {
-            for (;;) {
-                auto snap = head_.load(std::memory_order_acquire);
-                if (!snap.ptr) return nullptr;
-                WaitNode* next = snap.ptr->next;
-                if (head_.compare_exchange_weak(snap, next))
-                    return snap.ptr;
-            }
-        }
-
-        WaitNode* exchange_all() noexcept {
-            auto snap = head_.load(std::memory_order_acquire);
-            while (snap.ptr) {
-                if (head_.compare_exchange_weak(snap, nullptr))
-                    return snap.ptr;
-            }
-            return nullptr;
-        }
-
-        static bool try_claim(WaitNode* n) noexcept {
-            NodeState exp = NodeState::Waiting;
-            return n->st.compare_exchange_strong(
-                exp, NodeState::Claimed,
-                std::memory_order_acq_rel,
-                std::memory_order_relaxed);
+        void wake_all() noexcept
+        {
+            if (this->waiters_.empty_relaxed())
+                return;
+            this->waiters_.lock();
+            while (Waiter* w = this->waiters_.pop_front_locked())
+                detail::fire_waiter(w);
+            this->waiters_.unlock();
         }
 
     public:
-        explicit AsyncEvent(Reset r = Reset::Auto,
-                            bool initially_set = false) noexcept
-            : reset_(r), set_(initially_set), head_(nullptr) {}
-
-        ~AsyncEvent() {
-            WaitNode* list = exchange_all();
-            while (list) {
-                WaitNode* next = list->next;
-                delete list;
-                list = next;
-            }
+        explicit AsyncEvent(Reset r = Reset::Auto, bool initially_set = false) noexcept : reset_(r), set_(initially_set)
+        {
         }
 
-        AsyncEvent(const AsyncEvent&)            = delete;
+        AsyncEvent(const AsyncEvent&) = delete;
         AsyncEvent& operator=(const AsyncEvent&) = delete;
-        AsyncEvent(AsyncEvent&&)                 = delete;
-        AsyncEvent& operator=(AsyncEvent&&)      = delete;
+        AsyncEvent(AsyncEvent&&) = delete;
+        AsyncEvent& operator=(AsyncEvent&&) = delete;
 
-        struct WaitAwaiter {
-            AsyncEvent* self;
-            WaitNode*   node{};
+        [[nodiscard]] bool is_set() const noexcept { return this->set_.load(std::memory_order_acquire); }
 
-            bool await_ready() noexcept {
-                if (self->reset_ == Reset::Auto) {
-                    bool expected = true;
-                    if (self->set_.compare_exchange_strong(
-                            expected, false,
-                            std::memory_order_acquire,
-                            std::memory_order_relaxed))
-                        return true;
-                    return false;
-                }
-                return self->set_.load(std::memory_order_acquire);
+        bool try_consume() noexcept
+        {
+            if (this->reset_ == Reset::Auto)
+            {
+                bool expected = true;
+                return this->set_.compare_exchange_strong(expected, false, std::memory_order_acquire,
+                                                          std::memory_order_relaxed);
+            }
+            return this->is_set();
+        }
+
+        void set() noexcept
+        {
+            if (this->set_.exchange(true, std::memory_order_seq_cst))
+                return;
+            detail::notify_fence();
+            if (this->reset_ == Reset::Auto)
+                this->wake_one();
+            else
+                this->wake_all();
+        }
+
+        void reset() noexcept
+        {
+            if (this->reset_ == Reset::Manual)
+                this->set_.store(false, std::memory_order_release);
+        }
+
+        struct WaitOp
+        {
+            AsyncEvent* e;
+
+            using result_type = std::monostate;
+
+            static const char* wait_reason() noexcept { return "event.wait"; }
+
+            bool try_complete(std::monostate&) const noexcept { return e->try_consume(); }
+
+            bool attach(Waiter* w) noexcept
+            {
+                e->waiters_.lock();
+                e->waiters_.push_locked(w);
+                e->waiters_.unlock();
+                detail::notify_fence();
+                return !e->set_.load(std::memory_order_seq_cst);
             }
 
-            bool await_suspend(std::coroutine_handle<> h) noexcept {
-                node = new WaitNode{};
-                node->h         = h;
-                node->thread_id = detail::current_thread_id();
-                node->st.store(NodeState::Waiting, std::memory_order_relaxed);
+            bool detach(Waiter* w) noexcept { return e->waiters_.remove(w); }
 
-                self->push_waiter(node);
-
-                if (self->set_.load(std::memory_order_acquire)) {
-                    NodeState exp = NodeState::Waiting;
-                    if (node->st.compare_exchange_strong(
-                            exp, NodeState::Cancelled,
-                            std::memory_order_acq_rel,
-                            std::memory_order_relaxed)) {
-                        return false;
-                    }
-                    return true;
-                }
-                return true;
-            }
-
-            void await_resume() noexcept {}
+            void finalize() noexcept {}
         };
 
-        WaitAwaiter wait() noexcept { return WaitAwaiter{this}; }
+        [[nodiscard]] WaitOp wait_op() noexcept { return WaitOp{this}; }
 
-        void set() noexcept {
-            set_.store(true, std::memory_order_release);
-
-            if (reset_ == Reset::Auto) {
-                for (;;) {
-                    WaitNode* n = pop_one();
-                    if (!n) break;
-
-                    if (try_claim(n)) {
-                        set_.store(false, std::memory_order_release);
-                        detail::resume_on(n->h, n->thread_id);
-                        delete n;
-                        return;
-                    }
-                    delete n;
-                }
-            } else {
-                WaitNode* list = exchange_all();
-                while (list) {
-                    WaitNode* next = list->next;
-                    if (try_claim(list))
-                        detail::resume_on(list->h, list->thread_id);
-                    delete list;
-                    list = next;
-                }
+        task::Awaitable<bool> wait() noexcept
+        {
+            for (;;)
+            {
+                WaitOp op{this};
+                std::monostate m;
+                if (op.try_complete(m))
+                    co_return true;
+                OpWait<WaitOp> w{&op};
+                if (!co_await w)
+                    co_return false;
             }
-        }
-
-        void reset() noexcept {
-            if (reset_ == Reset::Manual)
-                set_.store(false, std::memory_order_release);
         }
     };
 

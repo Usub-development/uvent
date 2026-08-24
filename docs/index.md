@@ -18,6 +18,12 @@ High-performance asynchronous I/O library for C++23.
 - **Custom frames**: ability to override coroutine promise frames (`AwaitableFrameBase`), enabling custom scheduling and
   integration.
 - **SO_REUSEPORT support**: enables truly parallel TCP servers by binding separate listeners in each worker thread.
+- **Structured concurrency**: `task::spawn` → `JoinHandle`, `TaskScope` nurseries, hierarchical cancellation delivered
+  into sleeps, socket I/O, channels and locks.
+- **`select`**: wait on channels, timers, tokens, events and semaphores at once, Go-style.
+- **Cooperative budget**: hot coroutines are forced through the scheduler after a configurable number of fast-path
+  completions, so one connection can't starve a worker.
+- **Introspection** (opt-in): dump every live coroutine with its wait reason, wait time and trace id.
 
 ---
 
