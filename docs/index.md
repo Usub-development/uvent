@@ -2,7 +2,7 @@
 
 High-performance asynchronous I/O library for C++23.
 
-[![GitHub](https://img.shields.io/badge/GitHub-Usub--development%2Fuvent-blue?logo=github)](https://github.com/Usub-development/uvent)
+[![GitHub](https://img.shields.io/badge/GitHub-Usub--Foundation%2Fuvent-blue?logo=github)](https://github.com/Usub-Foundation/uvent)
 
 ---
 
@@ -30,7 +30,7 @@ High-performance asynchronous I/O library for C++23.
 ## Build & Installation
 
 ```bash
-git clone https://github.com/Usub-development/uvent.git
+git clone https://github.com/Usub-Foundation/uvent.git
 cd uvent
 mkdir build && cd build
 cmake ..

@@ -1,6 +1,52 @@
-# Uvent
+# uvent
 
-Cross-platform async I/O engine with native backends for:
+**Cross-platform async I/O runtime for C++23 – coroutines end to end, structured concurrency, native backends, no Boost,
+no dependencies beyond the standard library.**
+
+[![Build](https://github.com/Usub-Foundation/uvent/actions/workflows/build.yml/badge.svg)](https://github.com/Usub-Foundation/uvent/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/tag/Usub-Foundation/uvent?label=release&sort=semver)](https://github.com/Usub-Foundation/uvent/tags)
+[![Docs](https://img.shields.io/badge/docs-usub--foundation.github.io%2Fuvent-blue)](https://usub-foundation.github.io/uvent/)
+[![C++23](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=cplusplus)](#requirements)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+```cpp
+task::Awaitable<void> session(net::TCPClientSocket sock)
+{
+    utils::DynamicBuffer buf;
+    for (;;)
+    {
+        buf.clear();
+        ssize_t n = co_await sock.async_read(buf, 64 * 1024);
+        if (n <= 0)
+            break;
+        co_await sock.async_write(buf.data(), buf.size());
+    }
+}
+
+task::Awaitable<void> listen()
+{
+    net::TCPServerSocket acceptor{"0.0.0.0", 8080};
+    for (;;)
+        co_await acceptor.async_accept(session); // one coroutine per connection
+}
+```
+
+## Why uvent
+
+- **Coroutines are the API, not an add-on.** Every I/O operation is a `co_await`; there are no callback overloads, no
+  handler types to erase, no manual state machines. Sync primitives, channels, timers and cancellation are all
+  coroutine-native.
+- **Structured concurrency, Go/Rust style.** `task::spawn` returns a `JoinHandle`, `TaskScope` is a nursery, and
+  cancellation is a tree: cancel a parent and every sleep, socket read, channel wait and lock under it wakes up and
+  returns. `sync::select` waits on channels, timers, tokens, events and semaphores at once.
+- **Only the C++ standard library.** No Boost, no libuv, no third-party headers. One `FetchContent` line and you are in.
+- **Native backend on every major OS** – `epoll` (edge-triggered) or `io_uring` on Linux, `kqueue` on macOS/BSD, IOCP on
+  Windows – behind a single `TCPServerSocket` / `TCPClientSocket` / `UDPSocket` API.
+- **Built for servers that stay up.** uvent runs the backend of a production: HTTP APIs, PostgreSQL,
+  Redis and RPC traffic between ~10 services all flow through this runtime (see [Ecosystem](#ecosystem)). When something
+  does hang, the opt-in [introspection](#introspection) layer dumps every live coroutine with its wait reason.
+
+## Backends
 
 | OS / family                                    | Backend primitives                                                           | Implementation                                                  |
 |------------------------------------------------|------------------------------------------------------------------------------|-----------------------------------------------------------------|
@@ -8,37 +54,50 @@ Cross-platform async I/O engine with native backends for:
 | macOS, FreeBSD, OpenBSD, NetBSD, DragonFly BSD | `kqueue`, non-blocking sockets (`accept` + `fcntl`)                          | `SocketBSD`, `KQueuePoller`                                     |
 | Windows 10+ / Windows Server 2016+             | **IOCP** (`WSARecv` / `WSASend` / `AcceptEx` / `ConnectEx` / `TransmitFile`) | `SocketWindows`, `IocpPoller`                                   |
 
-A single high-level API (`TCPServerSocket`, `TCPClientSocket`, `UDPSocket`) is used across all platforms.
+The backend is chosen automatically at build time: Linux → `epoll` (or `io_uring` with `-DUVENT_ENABLE_IO_URING=ON`,
+kernel 5.1+ and [liburing](https://github.com/axboe/liburing)), Windows → IOCP, BSD/macOS → `kqueue`.
 
-### Highlights
+## Highlights
 
-- **C++23 coroutines end to end** — `co_await` on accept/read/write/connect, no callbacks, no manual state machines.
-- **Batch-draining accept** — `async_accept(handler)` drains the whole kernel backlog per wakeup and spawns a coroutine per connection (no lost edges in ET mode).
-- **Async DNS** — `net::async_resolve` never blocks the event loop: IP literals resolve inline, hostnames go through a lazy worker pool.
-- **Happy Eyeballs (RFC 8305)** — `net::connect_happy` races IPv6/IPv4 endpoints: parallel AAAA/A with resolution delay, staggered attempts, instant fallback on failure (early start).
-- **Instant cross-thread wakeups** — parked pollers are signalled via `eventfd` / `EVFILT_USER` / `PostQueuedCompletionStatus`; resumes never wait for the idle tick.
-- **Coroutine-native synchronization** — `AsyncMutex`, `AsyncSemaphore`, `AsyncEvent`, `WaitGroup`, `AsyncBarrier`, cancellation tokens; waiters suspend instead of blocking threads.
-- **Go-style channels** — buffered MPMC `AsyncChannel<Ts...>` with back-pressure, unbounded `AsyncUnboundedChannel<Ts...>` for fire-and-forget producers (including non-runtime threads), and `select_recv` over multiple channels.
-- **Timer wheel** — millions of cheap one-shot timers, coroutine `sleep_for`, per-socket inactivity timeouts.
+- **C++23 coroutines end to end** – `co_await` on accept/read/write/connect; `Awaitable<T>` with customizable frames.
+- **Tasks & structured concurrency** – `task::spawn` → `JoinHandle<T>` (await the result, cancel the subtree, detach);
+  `TaskScope` groups tasks so they are cancelled and joined together; plain `co_spawn` stays allocation-free for
+  fire-and-forget.
+- **Hierarchical cancellation** – `CancellationSource`/`CancellationToken` form a tree; a cancelled task's pending
+  `sleep_for`, socket I/O, channel op, mutex or semaphore wait returns immediately with a clear result.
+- **`select`** – Go-style `sync::select(ch.recv_op(), tok.on_cancel_op(), sync::sleep_op(5s))` over heterogeneous
+  operations; one park, first branch wins, no double resumes.
+- **Channels** – bounded MPMC `AsyncChannel<Ts...>` with back-pressure, and `AsyncUnboundedChannel<Ts...>` on a
+  lock-free segmented queue for producers on non-runtime threads (logging callbacks, signal handlers).
+- **Coroutine-native synchronization** – `AsyncMutex`, `AsyncSemaphore`, `AsyncEvent`, `WaitGroup`, `AsyncBarrier`;
+  waiters suspend instead of blocking threads.
+- **One acceptor per worker thread** – `async_accept(handler)` drains the whole kernel backlog per wakeup and spawns a
+  coroutine per connection; with `SO_REUSEPORT` every worker owns its own listener, no accept lock, no lost edges in ET
+  mode.
+- **Async DNS + Happy Eyeballs (RFC 8305)** – `net::async_resolve` never blocks the loop; `net::connect_happy` races
+  IPv6/IPv4 with staggered attempts and instant fallback.
+- **Instant cross-thread wakeups** – parked pollers are signalled via `eventfd` / `EVFILT_USER` /
+  `PostQueuedCompletionStatus`; a resume never waits for the idle tick.
+- **Timer wheel** – millions of cheap one-shot timers, coroutine `sleep_for`, per-socket inactivity timeouts.
+- **Cooperative budget** – a hot coroutine is forced through the scheduler after N fast-path completions, so one
+  connection can't starve a worker.
+- **Introspection (opt-in)** – `introspection::dump()` prints every live coroutine: name, wait reason, wait time, trace
+  id, owning worker.
+- **Lock-free internals** – QSBR and hazard-pointer reclamation, intrusive MPSC queues, sharded concurrent containers,
+  pre-allocated operation pools.
 
-### Requests per second (RPS)
+## Quick start
 
-| Threads | uvent   | Boost.Asio | libuv |
-|---------|---------|------------|-------|
-| 1       | 108,875 | 97,219     | 116   |
-| 2       | 208,346 | 185,813    | 828   |
-| 4       | 378,450 | 330,374    | 830   |
-| 8       | 610,102 | 423,409    | 827   |
+```cmake
+include(FetchContent)
+FetchContent_Declare(uvent
+        GIT_REPOSITORY https://github.com/Usub-Foundation/uvent.git
+        GIT_TAG v3.9.0)
+FetchContent_MakeAvailable(uvent)
+target_link_libraries(my_app PRIVATE usub::uvent)
+```
 
-⚡ **Conclusion:** `uvent` delivers performance nearly on par with Boost.Asio and significantly outperforms libuv, while
-keeping low latency (p99 around 2–3 ms).
-
-👉 For more detailed and up-to-date benchmark results, see the dedicated
-repository: [usub-foundation/io_perfomance](https://github.com/usub-foundation/io_perfomance)
-
-# Quick start
-
-Minimal TCP echo server:
+Minimal HTTP keep-alive server, one acceptor per worker thread:
 
 ```cpp
 #include "uvent/Uvent.h"
@@ -48,66 +107,99 @@ using namespace usub::uvent;
 task::Awaitable<void> clientCoro(net::TCPClientSocket socket)
 {
     static constexpr size_t max_read_size = 64 * 1024;
-    utils::DynamicBuffer buffer;
-    buffer.reserve(max_read_size);
-
-    static const std::string_view httpResponse =
+    static constexpr std::string_view response =
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: application/json\r\n"
         "Content-Length: 20\r\n"
         "\r\n"
         "{\"status\":\"success\"}";
 
-    socket.set_timeout_ms(5000);
+    utils::DynamicBuffer buffer;
+    buffer.reserve(max_read_size);
+    socket.set_timeout_ms(5000); // idle connections are closed by the timer wheel
+
     while (true)
     {
         buffer.clear();
         ssize_t rdsz = co_await socket.async_read(buffer, max_read_size);
-        socket.update_timeout(5000);
         if (rdsz <= 0)
         {
             socket.shutdown();
             break;
         }
-        size_t wrsz = co_await socket.async_write(
-            const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(httpResponse.data())),
-            httpResponse.size());
+        socket.update_timeout(5000);
+        ssize_t wrsz = co_await socket.async_write(
+            const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(response.data())), response.size());
         if (wrsz <= 0)
             break;
-        socket.update_timeout(5000);
     }
-    co_return;
 }
 
 task::Awaitable<void> listeningCoro()
 {
-    auto acceptor = new net::TCPServerSocket{"0.0.0.0", 45900};
-    co_await acceptor->async_accept(clientCoro);
+    net::TCPServerSocket acceptor{"0.0.0.0", 45900};
+    for (;;)
+        co_await acceptor.async_accept(clientCoro);
 }
 
 int main()
 {
-    settings::timeout_duration_ms = 5000;
-
-    usub::Uvent uvent(4);
-    uvent.for_each_thread([&](int threadIndex, thread::ThreadLocalStorage* tls) {
+    usub::Uvent runtime(4); // 4 worker threads
+    runtime.for_each_thread([&](int threadIndex, thread::ThreadLocalStorage*) {
         system::co_spawn_static(listeningCoro(), threadIndex);
     });
-
-    uvent.run();
-    return 0;
+    runtime.run();
 }
 ```
 
-`async_accept` accepts a coroutine function directly — no manual loop or `co_spawn` needed.
-Each accepted connection is automatically spawned as a separate coroutine.
+`async_accept` takes a coroutine function directly – every accepted connection is spawned as its own coroutine, no
+manual
+loop or `co_spawn` needed.
+
+### Structured concurrency, `select` and cancellation
+
+```cpp
+sync::AsyncUnboundedChannel<Job> jobs;
+
+task::Awaitable<uint64_t> worker(int id)
+{
+    system::this_coroutine::set_name("worker");
+    uint64_t done = 0;
+    for (;;)
+    {
+        auto r = co_await sync::select(jobs.recv_op(), sync::sleep_op(200ms));
+        if (r.cancelled())          // our task (or an ancestor) was cancelled
+            break;
+        if (r.is<1>())              // 200 ms idle
+            continue;
+        auto& item = r.get<0>();    // std::optional<std::tuple<Job>>; nullopt = channel closed
+        if (!item)
+            break;
+        done += process(std::get<0>(*item));
+    }
+    co_return done;
+}
+
+task::Awaitable<void> handler()
+{
+    task::TaskScope scope;                 // nursery, child of the current task
+    scope.spawn(worker(0), /*thread*/ 0);
+    scope.spawn(worker(1), /*thread*/ 1);
+    auto producer = scope.spawn(produce(jobs));
+
+    co_await producer;                     // JoinHandle: wait for one task
+    co_await scope.cancel_and_join();      // cancel the rest, wait for all of them
+}
+```
+
+Cancellation is cooperative and reaches every suspension point: a cancelled `sleep_for` returns `false`, socket ops
+return `-1` with `errno == ECANCELED`, channel/select ops report `cancelled()`. Nothing is killed mid-flight.
 
 ### Connecting out: Happy Eyeballs
 
-Dual-stack clients shouldn't hang on a broken IPv6 path. `connect_happy`
-implements RFC 8305: AAAA and A are resolved in parallel and the addresses are
-raced — the first successful connect wins, a fast failure starts the next
-address immediately:
+Dual-stack clients shouldn't hang on a broken IPv6 path. `connect_happy` implements RFC 8305: AAAA and A are resolved in
+parallel and the addresses are raced – the first successful connect wins, a fast failure starts the next address
+immediately:
 
 ```cpp
 #include "uvent/net/HappyEyeballs.h"
@@ -123,49 +215,97 @@ task::Awaitable<void> fetch()
 }
 ```
 
-For a plain single-address connect, `TCPClientSocket::async_connect(host, port[, timeout])`
-resolves asynchronously and never blocks the loop.
+For a plain single-address connect, `TCPClientSocket::async_connect(host, port[, timeout])` resolves asynchronously and
+never blocks the loop.
 
-### Backend selection
+### Introspection
 
-Uvent automatically selects the best backend for your OS:
+Build with `-DUVENT_TASK_INTROSPECTION=ON` and every live coroutine becomes visible – from a signal handler, an admin
+endpoint or a watchdog coroutine:
 
-- **Linux** → `epoll` by default, or **io_uring** when explicitly enabled
-- **Windows** → **IOCP** (always enabled, no flags required)
-- **BSD / macOS** → `kqueue`
-
-#### io_uring
-
-To enable `io_uring` on Linux during build:
-
-```bash
-cmake -DUVENT_ENABLE_IO_URING=ON ..
-make -j
+```cpp
+introspection::dump();   // frame, parent, name, wait reason ("socket.read", "channel.recv", "sleep"...), waiting_ns, trace id
+auto tasks = introspection::snapshot();
 ```
 
-or via CMake FetchContent:
+`this_coroutine::set_name` / `set_trace_id` tag frames; trace ids are inherited by children. With the option off the
+calls compile to no-ops, so call sites need no `#ifdef`.
 
-```cmake
-set(UVENT_ENABLE_IO_URING ON)
-```
+See [`examples/`](examples) for structured concurrency, channels, `select`, timers, resolver and Happy Eyeballs demos.
 
-Requires Linux kernel **5.1+** and [liburing](https://github.com/axboe/liburing).
+## Benchmarks
 
-# Documentation
+HTTP/1.1 keep-alive echo (`wrk -c1000`, 30 s per run, 3 s warm-up), server and `wrk` on the same host.
+Each server uses one event loop per thread with its own `SO_REUSEPORT` listener; the libuv server spawns one loop per
+thread the same way, so all three scale on the same terms.
+
+| Threads | uvent RPS | Boost.Asio RPS | libuv RPS | uvent p99 | Boost.Asio p99 | libuv p99 | runs |
+|--------:|----------:|---------------:|----------:|----------:|---------------:|----------:|-----:|
+|       1 |   107,647 |        113,537 |   113,503 |   8.94 ms |        6.03 ms |   6.53 ms |    1 |
+|       2 |   209,711 |        209,883 |   210,899 |   4.83 ms |        4.41 ms |   4.77 ms |    1 |
+|       4 |   381,159 |        384,020 |   386,309 |   3.28 ms |        2.67 ms |   2.75 ms |    1 |
+|       8 |   541,207 |        498,647 |   588,272 |   2.01 ms |        2.36 ms |   2.68 ms |    3 |
+
+Host: 1× Intel Xeon E5-2640 v4 (10 cores / 20 threads, 2.4 GHz), Linux 6.8, GCC 13.3, `-O3 -march=native` + LTO;
+uvent `f678513` (epoll backend), Boost 1.83, libuv 1.49.2. `wrk -t<threads> -c1000 -d30s --latency`, 3 s warm-up.
+Cells with `runs = 3` are the mean of three runs (spread < 4 %), the rest are single runs.
+
+**What to take from this:** up to 4 threads the three libraries are within 2–5 % of each other – on a parse-free echo
+the kernel, not the event loop, is the bottleneck. At 8 threads (where `wrk` competes for the same cores) libuv pulls
+~9 % ahead of uvent and uvent ~8 % ahead of Boost.Asio, with uvent showing the lowest p99. In other words: you pay
+nothing for coroutines. What uvent buys you is the API – `co_await` instead of callback chains – and zero dependencies,
+at the throughput of the C-level loops.
+
+Sources, scripts and raw `wrk`
+output: [Usub-Foundation/io_perfomance](https://github.com/Usub-Foundation/io_perfomance).
+Numbers depend heavily on the host; run `scripts/run_all.sh` there to get yours.
+
+## Ecosystem
+
+uvent is the runtime under a family of C++23 libraries – same coroutine model, same thread pool, no glue code:
+
+| Library                                                 | What it is                                                                             |
+|---------------------------------------------------------|----------------------------------------------------------------------------------------|
+| [unet](https://github.com/Usub-Foundation/unet)         | HTTP/1.1 server & client, TLS/ALPN, WebSocket, radix/regex routers, coroutine handlers |
+| [upq](https://github.com/Usub-Foundation/upq)           | PostgreSQL client on libpq with pooling, `LISTEN/NOTIFY`, reflection-based row mapping |
+| [uredis](https://github.com/Usub-Foundation/uredis)     | Redis client (RESP3, cluster, sentinel, connection pool)                               |
+| [urpc](https://github.com/Usub-Foundation/urpc)         | Binary RPC framework with mTLS                                                         |
+| [ulog](https://github.com/Usub-Foundation/ulog)         | Zero-allocation async logger flushed by a coroutine, not a thread                      |
+| [ureflect](https://github.com/Usub-Foundation/ureflect) | Header-only compile-time reflection used by upq/ujson                                  |
+
+## Requirements
+
+- C++23 compiler: GCC 13+, Clang 17+ (Apple: `brew install llvm`), MSVC 2022
+- CMake 3.22+
+- Linux `io_uring` backend (optional): kernel 5.1+, liburing
+
+Build options: `UVENT_ENABLE_IO_URING` (Linux, default OFF), `UVENT_TASK_INTROSPECTION` (default OFF),
+`UVENT_ENABLE_REUSEADDR` (default ON), `UVENT_PIN_THREADS` (default ON), `UVENT_BUILD_EXAMPLES`.
+
+## Documentation
 
 - [Getting started (installation)](https://usub-foundation.github.io/uvent/getting-started/)
-- [Quick start](https://usub-foundation.github.io/uvent/quick-start/)
-- [Tutorial (step-by-step tour of everything)](https://usub-foundation.github.io/uvent/tutorial/)
-- [System primitives](https://usub-foundation.github.io/uvent/system_primitives/)
-- [Settings](https://usub-foundation.github.io/uvent/settings/)
-- [Awaitable](https://usub-foundation.github.io/uvent/awaitable/)
-- [Awaitable frame](https://usub-foundation.github.io/uvent/awaitable_frame/)
-- [Socket](https://usub-foundation.github.io/uvent/socket/)
-- [Name Resolution & Happy Eyeballs](https://usub-foundation.github.io/uvent/resolver/)
-- [Synchronization primitives & Channels](https://usub-foundation.github.io/uvent/synchronization/)
+- [Quick start](https://usub-foundation.github.io/uvent/quick-start/) ·
+  [Tutorial (step-by-step tour of everything)](https://usub-foundation.github.io/uvent/tutorial/)
+- [System primitives](https://usub-foundation.github.io/uvent/system_primitives/) ·
+  [Settings](https://usub-foundation.github.io/uvent/settings/)
+- [Awaitable](https://usub-foundation.github.io/uvent/awaitable/) ·
+  [Awaitable frame](https://usub-foundation.github.io/uvent/awaitable_frame/)
+- [Tasks & structured concurrency](https://usub-foundation.github.io/uvent/tasks/) ·
+  [Cancellation](https://usub-foundation.github.io/uvent/cancellation/) ·
+  [Introspection](https://usub-foundation.github.io/uvent/introspection/)
+- [Socket](https://usub-foundation.github.io/uvent/socket/) ·
+  [Name resolution & Happy Eyeballs](https://usub-foundation.github.io/uvent/resolver/)
+- [Synchronization primitives](https://usub-foundation.github.io/uvent/synchronization/) ·
+  [Channels](https://usub-foundation.github.io/uvent/channels/channels/) ·
+  [Select](https://usub-foundation.github.io/uvent/channels/select/)
+- [Timers](https://usub-foundation.github.io/uvent/timers/)
 
----
+## Contributing
 
-# Licence
+Issues and pull requests are welcome – see [contributing](https://usub-foundation.github.io/uvent/contributing/).
+If uvent saves you a dependency, a ⭐ helps others find it.
 
-Uvent is distributed under the [MIT license](LICENSE)
+## License
+
+uvent is distributed under the [MIT license](LICENSE).
