@@ -235,26 +235,37 @@ See [`examples/`](examples) for structured concurrency, channels, `select`, time
 
 ## Benchmarks
 
-HTTP/1.1 keep-alive echo (`wrk -c1000`, 30 s per run, 3 s warm-up), server and `wrk` on the same host.
-Each server uses one event loop per thread with its own `SO_REUSEPORT` listener; the libuv server spawns one loop per
-thread the same way, so all three scale on the same terms.
+HTTP/1.1 keep-alive echo (`wrk -c1000`, 30 s per run), the same 20-byte JSON answer from every server, no parsing –
+this measures the event loop and the syscall path, nothing else. Each server runs one event loop per thread with its
+own `SO_REUSEPORT` listener (the libuv server too), so all of them scale on the same terms.
 
-| Threads | uvent RPS | Boost.Asio RPS | libuv RPS | uvent p99 | Boost.Asio p99 | libuv p99 | runs |
-|--------:|----------:|---------------:|----------:|----------:|---------------:|----------:|-----:|
-|       1 |   107,647 |        113,537 |   113,503 |   8.94 ms |        6.03 ms |   6.53 ms |    1 |
-|       2 |   209,711 |        209,883 |   210,899 |   4.83 ms |        4.41 ms |   4.77 ms |    1 |
-|       4 |   381,159 |        384,020 |   386,309 |   3.28 ms |        2.67 ms |   2.75 ms |    1 |
-|       8 |   541,207 |        498,647 |   588,272 |   2.01 ms |        2.36 ms |   2.68 ms |    3 |
+| Threads | uvent (epoll) RPS | uvent (io_uring) RPS | Boost.Asio RPS | libuv RPS | uvent (epoll) p99 | uvent (io_uring) p99 | Boost.Asio p99 | libuv p99 |
+|--------:|------------------:|---------------------:|---------------:|----------:|------------------:|---------------------:|---------------:|----------:|
+|       1 |           116,340 |              142,127 |        122,468 |   116,672 |          10.70 ms |              8.55 ms |        9.78 ms |  10.28 ms |
+|       2 |           222,968 |              288,274 |        218,789 |   232,583 |           5.07 ms |              4.03 ms |        5.63 ms |   5.10 ms |
+|       4 |           365,004 |              363,870 |        365,665 |   350,512 |           2.74 ms |              2.75 ms |        2.85 ms |   3.68 ms |
+|       8 |           512,845 |              528,681 |        481,241 |   554,192 |           2.07 ms |              2.01 ms |        2.58 ms |   2.38 ms |
 
 Host: 1× Intel Xeon E5-2640 v4 (10 cores / 20 threads, 2.4 GHz), Linux 6.8, GCC 13.3, `-O3 -march=native` + LTO;
-uvent `f678513` (epoll backend), Boost 1.83, libuv 1.49.2. `wrk -t<threads> -c1000 -d30s --latency`, 3 s warm-up.
-Cells with `runs = 3` are the mean of three runs (spread < 4 %), the rest are single runs.
+Boost 1.83, libuv 1.49.2, liburing 2.15.
+`wrk -t4 -c1000 -d30s --latency` (`-t8` for the 8-thread row), 3 s warm-up, server and `wrk` on the same host; for the
+1/2/4-thread rows wrk is pinned to cores away from the workers and their SMT siblings, the 8-thread row cannot be
+separated on 10 cores and runs with wrk free-floating.
+Every cell is the **median of 3 runs on an idle host**; run-to-run spread was within ±3 % for every cell and no run
+had a single `wrk` timeout. Treat differences under ~3 % as noise.
 
-**What to take from this:** up to 4 threads the three libraries are within 2–5 % of each other – on a parse-free echo
-the kernel, not the event loop, is the bottleneck. At 8 threads (where `wrk` competes for the same cores) libuv pulls
-~9 % ahead of uvent and uvent ~8 % ahead of Boost.Asio, with uvent showing the lowest p99. In other words: you pay
-nothing for coroutines. What uvent buys you is the API – `co_await` instead of callback chains – and zero dependencies,
-at the throughput of the C-level loops.
+**What to take from this:**
+
+- **1–2 threads: uvent + io_uring is the fastest server here** (142k / 288k RPS) – 16–32 % over Boost.Asio and
+  22–24 % over libuv, 22–29 % over its own `epoll` build. The io_uring backend batches submissions and completions
+  and skips the speculative `recv()`/`epoll_wait` round trips the readiness-based loops pay per request.
+- **1–2 threads, `epoll` build:** level with libuv on one thread (116k vs 117k) and 5 % behind Asio; on two threads
+  it is ahead of Asio (223k vs 219k) and 4 % behind libuv. The kernel path is identical (one `recv`, one `send` per
+  request); the difference is a few hundred nanoseconds of user-space work per request – coroutine frames and the
+  scheduler round trip, the price of `co_await`, not of the loop.
+- **4 threads:** all four are within 4 % (351–366k); the loop stops mattering once four cores are busy.
+- **8 threads** (where `wrk` competes for the same 10 cores): uvent io_uring, uvent epoll and libuv sit at 513–554k;
+  Asio's single shared `io_context` falls behind (481k) with a visibly worse p99.
 
 Sources, scripts and raw `wrk`
 output: [Usub-Foundation/io_perfomance](https://github.com/Usub-Foundation/io_perfomance).

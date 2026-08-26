@@ -318,6 +318,72 @@ namespace usub::uvent
             }
         };
 
+        class IOFramePool
+        {
+            static constexpr std::size_t kClass = 64;
+            static constexpr std::size_t kMaxSize = 1024;
+            static constexpr std::size_t kClasses = kMaxSize / kClass;
+            static constexpr std::size_t kMaxCached = 4096; // per class; excess goes back to malloc
+
+            struct Node
+            {
+                Node* next;
+            };
+
+            Node* heads_[kClasses]{};
+            std::size_t counts_[kClasses]{};
+
+            static constexpr std::size_t class_of(std::size_t sz) noexcept { return (sz + kClass - 1) / kClass; }
+
+        public:
+            static IOFramePool& local() noexcept
+            {
+                thread_local IOFramePool pool;
+                return pool;
+            }
+
+            void* allocate(std::size_t sz)
+            {
+                const std::size_t cls = class_of(sz);
+                if (cls == 0 || cls > kClasses)
+                    return ::operator new(sz);
+                Node*& head = this->heads_[cls - 1];
+                if (head)
+                {
+                    Node* n = head;
+                    head = n->next;
+                    --this->counts_[cls - 1];
+                    return n;
+                }
+                return ::operator new(cls * kClass);
+            }
+
+            void deallocate(void* p, std::size_t sz) noexcept
+            {
+                const std::size_t cls = class_of(sz);
+                if (cls == 0 || cls > kClasses || this->counts_[cls - 1] >= kMaxCached)
+                {
+                    ::operator delete(p);
+                    return;
+                }
+                auto* n = static_cast<Node*>(p);
+                n->next = this->heads_[cls - 1];
+                this->heads_[cls - 1] = n;
+                ++this->counts_[cls - 1];
+            }
+
+            ~IOFramePool()
+            {
+                for (Node* head : this->heads_)
+                    while (head)
+                    {
+                        Node* n = head;
+                        head = n->next;
+                        ::operator delete(n);
+                    }
+            }
+        };
+
         template <typename T>
         class AwaitableIOFrame : public AwaitableFrameBase, public deferred_task_tag, public local_frame_tag
         {
@@ -325,6 +391,12 @@ namespace usub::uvent
             AwaitableIOFrame() noexcept = default;
 
             ~AwaitableIOFrame();
+
+#ifndef UVENT_NO_IO_FRAME_POOL
+            static void* operator new(std::size_t sz) { return IOFramePool::local().allocate(sz); }
+            static void operator delete(void* p, std::size_t sz) noexcept { IOFramePool::local().deallocate(p, sz); }
+            static void operator delete(void* p) noexcept { ::operator delete(p); }
+#endif
 
             void unhandled_exception() { this->exception_ = std::current_exception(); }
 

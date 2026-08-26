@@ -65,8 +65,7 @@ namespace usub::uvent::net
                 if (cnt == COUNT_MASK)
                     break;
                 const uint64_t ns = (s & ~COUNT_MASK) | (cnt + 1);
-                if (header->state.compare_exchange_weak(s, ns, std::memory_order_acq_rel,
-                                                        std::memory_order_relaxed))
+                if (header->state.compare_exchange_weak(s, ns, std::memory_order_acq_rel, std::memory_order_relaxed))
                     break;
                 cpu_relax();
             }
@@ -509,8 +508,7 @@ namespace usub::uvent::net
         this->header_ =
             new SocketHeader{.fd = utils::socket::createSocket(port, ip_addr, backlog, ipv_, socketAddressType),
                              .socket_info = (uint8_t(p) | uint8_t(r)),
-                             .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))
-            };
+                             .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))};
         utils::socket::makeSocketNonBlocking(this->header_->fd);
         system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::READ);
     }
@@ -523,8 +521,7 @@ namespace usub::uvent::net
         this->header_ =
             new SocketHeader{.fd = utils::socket::createSocket(port, ip_addr, backlog, ipv_, socketAddressType),
                              .socket_info = (static_cast<uint8_t>(p) | static_cast<uint8_t>(r)),
-                             .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))
-            };
+                             .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))};
         utils::socket::makeSocketNonBlocking(this->header_->fd);
         system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::READ);
     }
@@ -540,7 +537,8 @@ namespace usub::uvent::net
         if (this->header_)
         {
 #if UVENT_DEBUG
-            const auto cnt = (this->header_->state.load(std::memory_order_acquire) & usub::utils::sync::refc::COUNT_MASK);
+            const auto cnt =
+                (this->header_->state.load(std::memory_order_acquire) & usub::utils::sync::refc::COUNT_MASK);
             const auto fd = this->header_->fd;
 #endif
 
@@ -698,11 +696,11 @@ namespace usub::uvent::net
 #endif
                     continue;
                 default:
-                {
-                    auto& pl = static_cast<detail::IOUringPoller&>(system::this_thread::detail::pl);
-                    pl.submit_cancel(&op);
-                    co_return;
-                }
+                    {
+                        auto& pl = static_cast<detail::IOUringPoller&>(system::this_thread::detail::pl);
+                        pl.submit_cancel(&op);
+                        co_return;
+                    }
                 }
             }
 
@@ -776,7 +774,12 @@ namespace usub::uvent::net
                     co_return static_cast<ssize_t>(n);
                 }
                 if (op->has_terminal)
-                    co_return static_cast<ssize_t>(op->terminal); // 0=EOF, <0=-errno
+                {
+                    if (op->terminal != -ENOBUFS)
+                        co_return static_cast<ssize_t>(op->terminal); // 0=EOF, <0=-errno
+                    op->has_terminal = false;
+                    op->terminal = 0;
+                }
                 co_await detail::MultishotRecvAwaiter{.op = op, .header = this->header_};
             }
         }
@@ -854,7 +857,12 @@ namespace usub::uvent::net
                     co_return static_cast<ssize_t>(n);
                 }
                 if (op->has_terminal)
-                    co_return static_cast<ssize_t>(op->terminal); // 0=EOF, <0=-errno
+                {
+                    if (op->terminal != -ENOBUFS)
+                        co_return static_cast<ssize_t>(op->terminal); // 0=EOF, <0=-errno
+                    op->has_terminal = false;
+                    op->terminal = 0;
+                }
                 co_await detail::MultishotRecvAwaiter{.op = op, .header = this->header_};
             }
         }
@@ -1315,8 +1323,7 @@ namespace usub::uvent::net
 #ifdef UVENT_ENABLE_REUSEADDR
         if constexpr (p == Proto::TCP && r == Role::ACTIVE)
         {
-            if (this->header_->timer_id != 0 &&
-                system::this_thread::detail::wh.cancelTimer(this->header_->timer_id))
+            if (this->header_->timer_id != 0 && system::this_thread::detail::wh.cancelTimer(this->header_->timer_id))
             {
                 this->header_->timer_id = 0;
                 this->release();
@@ -1358,13 +1365,14 @@ namespace usub::uvent::net
         spdlog::debug("set_timeout_ms(io_uring): {}", this->header_->get_counter());
 #endif
         auto* timer = &this->header_->timer;
-        timer->arm_embedded(timeout,
-                            [](void* hp)
-                            {
-                                std::any a{static_cast<SocketHeader*>(hp)};
-                                detail::processSocketTimeout(a);
-                            },
-                            this->header_);
+        timer->arm_embedded(
+            timeout,
+            [](void* hp)
+            {
+                std::any a{static_cast<SocketHeader*>(hp)};
+                detail::processSocketTimeout(a);
+            },
+            this->header_);
         this->header_->timer_id = system::this_thread::detail::wh.addTimer(timer);
     }
 
@@ -1414,7 +1422,7 @@ namespace usub::uvent::net
 #ifndef UVENT_ENABLE_REUSEADDR
         if (pending_timer_id != 0)
             system::this_thread::detail::wh.removeTimer(pending_timer_id, &detail::retire_header_after_timer,
-                                                       this->header_);
+                                                        this->header_);
         else
             system::this_thread::detail::g_qsbr.retire(static_cast<void*>(this->header_), &delete_header);
 #else

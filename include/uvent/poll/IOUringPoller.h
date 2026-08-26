@@ -60,6 +60,8 @@ namespace usub::uvent::core
 
         void arm_wake();
 
+        struct io_uring_sqe* get_sqe_flush() noexcept;
+
     private:
         utils::TimerWheel& wheel;
 

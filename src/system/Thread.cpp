@@ -129,16 +129,18 @@ namespace usub::uvent::system
                 }
             }
 
-            const size_t n_coroutines =
-                local_q_c.dequeue_bulk(this->tmp_coroutines_.data(), this->tmp_coroutines_.size());
-            for (size_t i = 0; i < n_coroutines; i++)
+            for (size_t n_coroutines; (n_coroutines = local_q_c.dequeue_bulk(this->tmp_coroutines_.data(),
+                                                                             this->tmp_coroutines_.size())) > 0;)
             {
-                auto c_temp =
-                    std::coroutine_handle<detail::AwaitableFrameBase>::from_address(this->tmp_coroutines_[i].address());
+                for (size_t i = 0; i < n_coroutines; i++)
+                {
+                    auto c_temp = std::coroutine_handle<detail::AwaitableFrameBase>::from_address(
+                        this->tmp_coroutines_[i].address());
 #ifdef UVENT_DEBUG
-                spdlog::info("Coroutine destroyed in auxiliary loop: {}", this->tmp_coroutines_[i].address());
+                    spdlog::info("Coroutine destroyed in auxiliary loop: {}", this->tmp_coroutines_[i].address());
 #endif
-                c_temp.destroy();
+                    c_temp.destroy();
+                }
             }
 #ifndef UVENT_ENABLE_REUSEADDR
             local_g_qsbr.quiesce_tick();

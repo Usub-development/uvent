@@ -732,6 +732,13 @@ namespace usub::uvent::net
                         buffer.commit(static_cast<size_t>(res));
                         total_read += res;
                         retries = 0;
+                        if (static_cast<size_t>(res) < to_read)
+                        {
+#ifndef UVENT_ENABLE_REUSEADDR
+                            this->header_->timeout_epoch_bump();
+#endif
+                            co_return total_read;
+                        }
                         continue;
                     }
 
@@ -870,6 +877,13 @@ namespace usub::uvent::net
                         out += static_cast<size_t>(res);
                         total_read += res;
                         retries = 0;
+                        if (static_cast<size_t>(res) < remaining)
+                        {
+#ifndef UVENT_ENABLE_REUSEADDR
+                            this->header_->timeout_epoch_bump();
+#endif
+                            co_return total_read;
+                        }
                         continue;
                     }
 
