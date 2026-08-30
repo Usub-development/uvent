@@ -29,7 +29,7 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
-#include <sys/Event.h>
+#include <sys/event.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -275,17 +275,6 @@ UVENT_ALWAYS_INLINE int clzl_portable(unsigned long x) {
 #endif
 }
 
-static void wsa_init_once() {
-  static std::once_flag f;
-  std::call_once(f, []{
-      WSADATA wsa{};
-      int rc = WSAStartup(MAKEWORD(2,2), &wsa);
-      if (rc != 0) {
-          throw std::system_error(rc, std::system_category(), "WSAStartup");
-      }
-  });
-}
-
 #elif defined(__clang__) || defined(__GNUC__)
 
 // GCC/Clang builtins are UB on x==0; guard it.
@@ -323,6 +312,19 @@ UVENT_ALWAYS_INLINE int clzl_portable(unsigned long x) {
   if (sizeof(unsigned long) == 8)
     return clz64(static_cast<uint64_t>(x));
   return clz32(static_cast<uint32_t>(x));
+}
+#endif
+
+#if defined(_WIN32) || defined(_WIN64)
+static void wsa_init_once() {
+  static std::once_flag f;
+  std::call_once(f, []{
+      WSADATA wsa{};
+      int rc = WSAStartup(MAKEWORD(2,2), &wsa);
+      if (rc != 0) {
+          throw std::system_error(rc, std::system_category(), "WSAStartup");
+      }
+  });
 }
 #endif
 
