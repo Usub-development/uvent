@@ -157,6 +157,14 @@ set(UVENT_TESTS_SANITIZER "" CACHE STRING "Sanitizer for tests: address,undefine
 
 if (UVENT_BUILD_TESTS)
     enable_testing()
+    if (UVENT_TESTS_SANITIZER)
+        # The sanitizer must instrument the uvent library as well: an
+        # uninstrumented libuvent hides its atomics from TSAN, so every
+        # cross-thread handoff through the runtime shows up as a false race
+        # between test code on both sides.
+        target_compile_options(uvent PRIVATE -fsanitize=${UVENT_TESTS_SANITIZER} -fno-omit-frame-pointer -g)
+        target_link_options(uvent PUBLIC -fsanitize=${UVENT_TESTS_SANITIZER})
+    endif ()
     add_subdirectory(tests)
 endif ()
 option(UVENT_ENABLE_SANITIZERS "Uvent build sanitizer executables" OFF)

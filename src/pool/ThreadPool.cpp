@@ -35,8 +35,8 @@ namespace usub::uvent {
 
     ThreadPool::~ThreadPool() {
         this->stop();
-        delete this->barrier;
         for (auto &thread: this->threads)
             delete thread;
+        delete this->barrier;
     }
 }

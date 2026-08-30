@@ -293,7 +293,7 @@ namespace
         CHECK(!q.try_dequeue(v));
         const long after = rss_kb();
         std::printf("   rss before=%ld kB after=%ld kB\n", before, after);
-#if !defined(__SANITIZE_ADDRESS__)
+#if !defined(__SANITIZE_ADDRESS__) && !defined(__SANITIZE_THREAD__)
         CHECK(after - before < 64 * 1024);
 #endif
     }
