@@ -1014,9 +1014,16 @@ namespace usub::uvent::net
                     spdlog::info("async_write: EAGAIN, waiting for write-ready: fd={}", this->header_->fd);
 #endif
                     co_await detail::AwaiterWrite{this->header_};
+                    if (system::this_coroutine::cancel_requested()) [[unlikely]]
+                    {
+                        errno = ECANCELED;
+                        co_return -1;
+                    }
+                    continue;
                 }
                 co_return -1;
             }
+            co_return total_written;
         }
     }
 
