@@ -4,6 +4,8 @@
 
 #include <uvent/pool/TLS.h>
 
+#include <thread>
+
 #ifdef OS_LINUX
 #ifndef UVENT_ENABLE_IO_URING
 #include <uvent/poll/EPoller.h>
@@ -27,14 +29,27 @@ namespace usub::uvent::thread
 
         this->is_added_new_.store(true, std::memory_order_release);
 
-        if (auto* p = this->poller_.load(std::memory_order_acquire))
-            p->wake();
+        this->kick_poller();
     }
 
     void ThreadLocalStorage::wake_poller() noexcept
     {
+        this->kick_poller();
+    }
+
+    void ThreadLocalStorage::kick_poller() noexcept
+    {
+        this->wake_inflight_.fetch_add(1, std::memory_order_acq_rel);
         if (auto* p = this->poller_.load(std::memory_order_acquire))
             p->wake();
+        this->wake_inflight_.fetch_sub(1, std::memory_order_acq_rel);
+    }
+
+    void ThreadLocalStorage::unset_poller() noexcept
+    {
+        this->poller_.store(nullptr, std::memory_order_release);
+        while (this->wake_inflight_.load(std::memory_order_acquire) != 0)
+            std::this_thread::yield();
     }
 
     void ThreadLocalStorage::push_cancel_kick(uvent::task::TaskStateBase* t)
@@ -43,8 +58,7 @@ namespace usub::uvent::thread
 
         this->has_kicks_.store(true, std::memory_order_release);
 
-        if (auto* p = this->poller_.load(std::memory_order_acquire))
-            p->wake();
+        this->kick_poller();
     }
 
 #ifdef UVENT_SOCKET_OWNER_FORWARDING
@@ -54,8 +68,7 @@ namespace usub::uvent::thread
 
         this->has_sock_ops_.store(true, std::memory_order_release);
 
-        if (auto* p = this->poller_.load(std::memory_order_acquire))
-            p->wake();
+        this->kick_poller();
     }
 #endif
 } // namespace usub::uvent::thread

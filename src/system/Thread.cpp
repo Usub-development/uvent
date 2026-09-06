@@ -156,6 +156,8 @@ namespace usub::uvent::system
 #endif
         }
 
+        this->thread_local_storage_->unset_poller();
+
         this->processCancelKicks();
 
         for (;;)
@@ -254,6 +256,8 @@ namespace usub::uvent::system
             a = this->thread_.request_stop();
 
         bool b = this->stop_source_.request_stop();
+        if (this->thread_local_storage_)
+            this->thread_local_storage_->wake_poller();
         return a || b;
     }
 } // namespace usub::uvent::system

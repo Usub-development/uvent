@@ -53,7 +53,10 @@ namespace usub::uvent::sync
 
         bool detach(Waiter* w) noexcept
         {
-            if (this->waiter.exchange(nullptr, std::memory_order_acq_rel) == w)
+            Waiter* prev = this->waiter.exchange(nullptr, std::memory_order_acq_rel);
+            if (prev == w)
+                return true;
+            if (prev == nullptr && !this->fired.load(std::memory_order_acquire))
                 return true;
             while (!this->fire_done.load(std::memory_order_acquire))
                 cpu_relax();
