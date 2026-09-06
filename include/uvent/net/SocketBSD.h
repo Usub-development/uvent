@@ -7,6 +7,7 @@
 
 #include <coroutine>
 #include <expected>
+#include <netinet/tcp.h>
 
 #include <uvent/poll/KPoller.h>
 #include "AwaiterOperations.h"
@@ -243,6 +244,16 @@ namespace usub::uvent::net
         void set_timeout_ms(timeout_t timeout = settings::timeout_duration_ms) const
             requires(p == Proto::TCP && r == Role::ACTIVE);
 
+        /**
+         * \brief Enables/disables TCP_NODELAY (Nagle's algorithm) on the underlying socket.
+         * Applies to any connected TCP socket regardless of which thread owns it.
+         * \return true if the option was applied.
+         * \warning Method doesn't check if socket was initialized. Please use it only after socket
+         * initialisation.
+         */
+        bool set_nodelay(bool enable = true) const noexcept
+            requires(p == Proto::TCP);
+
         std::expected<std::string, usub::utils::errors::SendError> receive(size_t chunk_size, size_t maxSize);
 
         /**
@@ -324,8 +335,7 @@ namespace usub::uvent::net
         this->header_ =
             new SocketHeader{.fd = utils::socket::createSocket(port, ip_addr, backlog, ipv_, socketAddressType),
                              .socket_info = (uint8_t(p) | uint8_t(r)),
-                             .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))
-            };
+                             .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))};
         utils::socket::makeSocketNonBlocking(this->header_->fd);
         system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::READ);
     }
@@ -338,8 +348,7 @@ namespace usub::uvent::net
         this->header_ =
             new SocketHeader{.fd = utils::socket::createSocket(port, ip_addr, backlog, ipv_, socketAddressType),
                              .socket_info = (static_cast<uint8_t>(p) | static_cast<uint8_t>(r)),
-                             .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))
-            };
+                             .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))};
         utils::socket::makeSocketNonBlocking(this->header_->fd);
         system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::READ);
     }
@@ -351,7 +360,8 @@ namespace usub::uvent::net
         {
             this->release();
 #if UVENT_DEBUG
-            spdlog::warn("Socket counter: {}, fd: {}", (this->header_->state.load(std::memory_order_acquire) & usub::utils::sync::refc::COUNT_MASK),
+            spdlog::warn("Socket counter: {}, fd: {}",
+                         (this->header_->state.load(std::memory_order_acquire) & usub::utils::sync::refc::COUNT_MASK),
                          this->header_->fd);
 #endif
         }
@@ -1496,8 +1506,7 @@ namespace usub::uvent::net
 #ifdef UVENT_ENABLE_REUSEADDR
         if constexpr (p == Proto::TCP && r == Role::ACTIVE)
         {
-            if (this->header_->timer_id != 0 &&
-                system::this_thread::detail::wh.cancelTimer(this->header_->timer_id))
+            if (this->header_->timer_id != 0 && system::this_thread::detail::wh.cancelTimer(this->header_->timer_id))
             {
                 this->header_->timer_id = 0;
                 this->release();
@@ -1505,6 +1514,17 @@ namespace usub::uvent::net
         }
 #endif
         ::shutdown(this->header_->fd, SHUT_RDWR);
+    }
+
+    template <Proto p, Role r>
+    bool Socket<p, r>::set_nodelay(bool enable) const noexcept
+        requires(p == Proto::TCP)
+    {
+        if (!this->header_ || this->header_->fd == INVALID_FD)
+            return false;
+        const int one = enable ? 1 : 0;
+        return ::setsockopt(this->header_->fd, IPPROTO_TCP, TCP_NODELAY, &one, static_cast<socklen_t>(sizeof(one))) ==
+            0;
     }
 
     template <Proto p, Role r>
@@ -1538,13 +1558,14 @@ namespace usub::uvent::net
         spdlog::debug("set_timeout_ms: {}", this->header_->get_counter());
 #endif
         auto* timer = &this->header_->timer;
-        timer->arm_embedded(timeout,
-                            [](void* hp)
-                            {
-                                std::any a{static_cast<SocketHeader*>(hp)};
-                                detail::processSocketTimeout(a);
-                            },
-                            this->header_);
+        timer->arm_embedded(
+            timeout,
+            [](void* hp)
+            {
+                std::any a{static_cast<SocketHeader*>(hp)};
+                detail::processSocketTimeout(a);
+            },
+            this->header_);
         this->header_->timer_id = system::this_thread::detail::wh.addTimer(timer);
     }
 

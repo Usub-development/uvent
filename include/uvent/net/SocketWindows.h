@@ -302,6 +302,16 @@ namespace usub::uvent::net
         void set_timeout_ms(timeout_t timeout = settings::timeout_duration_ms) const
             requires(p == Proto::TCP && r == Role::ACTIVE);
 
+        /**
+         * \brief Enables/disables TCP_NODELAY (Nagle's algorithm) on the underlying socket.
+         * Applies to any connected TCP socket regardless of which thread owns it.
+         * \return true if the option was applied.
+         * \warning Method doesn't check if socket was initialized. Please use it only after socket
+         * initialisation.
+         */
+        bool set_nodelay(bool enable = true) const noexcept
+            requires(p == Proto::TCP);
+
         std::expected<std::string, usub::utils::errors::SendError> receive(size_t chunk_size, size_t maxSize);
 
         /**
@@ -2201,6 +2211,17 @@ namespace usub::uvent::net
         }
 #endif
         ::shutdown(this->header_->fd, SD_BOTH);
+    }
+
+    template <Proto p, Role r>
+    bool Socket<p, r>::set_nodelay(bool enable) const noexcept
+        requires(p == Proto::TCP)
+    {
+        if (!this->header_ || this->header_->fd == INVALID_FD)
+            return false;
+        const BOOL one = enable ? TRUE : FALSE;
+        return ::setsockopt(static_cast<SOCKET>(this->header_->fd), IPPROTO_TCP, TCP_NODELAY,
+                            reinterpret_cast<const char*>(&one), static_cast<int>(sizeof(one))) == 0;
     }
 
     template <Proto p, Role r>
