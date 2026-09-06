@@ -3,9 +3,9 @@
 We welcome contributions to **Uvent**! Whether it's fixing bugs, improving documentation, or adding new features, every contribution helps. Every little bit helps, want to contribute, here is how:
 
 ## Ways to Contribute
-- **Bug reports** – Open an [issue](https://github.com/Usub-development/uvent/issues) if you find a problem.
-- **Feature requests** – [Suggest](https://github.com/Usub-development/uvent/discussions) improvements or new capabilities.
-- **Code contributions** – [Fix](https://github.com/Usub-development/uvent/pulls) a bug, [implement](https://github.com/Usub-development/uvent/pulls) a feature, or [improve](https://github.com/Usub-development/uvent/pulls) performance.
+- **Bug reports** – Open an [issue](https://github.com/Usub-Foundation/uvent/issues) if you find a problem.
+- **Feature requests** – [Suggest](https://github.com/Usub-Foundation/uvent/discussions) improvements or new capabilities.
+- **Code contributions** – [Fix](https://github.com/Usub-Foundation/uvent/pulls) a bug, [implement](https://github.com/Usub-Foundation/uvent/pulls) a feature, or [improve](https://github.com/Usub-Foundation/uvent/pulls) performance.
 - **Documentation** – Help us improve clarity and examples.
 
 ## Coding style
@@ -26,7 +26,7 @@ We welcome contributions to **Uvent**! Whether it's fixing bugs, improving docum
 
 ## Communication
 
-* Issues and pull requests are tracked on [GitHub](https://github.com/Usub-development/uvent).
+* Issues and pull requests are tracked on [GitHub](https://github.com/Usub-Foundation/uvent).
 * For larger changes, open a discussion first to discuss the design before implementing, then we'll create issue to track.
 
 ---

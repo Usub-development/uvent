@@ -3,31 +3,33 @@
 
 #include <atomic>
 #include <coroutine>
-#include <cstddef>
 #include <cstdint>
 
-#include "uvent/sync/SyncCommon.h"
+#include "uvent/sync/WaitList.h"
 
-namespace usub::uvent::sync {
+namespace usub::uvent::detail
+{
+    class AwaitableFrameBase;
+}
 
-    class AsyncMutex {
-        struct WaitNode {
-            std::coroutine_handle<>  h{};
-            WaitNode*                next{};
-            int                      thread_id{-1};
-        };
+namespace usub::uvent::sync
+{
 
-        std::atomic<std::uintptr_t> state_{0};
+    class AsyncMutex
+    {
+        std::atomic<uint32_t> state_{0};
+        WaitList waiters_;
 
-        static constexpr std::uintptr_t kUnlocked        = 0;
-        static constexpr std::uintptr_t kLockedNoWaiters = 1;
-        static constexpr std::uintptr_t TAG              = 1;
-
-        static WaitNode*     ptr_untag(std::uintptr_t s) noexcept;
-        static std::uintptr_t ptr_tag(WaitNode* p) noexcept;
+        bool try_lock_raw() noexcept
+        {
+            uint32_t expected = 0;
+            return this->state_.compare_exchange_strong(expected, 1, std::memory_order_acquire,
+                                                        std::memory_order_relaxed);
+        }
 
     public:
-        class Guard {
+        class Guard
+        {
             AsyncMutex* m_{};
 
         public:
@@ -40,13 +42,18 @@ namespace usub::uvent::sync {
             void unlock() noexcept;
         };
 
-        struct LockAwaiter {
+        struct LockAwaiter
+        {
             AsyncMutex* m;
-            WaitNode    node{};
+            Waiter node{};
+            bool acquired{false};
+            bool cancelled{false};
 
             bool await_ready() noexcept;
             bool await_suspend(std::coroutine_handle<> h) noexcept;
             Guard await_resume() noexcept;
+
+            static void on_cancel(uvent::detail::AwaitableFrameBase* f, void* arg) noexcept;
         };
 
         LockAwaiter lock() noexcept;

@@ -1,8 +1,8 @@
 site_name: Uvent Documentation
 site_description: High-performance asynchronous I/O library for modern C++23
-site_url: https://usub-development.github.io/uvent/
-repo_url: https://github.com/Usub-development/uvent
-repo_name: Usub-development/uvent
+site_url: https://usub-foundation.github.io/uvent/
+repo_url: https://github.com/Usub-Foundation/uvent
+repo_name: Usub-Foundation/uvent
 edit_uri: edit/main/docs/
 
 theme:
@@ -55,9 +55,12 @@ nav:
   - Core Runtime:
       - Uvent: uvent.md
       - System Primitives: system_primitives.md
+      - Introspection: introspection.md
   - Coroutines:
       - Awaitable: awaitable.md
       - Awaitable Frame: awaitable_frame.md
+      - Tasks & Structured Concurrency: tasks.md
+      - Cancellation: cancellation.md
   - Networking:
       - Socket: socket.md
       - Name Resolution & Happy Eyeballs: resolver.md
@@ -76,11 +79,11 @@ nav:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/Usub-development/uvent
+      link: https://github.com/Usub-Foundation/uvent
       name: GitHub Repository
     - icon: fontawesome/solid/star
-      link: https://github.com/Usub-development/uvent/stargazers
+      link: https://github.com/Usub-Foundation/uvent/stargazers
       name: Star on GitHub
 
 copyright: >
-  Copyright &copy; 2025 Usub-development, Kirill Zhukov (g2px1)
+  Copyright &copy; 2025 Usub-Foundation, Kirill Zhukov (g2px1)

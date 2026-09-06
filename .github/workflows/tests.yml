@@ -1,0 +1,90 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: release
+            cmake_flags: "-DCMAKE_BUILD_TYPE=Release"
+            scale: "1"
+            timeout: "180"
+          - name: release-introspection
+            cmake_flags: "-DCMAKE_BUILD_TYPE=Release -DUVENT_TASK_INTROSPECTION=ON"
+            scale: "1"
+            timeout: "180"
+          - name: release-no-reuseaddr
+            cmake_flags: "-DCMAKE_BUILD_TYPE=Release -DUVENT_ENABLE_REUSEADDR=OFF"
+            scale: "1"
+            timeout: "180"
+          - name: asan-ubsan
+            cmake_flags: "-DCMAKE_BUILD_TYPE=RelWithDebInfo -DUVENT_TESTS_SANITIZER=address,undefined"
+            scale: "10"
+            timeout: "600"
+          - name: tsan
+            cmake_flags: "-DCMAKE_BUILD_TYPE=RelWithDebInfo -DUVENT_TESTS_SANITIZER=thread"
+            scale: "20"
+            timeout: "900"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc-13 g++-13
+
+      - name: Lower ASLR entropy for sanitizers
+        if: contains(matrix.name, 'san')
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -G "Unix Makefiles" \
+            -DCMAKE_C_COMPILER=gcc-13 \
+            -DCMAKE_CXX_COMPILER=g++-13 \
+            -DCMAKE_CXX_STANDARD=23 \
+            -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+            -DUVENT_BUILD_TESTS=ON \
+            ${{ matrix.cmake_flags }}
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        working-directory: build
+        env:
+          UVENT_TEST_SCALE: ${{ matrix.scale }}
+          TSAN_OPTIONS: "second_deadlock_stack=1"
+          ASAN_OPTIONS: "detect_stack_use_after_return=0"
+        run: ctest --output-on-failure --timeout ${{ matrix.timeout }}
+
+  tests-status:
+    name: Tests status
+    runs-on: ubuntu-latest
+    needs: [ tests ]
+    if: always()
+    steps:
+      - name: Check all test jobs passed
+        run: |
+          if [[ "${{ needs.tests.result }}" != "success" ]]; then
+            echo "One or more test jobs failed: ${{ needs.tests.result }}"
+            exit 1
+          fi
+          echo "All test jobs passed"

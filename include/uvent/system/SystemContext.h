@@ -6,11 +6,14 @@
 #define UVENT_SYSTEMCONTEXT_H
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <uvent/pool/TLSRegistry.h>
 #include "Settings.h"
 #include "uvent/base/Predefines.h"
 #include "uvent/poll/PollerBase.h"
+#include "uvent/sync/CancelState.h"
+#include "uvent/tasks/AwaitableFrame.h"
 #include "uvent/tasks/SharedTasks.h"
 #include "uvent/utils/datastructures/queue/ConcurrentQueues.h"
 #include "uvent/utils/datastructures/queue/FastQueue.h"
@@ -56,6 +59,12 @@ namespace usub::uvent::system
         thread_local extern int t_id;
         /// \brief Coroutines to be destroyed
         thread_local extern queue::single_thread::Queue<std::coroutine_handle<>> q_c;
+        /// \brief Cancel state of the currently running task.
+        thread_local extern sync::CancelState* current_cancel;
+        /// \brief Trace id of the currently running task.
+        thread_local extern uint64_t current_trace;
+        /// \brief Remaining cooperative budget for the current resume slice.
+        thread_local extern int32_t coop_left;
 #ifndef UVENT_ENABLE_REUSEADDR
         extern usub::utils::sync::QSBR g_qsbr;
 #else
@@ -70,30 +79,118 @@ namespace usub::uvent::system
 #endif
     } // namespace this_thread::detail
 
+    namespace detail
+    {
+        using AwaitableFrameBase = uvent::detail::AwaitableFrameBase;
+
+        inline bool cancel_timer_now(uint64_t id) noexcept
+        {
+#ifdef UVENT_ENABLE_REUSEADDR
+            return this_thread::detail::wh.cancelTimerDetach(id);
+#else
+            return this_thread::detail::wh.cancelTimerSyncDetach(id);
+#endif
+        }
+    } // namespace detail
+
+    namespace coop
+    {
+        inline bool consume() noexcept
+        {
+            auto& b = this_thread::detail::coop_left;
+            if (b > 0)
+            {
+                --b;
+                return true;
+            }
+            return false;
+        }
+
+        inline bool exhausted() noexcept { return this_thread::detail::coop_left <= 0; }
+    } // namespace coop
+
     namespace this_coroutine
     {
+        struct YieldAwaiter
+        {
+            bool await_ready() const noexcept { return false; }
+
+            void await_suspend(std::coroutine_handle<> h) const noexcept { this_thread::detail::q.enqueue(h); }
+
+            void await_resume() const noexcept {}
+        };
+
+        inline YieldAwaiter yield() noexcept { return {}; }
+
+        inline bool cancel_requested() noexcept
+        {
+            auto* s = this_thread::detail::current_cancel;
+            return s && s->requested.load(std::memory_order_relaxed);
+        }
+
+        inline sync::CancelState* cancel_state() noexcept { return this_thread::detail::current_cancel; }
+
+        inline uint64_t trace_id() noexcept { return this_thread::detail::current_trace; }
+
+        void set_trace_id(uint64_t id) noexcept;
+
+        void set_name(const char* n) noexcept;
+
+        struct SleepAwaiter
+        {
+            utils::Timer* t;
+            uint64_t id{0};
+            bool cancelled{false};
+
+            bool await_ready() const noexcept { return false; }
+
+            bool await_suspend(std::coroutine_handle<> h) noexcept
+            {
+                auto* f = &uvent::detail::frame_of(h);
+                if (f->cancel_requested())
+                {
+                    this->cancelled = true;
+                    delete this->t;
+                    return false;
+                }
+                this->t->bind(h);
+                this->id = this_thread::detail::wh.addTimer(this->t);
+                if (f->arm_cancel(&SleepAwaiter::on_cancel, this, "sleep"))
+                {
+                    if (system::detail::cancel_timer_now(this->id))
+                    {
+                        f->disarm_cancel();
+                        this->cancelled = true;
+                        delete this->t;
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            bool await_resume() const noexcept { return !this->cancelled; }
+
+            static void on_cancel(uvent::detail::AwaitableFrameBase* f, void* arg) noexcept
+            {
+                auto* a = static_cast<SleepAwaiter*>(arg);
+                if (system::detail::cancel_timer_now(a->id))
+                {
+                    a->cancelled = true;
+                    delete a->t;
+                    this_thread::detail::q.enqueue(f->get_coroutine_handle());
+                }
+            }
+        };
+
         template <class Rep, class Period>
-        task::Awaitable<void> sleep_for(std::chrono::duration<Rep, Period> d)
+        task::Awaitable<bool> sleep_for(std::chrono::duration<Rep, Period> d)
         {
             using namespace std::chrono;
             auto ms = duration_cast<milliseconds>(d + milliseconds(1) - milliseconds(0));
             auto ms_count = std::max<int64_t>(1, ms.count());
 
-            struct SleepAwaiter
-            {
-                utils::Timer* t;
-                bool await_ready() const noexcept { return false; }
-
-                void await_suspend(std::coroutine_handle<> h) const noexcept
-                {
-                    t->bind(h);
-                    this_thread::detail::wh.addTimer(t);
-                }
-
-                void await_resume() const noexcept {}
-            };
-
-            co_await SleepAwaiter{new utils::Timer(static_cast<timer_duration_t>(ms_count))};
+            const bool completed = co_await SleepAwaiter{new utils::Timer(static_cast<timer_duration_t>(ms_count))};
+            co_return completed;
         }
     } // namespace this_coroutine
 
@@ -109,12 +206,19 @@ namespace usub::uvent::system
      * @warning Method doesn't check if the coroutine is valid beyond `get_promise()`.
      *          Ensure the coroutine object remains valid until scheduled.
      */
+    template <class F>
+    concept SharedSpawnable = !uvent::detail::LocalFrame<typename std::remove_cvref_t<F>::promise_type>;
+
     template <typename F>
+        requires SharedSpawnable<F>
     void co_spawn(F&& f)
     {
         auto promise = f.get_promise();
         if (promise)
+        {
+            static_cast<detail::AwaitableFrameBase*>(promise)->detach_from_task();
             this_thread::detail::st->enqueue(promise->get_coroutine_handle());
+        }
     }
 
     inline void co_spawn(std::coroutine_handle<> h) { this_thread::detail::st->enqueue(h); }
@@ -143,7 +247,9 @@ namespace usub::uvent::system
         auto promise = f.get_promise();
         if (promise)
         {
-            static_cast<detail::AwaitableFrameBase*>(promise)->set_thread_id(threadIndex);
+            auto* base = static_cast<detail::AwaitableFrameBase*>(promise);
+            base->set_thread_id(threadIndex);
+            base->detach_from_task();
             global::detail::tls_registry->getStorage(threadIndex)->push_task_inbox(promise->get_coroutine_handle());
         }
     }
@@ -239,16 +345,14 @@ namespace usub::uvent::system
     template <bool is_thread_id_set>
     inline void co_spawn_static(std::coroutine_handle<> h, int threadIndex)
     {
-        global::detail::tls_registry->getStorage(threadIndex)->push_task_inbox(h);
+        if (!h)
+            return;
         if constexpr (is_thread_id_set)
         {
             auto handle = std::coroutine_handle<detail::AwaitableFrameBase>::from_address(h.address());
             handle.promise().set_thread_id(threadIndex);
-            if (handle)
-                global::detail::tls_registry->getStorage(threadIndex)->push_task_inbox(handle);
         }
-        else
-            global::detail::tls_registry->getStorage(threadIndex)->push_task_inbox(h);
+        global::detail::tls_registry->getStorage(threadIndex)->push_task_inbox(h);
     }
 
     /**

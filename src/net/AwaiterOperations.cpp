@@ -4,6 +4,32 @@
 
 namespace usub::uvent::net::detail
 {
+#ifdef UVENT_SOCKET_OWNER_FORWARDING
+    namespace
+    {
+        void cancel_socket_read(uvent::detail::AwaitableFrameBase* f, void* arg) noexcept
+        {
+            auto* header = static_cast<SocketHeader*>(arg);
+            const auto h = f->get_coroutine_handle();
+            if (header->first && header->first.address() == h.address())
+            {
+                header->first = nullptr;
+                system::this_thread::detail::q.enqueue(h);
+            }
+        }
+
+        void cancel_socket_write(uvent::detail::AwaitableFrameBase* f, void* arg) noexcept
+        {
+            auto* header = static_cast<SocketHeader*>(arg);
+            const auto h = f->get_coroutine_handle();
+            if (header->second && header->second.address() == h.address())
+            {
+                header->second = nullptr;
+                system::this_thread::detail::q.enqueue(h);
+            }
+        }
+    } // namespace
+#endif
 
     AwaiterRead::AwaiterRead(SocketHeader* header) : header_(header) {}
 
@@ -23,7 +49,19 @@ namespace usub::uvent::net::detail
             {
                 system::this_thread::detail::q.enqueue(resumed);
             }
+            return;
         }
+#ifdef UVENT_SOCKET_OWNER_FORWARDING
+        auto& f = c.promise();
+        if (f.arm_cancel(&cancel_socket_read, this->header_, "socket.read"))
+        {
+            if (auto again = std::exchange(this->header_->first, std::coroutine_handle<>{}))
+            {
+                f.disarm_cancel();
+                system::this_thread::detail::q.enqueue(again);
+            }
+        }
+#endif
     }
 
     void AwaiterRead::await_resume() {}
@@ -46,7 +84,19 @@ namespace usub::uvent::net::detail
             {
                 system::this_thread::detail::q.enqueue(resumed);
             }
+            return;
         }
+#ifdef UVENT_SOCKET_OWNER_FORWARDING
+        auto& f = c.promise();
+        if (f.arm_cancel(&cancel_socket_write, this->header_, "socket.write"))
+        {
+            if (auto again = std::exchange(this->header_->second, std::coroutine_handle<>{}))
+            {
+                f.disarm_cancel();
+                system::this_thread::detail::q.enqueue(again);
+            }
+        }
+#endif
     }
 
     void AwaiterWrite::await_resume() {}
@@ -69,7 +119,19 @@ namespace usub::uvent::net::detail
             {
                 system::this_thread::detail::q.enqueue(resumed);
             }
+            return;
         }
+#ifdef UVENT_SOCKET_OWNER_FORWARDING
+        auto& f = c.promise();
+        if (f.arm_cancel(&cancel_socket_read, this->header_, "socket.accept"))
+        {
+            if (auto again = std::exchange(this->header_->first, std::coroutine_handle<>{}))
+            {
+                f.disarm_cancel();
+                system::this_thread::detail::q.enqueue(again);
+            }
+        }
+#endif
     }
 
     void AwaiterAccept::await_resume() {}

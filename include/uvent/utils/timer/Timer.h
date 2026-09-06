@@ -5,13 +5,13 @@
 #ifndef TIMER_H
 #define TIMER_H
 
-#include <cstdint>
-#include <unordered_map>
-#include <functional>
-#include <coroutine>
 #include <any>
-#include <type_traits>
+#include <coroutine>
+#include <cstdint>
 #include <cstdlib>
+#include <functional>
+#include <type_traits>
+#include <unordered_map>
 
 #include "uvent/base/Predefines.h"
 #include "uvent/system/Defines.h"
@@ -64,6 +64,8 @@ namespace usub::uvent::utils
 
         void arm_embedded(timer_duration_t dur, raw_timer_fn f, void* arg) noexcept;
 
+        void arm_raw(timer_duration_t dur, raw_timer_fn f, void* arg) noexcept;
+
     public:
         timeout_t expiryTime;
         timer_duration_t duration_ms;
@@ -80,7 +82,12 @@ namespace usub::uvent::utils
         size_t posInBucket{0};
     };
 
-    enum class OpType : uint8_t { ADD, UPDATE, REMOVE };
+    enum class OpType : uint8_t
+    {
+        ADD,
+        UPDATE,
+        REMOVE
+    };
 
     struct alignas(16) Op
     {
@@ -121,6 +128,6 @@ namespace usub::uvent::utils
 
     static_assert(std::is_trivially_copyable_v<Op>, "Op must be POD");
     static_assert(sizeof(Op) == 32, "Expect 32 bytes");
-}
+} // namespace usub::uvent::utils
 
-#endif //TIMER_H
+#endif // TIMER_H

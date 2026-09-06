@@ -15,6 +15,12 @@ Primitives:
 All operations suspend coroutines and re-schedule them through the event-loop queue (`system::this_thread::detail::q`)
 instead of blocking OS threads.
 
+Every blocking operation is **cancellation-aware**: when the task that awaits it is cancelled, the wait aborts and the
+operation reports failure (`false`, `std::nullopt`, or an empty `Guard`) instead of the acquired resource — see
+[Cancellation](cancellation.md). Waiters register in per-primitive intrusive lists embedded in the coroutine frame
+(spinlock-protected, no heap allocation per wait), which is also what makes them usable as branches of
+[`sync::select`](channels/select.md).
+
 ---
 
 ## AsyncMutex
@@ -76,7 +82,7 @@ public:
     struct LockAwaiter {
         bool await_ready() noexcept;
         bool await_suspend(std::coroutine_handle<> h) noexcept;
-        Guard await_resume() noexcept;
+        Guard await_resume() noexcept;   // empty Guard when the task was cancelled while queued
     };
 
     LockAwaiter lock() noexcept;
@@ -87,15 +93,17 @@ public:
 }
 ```
 
+`co_await mtx.lock()` returns a `Guard`; always check `owns_lock()` in cancellable code — a cancelled waiter is removed
+from the queue and receives an empty guard.
+
 ### Internal Design
 
-* Single `std::atomic<std::uintptr_t>` encodes state and waiter stack:
-
-    * `0` → unlocked
-    * `1` → locked, no waiters
-    * `ptr|1` → locked, waiter stack head
-* Waiters form an intrusive LIFO list on coroutine frames.
-* Handoff enqueues the next coroutine on the runtime queue.
+* `std::atomic<uint32_t>` lock word; the uncontended path is a single CAS.
+* Contended waiters queue in an intrusive FIFO `WaitList` (nodes live in the coroutine frame; the list spinlock is held
+  only for push/pop/remove).
+* `unlock()` hands the lock directly to the first queued waiter (no barging window) and resumes it **on the worker that
+  parked it**; with no waiters it simply stores 0.
+* Cancellation unlinks the waiter under the same lock, so a cancelled coroutine can never be resumed twice.
 
 ### Performance
 
@@ -158,15 +166,11 @@ class AsyncSemaphore {
 public:
     explicit AsyncSemaphore(int32_t initial) noexcept;
 
-    struct AcquireAwaiter {
-        bool await_ready() noexcept;
-        bool await_suspend(std::coroutine_handle<> h) noexcept;
-        void await_resume() noexcept;
-    };
-
-    AcquireAwaiter acquire() noexcept;
+    task::Awaitable<bool> acquire() noexcept;   // false => cancelled, no permit taken
     bool try_acquire() noexcept;
     void release(int32_t count = 1) noexcept;
+    int32_t available() const noexcept;
+    AcquireOp acquire_op() noexcept;            // select() branch
 };
 
 }
@@ -174,9 +178,10 @@ public:
 
 ### Internal Design
 
-* Atomic `count` plus intrusive waiter stack.
-* Acquire fast path decrements `count` with CAS; otherwise enqueues waiter.
-* Release pops waiter (handoff) or increments `count` if none present.
+* Atomic `count`; the fast path is a single CAS, contended waiters queue in a `WaitList`.
+* `release(k)` adds the permits, then wakes up to `k` queued waiters; woken waiters re-run the CAS (level-triggered), so
+  a permit consumed by a faster `try_acquire` simply re-parks the waiter.
+* Cancellation unlinks the waiter; `co_await acquire()` then returns `false` and no permit is held.
 
 ### Performance
 
@@ -246,15 +251,12 @@ class AsyncEvent {
 public:
     explicit AsyncEvent(Reset mode = Reset::Auto, bool set = false) noexcept;
 
-    struct WaitAwaiter {
-        bool await_ready() noexcept;
-        bool await_suspend(std::coroutine_handle<> h) noexcept;
-        void await_resume() noexcept;
-    };
-
-    WaitAwaiter wait() noexcept;
+    task::Awaitable<bool> wait() noexcept;      // false => cancelled
+    bool try_consume() noexcept;
+    bool is_set() const noexcept;
     void set() noexcept;
     void reset() noexcept;
+    WaitOp wait_op() noexcept;                  // select() branch
 };
 
 }
@@ -335,13 +337,10 @@ public:
     void add(int count) noexcept;
     void done() noexcept;
 
-    struct Awaiter {
-        bool await_ready() noexcept;
-        bool await_suspend(std::coroutine_handle<> h) noexcept;
-        void await_resume() noexcept;
-    };
+    int count() const noexcept;
 
-    Awaiter wait() noexcept;
+    task::Awaitable<bool> wait() noexcept;      // false => cancelled
+    WaitOp wait_op() noexcept;                  // select() branch
 };
 
 }
@@ -349,8 +348,9 @@ public:
 
 ### Internal Design
 
-* Atomic counter plus waiter stack.
-* `done()` decrements; when it hits zero, all waiters are resumed.
+* Atomic counter plus an intrusive `WaitList`.
+* `done()` decrements; when it hits zero, all waiters are resumed. Multiple concurrent waiters are all woken (the old
+  semaphore-based version woke only one).
 
 ### Performance
 
@@ -367,23 +367,27 @@ Use `WaitGroup` to join batches of coroutines without building ad-hoc barriers.
 
 ## CancellationSource / CancellationToken
 
-Lightweight cooperative cancellation for coroutines.
+Hierarchical cooperative cancellation. This section is a short reference; the full model (trees, task integration,
+which operations react and how) lives in [Cancellation](cancellation.md).
 
 ### Overview
 
-`CancellationSource` emits cancellation; `CancellationToken` is passed to tasks. Tasks periodically check
-`stop_requested()` or await `on_cancel()` to react.
+`CancellationSource` owns a node in a cancellation tree; `CancellationToken` is a cheap ref-counted handle observing
+it. Cancelling a source marks its whole subtree: child sources created from a token, and every task spawned under it
+(see [Tasks](tasks.md)).
 
 ### Features
 
-* Zero blocking; cancellation is cooperative.
-* Any number of coroutines can share the same token.
-* Immediate wake of all `on_cancel()` awaiters.
+* Zero blocking; cancellation is cooperative and never destroys a running coroutine.
+* Tokens are copyable and may outlive their source.
+* Tree propagation: `CancellationSource child{parent.token()}`.
+* `on_cancel()` wakes immediately on `request_cancel()`, from any thread.
+* Usable as a `select` branch via `on_cancel_op()`.
 
 ### Example
 
 ```cpp
-#include "uvent/sync/Cancellation.h"
+#include "uvent/sync/AsyncCancellation.h"
 #include "uvent/Uvent.h"
 #include "uvent/system/SystemContext.h"
 
@@ -396,7 +400,10 @@ static CancellationSource g_src;
 task::Awaitable<void> cancellable(CancellationToken tok)
 {
     while (!tok.stop_requested())
-        co_await system::this_coroutine::sleep_for(std::chrono::milliseconds(200));
+    {
+        if (!co_await system::this_coroutine::sleep_for(std::chrono::milliseconds(200)))
+            break;
+    }
     co_return;
 }
 
@@ -417,41 +424,46 @@ namespace usub::uvent::sync {
 
 class CancellationToken {
 public:
+    bool valid() const noexcept;
     bool stop_requested() const noexcept;
 
-    struct Awaiter {
-        bool await_ready() noexcept;
-        bool await_suspend(std::coroutine_handle<> h) noexcept;
-        void await_resume() noexcept;
-    };
-
-    Awaiter on_cancel() const noexcept;
+    OnCancelAwaiter on_cancel() const noexcept;   // co_await -> bool (false: own task cancelled first)
+    CancelOp on_cancel_op() const noexcept;       // select() branch
 };
 
 class CancellationSource {
 public:
-    CancellationToken token() noexcept;
+    CancellationSource();                                   // root
+    explicit CancellationSource(const CancellationToken&);  // child of an existing token
+    CancellationToken token() const noexcept;
     void request_cancel() noexcept;
 };
+
+CancellationToken current_token() noexcept;                 // token of the running task
 
 }
 ```
 
 ### Internal Design
 
-* Atomic `requested` flag with intrusive waiter list.
-* `request_cancel()` flips the flag and resumes all registered waiters at once.
+* Ref-counted `CancelState` nodes linked into a tree (spinlock-guarded child lists, touched only on
+  create/destroy/cancel).
+* `request_cancel()` flips the flag, wakes `on_cancel()` waiters, kicks every task in the subtree, and recurses into
+  child sources.
+* `stop_requested()` is a single relaxed atomic load.
 
 ### Performance
 
-| Scenario         | Latency  | Notes          |
-|------------------|----------|----------------|
-| stop_requested() | ~5–10 ns | Atomic load    |
-| request_cancel() | O(N)     | Resume waiters |
+| Scenario         | Latency    | Notes                      |
+|------------------|------------|----------------------------|
+| stop_requested() | ~1–5 ns    | Relaxed atomic load        |
+| token copy       | ~10 ns     | Ref-count increment        |
+| request_cancel() | O(subtree) | Wakes waiters, kicks tasks |
 
 ### Summary
 
 Use cancellation to terminate long-running coroutines, enforce deadlines, or compose `with_timeout()`-style utilities.
+For task-level cancellation prefer `JoinHandle::cancel()` / `TaskScope` — they use the same tree.
 
 ---
 

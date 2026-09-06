@@ -33,7 +33,7 @@
  * poller / timer wheel / header delete queue are thread_local. The io_uring
  * backend keeps its own teardown paths and does not stamp owner_tid.
  */
-#if defined(UVENT_ENABLE_REUSEADDR) && !defined(UVENT_ENABLE_IO_URING) && !defined(_WIN32)
+#if defined(UVENT_ENABLE_REUSEADDR) && !defined(UVENT_ENABLE_IO_URING) && defined(__linux__)
 #define UVENT_SOCKET_OWNER_FORWARDING 1
 #endif
 

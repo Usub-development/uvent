@@ -146,4 +146,5 @@ task::Awaitable<void> stage2() {
 
 * Channels are ideal for pipelines, merging, workers, schedulers, and message buses.
 * `select_recv` enables advanced concurrent orchestration without locks.
+* For heterogeneous waits (channel + timeout + cancellation token) use [`sync::select`](select.md).
 * All operations integrate directly with the `uvent` runtime and coroutine scheduler.

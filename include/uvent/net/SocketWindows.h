@@ -302,6 +302,16 @@ namespace usub::uvent::net
         void set_timeout_ms(timeout_t timeout = settings::timeout_duration_ms) const
             requires(p == Proto::TCP && r == Role::ACTIVE);
 
+        /**
+         * \brief Enables/disables TCP_NODELAY (Nagle's algorithm) on the underlying socket.
+         * Applies to any connected TCP socket regardless of which thread owns it.
+         * \return true if the option was applied.
+         * \warning Method doesn't check if socket was initialized. Please use it only after socket
+         * initialisation.
+         */
+        bool set_nodelay(bool enable = true) const noexcept
+            requires(p == Proto::TCP);
+
         std::expected<std::string, usub::utils::errors::SendError> receive(size_t chunk_size, size_t maxSize);
 
         /**
@@ -2204,6 +2214,17 @@ namespace usub::uvent::net
     }
 
     template <Proto p, Role r>
+    bool Socket<p, r>::set_nodelay(bool enable) const noexcept
+        requires(p == Proto::TCP)
+    {
+        if (!this->header_ || this->header_->fd == INVALID_FD)
+            return false;
+        const BOOL one = enable ? TRUE : FALSE;
+        return ::setsockopt(static_cast<SOCKET>(this->header_->fd), IPPROTO_TCP, TCP_NODELAY,
+                            reinterpret_cast<const char*>(&one), static_cast<int>(sizeof(one))) == 0;
+    }
+
+    template <Proto p, Role r>
     void Socket<p, r>::set_timeout_ms(timeout_t timeout) const
         requires(p == Proto::TCP && r == Role::ACTIVE)
     {
@@ -2398,11 +2419,11 @@ namespace usub::uvent::net
 
         if constexpr (p == Proto::TCP)
         {
-            int r = ::send(this->header_->fd, reinterpret_cast<const char*>(buf), static_cast<int>(size), 0);
+            int rc = ::send(this->header_->fd, reinterpret_cast<const char*>(buf), static_cast<int>(size), 0);
 #if UVENT_DEBUG
-            spdlog::trace("send_aux(tcp)(win): send r={} fd={}", r, (std::uint64_t)this->header_->fd);
+            spdlog::trace("send_aux(tcp)(win): send r={} fd={}", rc, (std::uint64_t)this->header_->fd);
 #endif
-            return (r < 0) ? static_cast<size_t>(-1) : static_cast<size_t>(r);
+            return (rc < 0) ? static_cast<size_t>(-1) : static_cast<size_t>(rc);
         }
 
         try
@@ -2412,12 +2433,12 @@ namespace usub::uvent::net
                 {
                     using T = std::decay_t<decltype(addr)>;
                     int addr_len = static_cast<int>(sizeof(T));
-                    int r = ::sendto(this->header_->fd, reinterpret_cast<const char*>(buf), static_cast<int>(size), 0,
+                    int rc = ::sendto(this->header_->fd, reinterpret_cast<const char*>(buf), static_cast<int>(size), 0,
                                      reinterpret_cast<sockaddr*>(&addr), addr_len);
 #if UVENT_DEBUG
-                    spdlog::trace("send_aux(udp)(win): sendto r={} fd={}", r, (std::uint64_t)this->header_->fd);
+                    spdlog::trace("send_aux(udp)(win): sendto r={} fd={}", rc, (std::uint64_t)this->header_->fd);
 #endif
-                    return (r < 0) ? static_cast<size_t>(-1) : static_cast<size_t>(r);
+                    return (rc < 0) ? static_cast<size_t>(-1) : static_cast<size_t>(rc);
                 },
                 this->address);
         }

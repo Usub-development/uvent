@@ -116,7 +116,7 @@ namespace usub::uvent::core
         if (this->wake_fd_ < 0)
             return;
 
-        auto* sqe = ::io_uring_get_sqe(&this->ring);
+        auto* sqe = this->get_sqe_flush();
         if (!sqe)
             return;
 
@@ -133,11 +133,22 @@ namespace usub::uvent::core
         ::io_uring_buf_ring_advance(this->buf_ring_, 1);
     }
 
+    struct io_uring_sqe* IOUringPoller::get_sqe_flush() noexcept
+    {
+        auto* sqe = ::io_uring_get_sqe(&this->ring);
+        if (!sqe)
+        {
+            ::io_uring_submit(&this->ring);
+            sqe = ::io_uring_get_sqe(&this->ring);
+        }
+        return sqe;
+    }
+
     void IOUringPoller::submit_recv_multishot(MultishotRecvOp* op, int fd)
     {
         if (!op || fd < 0 || !this->buf_ring_) return;
 
-        auto* sqe = ::io_uring_get_sqe(&this->ring);
+        auto* sqe = this->get_sqe_flush();
         if (!sqe) return;
 
         op->kind = IoOpKind::RecvMultishot;
@@ -164,7 +175,7 @@ namespace usub::uvent::core
     {
         if (!op || fd < 0) return;
 
-        auto* sqe = ::io_uring_get_sqe(&this->ring);
+        auto* sqe = this->get_sqe_flush();
         if (!sqe) return;
 
         ::io_uring_prep_recv(sqe, fd, op->buf, op->len, 0);
@@ -175,7 +186,7 @@ namespace usub::uvent::core
     {
         if (!op || fd < 0) return;
 
-        auto* sqe = ::io_uring_get_sqe(&this->ring);
+        auto* sqe = this->get_sqe_flush();
         if (!sqe) return;
 
         ::io_uring_prep_send(sqe, fd, op->buf, op->len, 0);
@@ -186,7 +197,7 @@ namespace usub::uvent::core
     {
         if (!op || fd < 0) return;
 
-        auto* sqe = ::io_uring_get_sqe(&this->ring);
+        auto* sqe = this->get_sqe_flush();
         if (!sqe) return;
 
         op->addrlen = sizeof(sockaddr_storage);
@@ -202,7 +213,7 @@ namespace usub::uvent::core
     {
         if (!op || fd < 0) return;
 
-        auto* sqe = ::io_uring_get_sqe(&this->ring);
+        auto* sqe = this->get_sqe_flush();
         if (!sqe) return;
 
         ::io_uring_prep_multishot_accept(sqe, fd, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
@@ -214,7 +225,7 @@ namespace usub::uvent::core
     {
         if (!op || out_fd < 0 || op->in_fd < 0) return;
 
-        auto* sqe = ::io_uring_get_sqe(&this->ring);
+        auto* sqe = this->get_sqe_flush();
         if (!sqe) return;
 
         io_uring_prep_splice(
@@ -233,7 +244,7 @@ namespace usub::uvent::core
     {
         if (!op || fd < 0) return;
 
-        auto* sqe = ::io_uring_get_sqe(&this->ring);
+        auto* sqe = this->get_sqe_flush();
         if (!sqe) return;
 
         ::io_uring_prep_connect(
@@ -249,7 +260,7 @@ namespace usub::uvent::core
     {
         if (!target_op) return;
 
-        auto* sqe = ::io_uring_get_sqe(&this->ring);
+        auto* sqe = this->get_sqe_flush();
         if (!sqe) return;
 
         ::io_uring_prep_cancel(sqe, target_op, 0);
@@ -347,6 +358,9 @@ namespace usub::uvent::core
             this->arm_wake();
 
         ::io_uring_submit(&this->ring);
+
+        if (this->ring.flags & IORING_SETUP_DEFER_TASKRUN)
+            ::io_uring_get_events(&this->ring);
 
 #ifndef UVENT_ENABLE_REUSEADDR
         usub::uvent::system::this_thread::detail::g_qsbr.enter();

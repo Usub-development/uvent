@@ -44,7 +44,7 @@ Requires a kernel with io_uring support (5.6+ recommended).
 include(FetchContent)
 
 FetchContent_Declare(uvent
-        GIT_REPOSITORY https://github.com/Usub-development/uvent.git
+        GIT_REPOSITORY https://github.com/Usub-Foundation/uvent.git
         GIT_TAG main
         GIT_SHALLOW TRUE
         GIT_PROGRESS TRUE
@@ -58,8 +58,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE usub::uvent)
 
 ```cmake
 FetchContent_Declare(uvent
-        GIT_REPOSITORY https://github.com/Usub-development/uvent.git
-        GIT_TAG v2.0.0
+        GIT_REPOSITORY https://github.com/Usub-Foundation/uvent.git
+        GIT_TAG main 
         GIT_SHALLOW TRUE
         GIT_PROGRESS TRUE
 )
@@ -70,7 +70,7 @@ FetchContent_Declare(uvent
 ## 2. Manual installation
 
 ```bash
-git clone https://github.com/Usub-development/uvent.git
+git clone https://github.com/Usub-Foundation/uvent.git
 cd uvent
 mkdir build && cd build
 cmake ..
@@ -100,7 +100,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(FetchContent)
 
 FetchContent_Declare(uvent
-        GIT_REPOSITORY https://github.com/Usub-development/uvent.git
+        GIT_REPOSITORY https://github.com/Usub-Foundation/uvent.git
         GIT_TAG main
         GIT_SHALLOW TRUE
         GIT_PROGRESS TRUE

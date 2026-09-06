@@ -13,10 +13,23 @@
 
 #include "Awaitable.h"
 #include "uvent/base/Predefines.h"
+#include "uvent/sync/CancelState.h"
+#include "uvent/system/StackGuard.h"
 #include "uvent/utils/datastructures/queue/FastQueue.h"
+#include "uvent/utils/datastructures/queue/IntrusiveMPSC.h"
 
 namespace usub::uvent
 {
+    namespace task
+    {
+        struct TaskStateBase;
+    }
+
+    namespace introspection::detail
+    {
+        struct Shard;
+    }
+
     namespace detail
     {
         enum DestroyingPolicy
@@ -29,12 +42,18 @@ namespace usub::uvent
         {
         };
 
+        struct local_frame_tag
+        {
+        };
+
         template <class T>
         using no_cvr_t = std::remove_cv_t<std::remove_reference_t<T>>;
         template <class F>
         concept DeferredFrame = std::derived_from<no_cvr_t<F>, deferred_task_tag>;
+        template <class F>
+        concept LocalFrame = std::derived_from<no_cvr_t<F>, local_frame_tag>;
 
-        class AwaitableFrameBase
+        class AwaitableFrameBase : public queue::concurrent::MPSCNode
         {
         public:
             template <class, class>
@@ -72,15 +91,110 @@ namespace usub::uvent
 
             void set_thread_id(int t_id) { this->t_id_ = t_id; }
 
+            using cancel_fn_t = void (*)(AwaitableFrameBase*, void*);
+
+            [[nodiscard]] sync::CancelState* cancel_state() const noexcept { return this->cancel_; }
+
+            void set_cancel_state(sync::CancelState* s) noexcept { this->cancel_ = s; }
+
+            [[nodiscard]] task::TaskStateBase* task_state() const noexcept { return this->task_; }
+
+            void set_task_state(task::TaskStateBase* t) noexcept { this->task_ = t; }
+
+            [[nodiscard]] bool cancel_requested() const noexcept
+            {
+                return this->cancel_ && this->cancel_->requested.load(std::memory_order_relaxed);
+            }
+
+            bool arm_cancel(cancel_fn_t fn, void* arg, const char* reason) noexcept
+            {
+                this->cancel_fn_ = fn;
+                this->cancel_arg_ = arg;
+                this->wait_reason_ = reason;
+#ifdef UVENT_TASK_INTROSPECTION
+                this->stamp_wait_time();
+#endif
+                return this->cancel_requested();
+            }
+
+            void disarm_cancel() noexcept
+            {
+                this->cancel_fn_ = nullptr;
+                this->wait_reason_ = nullptr;
+            }
+
+            void run_cancel_hook() noexcept
+            {
+                if (auto fn = std::exchange(this->cancel_fn_, nullptr))
+                    fn(this, this->cancel_arg_);
+            }
+
+            [[nodiscard]] bool has_cancel_hook() const noexcept { return this->cancel_fn_ != nullptr; }
+
+            void detach_from_task() noexcept
+            {
+                this->cancel_ = nullptr;
+                this->task_ = nullptr;
+            }
+
+            [[nodiscard]] const char* wait_reason() const noexcept { return this->wait_reason_; }
+
+            [[nodiscard]] const char* name() const noexcept { return this->name_; }
+
+            void set_name(const char* n) noexcept { this->name_ = n; }
+
+            [[nodiscard]] uint64_t trace_id() const noexcept { return this->trace_id_; }
+
+            void set_trace_id(uint64_t id) noexcept { this->trace_id_ = id; }
+
+            [[nodiscard]] std::coroutine_handle<> prev_handle() const noexcept { return this->prev_; }
+
+            [[nodiscard]] std::coroutine_handle<> next_handle() const noexcept { return this->next_; }
+
+            void on_loop_resume() noexcept
+            {
+                this->cancel_fn_ = nullptr;
+                this->wait_reason_ = nullptr;
+            }
+
+#ifdef UVENT_TASK_INTROSPECTION
+            void stamp_wait_time() noexcept;
+
+            [[nodiscard]] uint64_t created_ns() const noexcept { return this->created_ns_; }
+
+            [[nodiscard]] uint64_t wait_since_ns() const noexcept { return this->wait_since_ns_; }
+#endif
+
         protected:
-            ~AwaitableFrameBase() = default;
+            ~AwaitableFrameBase();
 
             std::exception_ptr exception_{nullptr};
             std::coroutine_handle<> coro_{nullptr};
             std::coroutine_handle<> prev_{nullptr};
             std::coroutine_handle<> next_{nullptr};
             int t_id_{0};
+            sync::CancelState* cancel_{nullptr};
+            task::TaskStateBase* task_{nullptr};
+            cancel_fn_t cancel_fn_{nullptr};
+            void* cancel_arg_{nullptr};
+            const char* wait_reason_{nullptr};
+            const char* name_{nullptr};
+            uint64_t trace_id_{0};
+#ifdef UVENT_TASK_INTROSPECTION
+
+        public:
+            AwaitableFrameBase* reg_prev_{nullptr};
+            AwaitableFrameBase* reg_next_{nullptr};
+            introspection::detail::Shard* reg_shard_{nullptr};
+            uint64_t created_ns_{0};
+            uint64_t wait_since_ns_{0};
+#endif
         };
+
+        inline AwaitableFrameBase& frame_of(std::coroutine_handle<> h) noexcept
+        {
+            return std::coroutine_handle<AwaitableFrameBase>::from_address(h.address()).promise();
+        }
 
         struct FinalAwaiter
         {
@@ -182,13 +296,107 @@ namespace usub::uvent
             std::suspend_always yield_value() noexcept;
         };
 
+        template <class T>
+        class LocalAwaitableFrame final : public AwaitableFrame<T>, public local_frame_tag
+        {
+        public:
+            auto get_return_object()
+            {
+                this->coro_ = std::coroutine_handle<LocalAwaitableFrame>::from_promise(*this);
+                return task::Awaitable<T, LocalAwaitableFrame>{this};
+            }
+        };
+
+        template <>
+        class LocalAwaitableFrame<void> final : public AwaitableFrame<void>, public local_frame_tag
+        {
+        public:
+            auto get_return_object()
+            {
+                this->coro_ = std::coroutine_handle<LocalAwaitableFrame>::from_promise(*this);
+                return task::Awaitable<void, LocalAwaitableFrame>{this};
+            }
+        };
+
+        class IOFramePool
+        {
+            static constexpr std::size_t kClass = 64;
+            static constexpr std::size_t kMaxSize = 1024;
+            static constexpr std::size_t kClasses = kMaxSize / kClass;
+            static constexpr std::size_t kMaxCached = 4096; // per class; excess goes back to malloc
+
+            struct Node
+            {
+                Node* next;
+            };
+
+            Node* heads_[kClasses]{};
+            std::size_t counts_[kClasses]{};
+
+            static constexpr std::size_t class_of(std::size_t sz) noexcept { return (sz + kClass - 1) / kClass; }
+
+        public:
+            static IOFramePool& local() noexcept
+            {
+                thread_local IOFramePool pool;
+                return pool;
+            }
+
+            void* allocate(std::size_t sz)
+            {
+                const std::size_t cls = class_of(sz);
+                if (cls == 0 || cls > kClasses)
+                    return ::operator new(sz);
+                Node*& head = this->heads_[cls - 1];
+                if (head)
+                {
+                    Node* n = head;
+                    head = n->next;
+                    --this->counts_[cls - 1];
+                    return n;
+                }
+                return ::operator new(cls * kClass);
+            }
+
+            void deallocate(void* p, std::size_t sz) noexcept
+            {
+                const std::size_t cls = class_of(sz);
+                if (cls == 0 || cls > kClasses || this->counts_[cls - 1] >= kMaxCached)
+                {
+                    ::operator delete(p);
+                    return;
+                }
+                auto* n = static_cast<Node*>(p);
+                n->next = this->heads_[cls - 1];
+                this->heads_[cls - 1] = n;
+                ++this->counts_[cls - 1];
+            }
+
+            ~IOFramePool()
+            {
+                for (Node* head : this->heads_)
+                    while (head)
+                    {
+                        Node* n = head;
+                        head = n->next;
+                        ::operator delete(n);
+                    }
+            }
+        };
+
         template <typename T>
-        class AwaitableIOFrame : public AwaitableFrameBase, public deferred_task_tag
+        class AwaitableIOFrame : public AwaitableFrameBase, public deferred_task_tag, public local_frame_tag
         {
         public:
             AwaitableIOFrame() noexcept = default;
 
             ~AwaitableIOFrame();
+
+#ifndef UVENT_NO_IO_FRAME_POOL
+            static void* operator new(std::size_t sz) { return IOFramePool::local().allocate(sz); }
+            static void operator delete(void* p, std::size_t sz) noexcept { IOFramePool::local().deallocate(p, sz); }
+            static void operator delete(void* p) noexcept { ::operator delete(p); }
+#endif
 
             void unhandled_exception() { this->exception_ = std::current_exception(); }
 
@@ -288,6 +496,9 @@ namespace usub::uvent
 
     namespace task
     {
+        template <class T>
+        using LocalAwaitable = Awaitable<T, detail::LocalAwaitableFrame<T>>;
+
         template <class FrameType>
         template <class U>
         std::coroutine_handle<> Awaitable<void, FrameType>::await_suspend(std::coroutine_handle<U> h)
@@ -298,11 +509,20 @@ namespace usub::uvent
             auto child = this->frame_->get_coroutine_handle();
             p.set_next_coroutine(child);
             this->frame_->set_calling_coroutine(h);
+            this->frame_->set_cancel_state(p.cancel_state());
+            this->frame_->set_trace_id(p.trace_id());
 
             if constexpr (!detail::DeferredFrame<FrameType>)
             {
                 if (child && !child.done())
+                {
+                    if (system::stack_guard::stack_too_deep()) [[unlikely]]
+                    {
+                        detail::AwaitableFrameBase::push_frame_into_task_queue(child);
+                        return std::noop_coroutine();
+                    }
                     return child;
+                }
             }
             return std::noop_coroutine();
         }
@@ -316,11 +536,20 @@ namespace usub::uvent
             auto child = this->frame_->get_coroutine_handle();
             p.set_next_coroutine(child);
             this->frame_->set_calling_coroutine(h);
+            this->frame_->set_cancel_state(p.cancel_state());
+            this->frame_->set_trace_id(p.trace_id());
 
             if constexpr (!detail::DeferredFrame<FrameType>)
             {
                 if (child && !child.done())
+                {
+                    if (system::stack_guard::stack_too_deep()) [[unlikely]]
+                    {
+                        detail::AwaitableFrameBase::push_frame_into_task_queue(child);
+                        return std::noop_coroutine();
+                    }
                     return child;
+                }
             }
             return std::noop_coroutine();
         }

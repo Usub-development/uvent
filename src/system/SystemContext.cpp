@@ -37,6 +37,9 @@ namespace usub::uvent::system
         thread_local std::coroutine_handle<> cec{nullptr};
         thread_local queue::single_thread::Queue<std::coroutine_handle<>> q;
         thread_local int t_id{-1};
+        thread_local sync::CancelState* current_cancel{nullptr};
+        thread_local uint64_t current_trace{0};
+        thread_local int32_t coop_left{INT32_MAX};
         thread_local queue::single_thread::Queue<std::coroutine_handle<>> q_c =
             queue::single_thread::Queue<std::coroutine_handle<>>();
 #ifndef UVENT_ENABLE_REUSEADDR
@@ -50,5 +53,42 @@ namespace usub::uvent::system
 #else
         bool is_started{false};
 #endif
-    }
-}
+    } // namespace this_thread::detail
+
+    namespace this_coroutine
+    {
+        void set_trace_id(uint64_t id) noexcept
+        {
+            this_thread::detail::current_trace = id;
+            auto cec = this_thread::detail::cec;
+            if (!cec)
+                return;
+            auto* f = &uvent::detail::frame_of(cec);
+            for (auto* up = f;;)
+            {
+                up->set_trace_id(id);
+                auto prev = up->prev_handle();
+                if (!prev)
+                    break;
+                up = &uvent::detail::frame_of(prev);
+            }
+            for (auto next = f->next_handle(); next;)
+            {
+                auto* down = &uvent::detail::frame_of(next);
+                down->set_trace_id(id);
+                next = down->next_handle();
+            }
+        }
+
+        void set_name(const char* n) noexcept
+        {
+            auto cec = this_thread::detail::cec;
+            if (!cec)
+                return;
+            auto* f = &uvent::detail::frame_of(cec);
+            while (auto next = f->next_handle())
+                f = &uvent::detail::frame_of(next);
+            f->set_name(n);
+        }
+    } // namespace this_coroutine
+} // namespace usub::uvent::system

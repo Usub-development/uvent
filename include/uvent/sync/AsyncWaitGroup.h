@@ -3,44 +3,77 @@
 
 #include <atomic>
 #include <coroutine>
+#include <variant>
 
-#include "uvent/sync/AsyncSemaphore.h"
+#include "uvent/sync/SyncCommon.h"
+#include "uvent/sync/Wait.h"
+#include "uvent/sync/WaitList.h"
 
-namespace usub::uvent::sync {
+namespace usub::uvent::sync
+{
 
-    class WaitGroup {
-        std::atomic<int>   cnt_{0};
-        AsyncSemaphore     sem_{0};
+    class WaitGroup
+    {
+        std::atomic<int> cnt_{0};
+        WaitList waiters_;
 
     public:
-        void add(int n) noexcept {
-            cnt_.fetch_add(n, std::memory_order_relaxed);
+        void add(int n) noexcept { this->cnt_.fetch_add(n, std::memory_order_relaxed); }
+
+        [[nodiscard]] int count() const noexcept { return this->cnt_.load(std::memory_order_acquire); }
+
+        void done() noexcept
+        {
+            if (this->cnt_.fetch_sub(1, std::memory_order_seq_cst) != 1)
+                return;
+            detail::notify_fence();
+            if (this->waiters_.empty_relaxed())
+                return;
+            this->waiters_.lock();
+            while (Waiter* w = this->waiters_.pop_front_locked())
+                detail::fire_waiter(w);
+            this->waiters_.unlock();
         }
 
-        void done() noexcept {
-            int v = cnt_.fetch_sub(1, std::memory_order_acq_rel) - 1;
-            if (v == 0)
-                sem_.release(1);
-        }
+        struct WaitOp
+        {
+            WaitGroup* g;
 
-        struct Awaiter {
-            WaitGroup* self;
+            using result_type = std::monostate;
 
-            bool await_ready() noexcept {
-                return self->cnt_.load(std::memory_order_acquire) == 0;
+            static const char* wait_reason() noexcept { return "waitgroup.wait"; }
+
+            bool try_complete(std::monostate&) const noexcept { return g->cnt_.load(std::memory_order_acquire) == 0; }
+
+            bool attach(Waiter* w) noexcept
+            {
+                g->waiters_.lock();
+                g->waiters_.push_locked(w);
+                g->waiters_.unlock();
+                detail::notify_fence();
+                return g->cnt_.load(std::memory_order_seq_cst) != 0;
             }
 
-            bool await_suspend(std::coroutine_handle<> h) noexcept {
-                if (self->cnt_.load(std::memory_order_acquire) == 0)
-                    return false;
-                auto a = self->sem_.acquire();
-                return a.await_suspend(h);
-            }
+            bool detach(Waiter* w) noexcept { return g->waiters_.remove(w); }
 
-            void await_resume() noexcept {}
+            void finalize() noexcept {}
         };
 
-        Awaiter wait() noexcept { return Awaiter{this}; }
+        [[nodiscard]] WaitOp wait_op() noexcept { return WaitOp{this}; }
+
+        task::Awaitable<bool> wait() noexcept
+        {
+            for (;;)
+            {
+                WaitOp op{this};
+                std::monostate m;
+                if (op.try_complete(m))
+                    co_return true;
+                OpWait<WaitOp> w{&op};
+                if (!co_await w)
+                    co_return false;
+            }
+        }
     };
 
 } // namespace usub::uvent::sync

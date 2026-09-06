@@ -69,7 +69,7 @@ namespace usub::uvent::net
         UVENT_ALWAYS_INLINE_FN bool is_foreign_owner(const SocketHeader* h) noexcept
         {
             return h->owner_tid >= 0 && h->owner_tid != system::this_thread::detail::t_id &&
-                   system::global::detail::tls_registry != nullptr;
+                system::global::detail::tls_registry != nullptr;
         }
 
         UVENT_ALWAYS_INLINE_FN void forward_socket_op(thread::SocketOp::Kind kind, SocketHeader* h,
@@ -93,7 +93,7 @@ namespace usub::uvent::net
         /// Applied by the owner in its event loop (Thread::processSocketOps).
         void apply_socket_op(const thread::SocketOp& op) noexcept;
 #endif
-    }
+    } // namespace detail
 
     template <Proto p, Role r>
     class Socket : usub::utils::sync::refc::RefCounted<Socket<p, r>>
@@ -122,7 +122,8 @@ namespace usub::uvent::net
          * \brief Constructs a passive TCP socket bound to given address/port (lvalue ip).
          * Used for listening sockets (bind + listen).
          */
-        explicit Socket(std::string& ip_addr, int port = 8080, int backlog = SOMAXCONN, utils::net::IPV ipv = utils::net::IPV4,
+        explicit Socket(std::string& ip_addr, int port = 8080, int backlog = SOMAXCONN,
+                        utils::net::IPV ipv = utils::net::IPV4,
                         utils::net::SocketAddressType socketAddressType = utils::net::TCP) noexcept
             requires(p == Proto::TCP && r == Role::PASSIVE);
 
@@ -319,6 +320,16 @@ namespace usub::uvent::net
         void set_timeout_ms(timeout_t timeout = settings::timeout_duration_ms) const
             requires(p == Proto::TCP && r == Role::ACTIVE);
 
+        /**
+         * \brief Enables/disables TCP_NODELAY (Nagle's algorithm) on the underlying socket.
+         * Applies to any connected TCP socket regardless of which thread owns it.
+         * \return true if the option was applied.
+         * \warning Method doesn't check if socket was initialized. Please use it only after socket
+         * initialisation.
+         */
+        bool set_nodelay(bool enable = true) const noexcept
+            requires(p == Proto::TCP);
+
         std::expected<std::string, usub::utils::errors::SendError> receive(size_t chunk_size, size_t maxSize);
 
         /**
@@ -400,8 +411,7 @@ namespace usub::uvent::net
         this->header_ =
             new SocketHeader{.fd = utils::socket::createSocket(port, ip_addr, backlog, ipv, socketAddressType),
                              .socket_info = (uint8_t(p) | uint8_t(r)),
-                             .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))
-            };
+                             .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))};
         utils::socket::makeSocketNonBlocking(this->header_->fd);
         system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::READ);
     }
@@ -414,8 +424,7 @@ namespace usub::uvent::net
         this->header_ =
             new SocketHeader{.fd = utils::socket::createSocket(port, ip_addr, backlog, ipv, socketAddressType),
                              .socket_info = (static_cast<uint8_t>(p) | static_cast<uint8_t>(r)),
-                             .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))
-            };
+                             .state = std::atomic<uint64_t>((1ull & usub::utils::sync::refc::COUNT_MASK))};
         utils::socket::makeSocketNonBlocking(this->header_->fd);
         system::this_thread::detail::pl.addEvent(this->header_, core::OperationType::READ);
     }
@@ -427,7 +436,8 @@ namespace usub::uvent::net
         {
             this->release();
 #if UVENT_DEBUG
-            spdlog::warn("Socket counter: {}, fd: {}", (this->header_->state.load(std::memory_order_acquire) & usub::utils::sync::refc::COUNT_MASK),
+            spdlog::warn("Socket counter: {}, fd: {}",
+                         (this->header_->state.load(std::memory_order_acquire) & usub::utils::sync::refc::COUNT_MASK),
                          this->header_->fd);
 #endif
         }
@@ -533,6 +543,8 @@ namespace usub::uvent::net
             case EAGAIN: // same for EWOULDBLOCK (EWOULDBLOCK = EAGAIN = 11)
                 this->header_->disarm_read();
                 co_await detail::AwaiterAccept{this->header_};
+                if (system::this_coroutine::cancel_requested()) [[unlikely]]
+                    co_return std::nullopt;
                 continue;
 
             case ENOBUFS:
@@ -545,6 +557,8 @@ namespace usub::uvent::net
 #endif
                 this->header_->disarm_read();
                 co_await detail::AwaiterAccept{this->header_};
+                if (system::this_coroutine::cancel_requested()) [[unlikely]]
+                    co_return std::nullopt;
                 continue;
 
             case EBADF:
@@ -643,6 +657,8 @@ namespace usub::uvent::net
         suspend:
             this->header_->disarm_read();
             co_await detail::AwaiterAccept{this->header_};
+            if (system::this_coroutine::cancel_requested()) [[unlikely]]
+                co_return;
         }
     }
 
@@ -653,6 +669,9 @@ namespace usub::uvent::net
     {
         if (max_read_size == 0)
             co_return 0;
+
+        if (!system::coop::consume()) [[unlikely]]
+            co_await system::this_coroutine::yield();
 
         int retries = 0;
 
@@ -690,6 +709,11 @@ namespace usub::uvent::net
                 {
                     this->header_->disarm_read();
                     co_await detail::AwaiterRead{this->header_};
+                    if (system::this_coroutine::cancel_requested()) [[unlikely]]
+                    {
+                        errno = ECANCELED;
+                        co_return -1;
+                    }
                     continue;
                 }
 
@@ -718,6 +742,13 @@ namespace usub::uvent::net
                         buffer.commit(static_cast<size_t>(res));
                         total_read += res;
                         retries = 0;
+                        if (static_cast<size_t>(res) < to_read)
+                        {
+#ifndef UVENT_ENABLE_REUSEADDR
+                            this->header_->timeout_epoch_bump();
+#endif
+                            co_return total_read;
+                        }
                         continue;
                     }
 
@@ -755,6 +786,11 @@ namespace usub::uvent::net
 
                         this->header_->disarm_read();
                         co_await detail::AwaiterRead{this->header_};
+                        if (system::this_coroutine::cancel_requested()) [[unlikely]]
+                        {
+                            errno = ECANCELED;
+                            co_return -1;
+                        }
                         break;
                     }
 
@@ -784,6 +820,9 @@ namespace usub::uvent::net
     {
         if (!dst || max_read_size == 0)
             co_return 0;
+
+        if (!system::coop::consume()) [[unlikely]]
+            co_await system::this_coroutine::yield();
 
         int retries = 0;
 
@@ -818,6 +857,11 @@ namespace usub::uvent::net
                 {
                     this->header_->disarm_read();
                     co_await detail::AwaiterRead{this->header_};
+                    if (system::this_coroutine::cancel_requested()) [[unlikely]]
+                    {
+                        errno = ECANCELED;
+                        co_return -1;
+                    }
                     continue;
                 }
 
@@ -843,6 +887,13 @@ namespace usub::uvent::net
                         out += static_cast<size_t>(res);
                         total_read += res;
                         retries = 0;
+                        if (static_cast<size_t>(res) < remaining)
+                        {
+#ifndef UVENT_ENABLE_REUSEADDR
+                            this->header_->timeout_epoch_bump();
+#endif
+                            co_return total_read;
+                        }
                         continue;
                     }
 
@@ -880,6 +931,11 @@ namespace usub::uvent::net
 
                         this->header_->disarm_read();
                         co_await detail::AwaiterRead{this->header_};
+                        if (system::this_coroutine::cancel_requested()) [[unlikely]]
+                        {
+                            errno = ECANCELED;
+                            co_return -1;
+                        }
                         break;
                     }
 
@@ -915,6 +971,9 @@ namespace usub::uvent::net
             co_return 0;
         }
 
+        if (!system::coop::consume()) [[unlikely]]
+            co_await system::this_coroutine::yield();
+
         if constexpr (p == Proto::UDP)
         {
             int retries = 0;
@@ -939,6 +998,11 @@ namespace usub::uvent::net
                 {
                     this->header_->disarm_write();
                     co_await detail::AwaiterWrite{this->header_};
+                    if (system::this_coroutine::cancel_requested()) [[unlikely]]
+                    {
+                        errno = ECANCELED;
+                        co_return -1;
+                    }
                     continue;
                 }
                 co_return -1;
@@ -986,6 +1050,11 @@ namespace usub::uvent::net
 #endif
                     this->header_->disarm_write();
                     co_await detail::AwaiterWrite{this->header_};
+                    if (system::this_coroutine::cancel_requested()) [[unlikely]]
+                    {
+                        errno = ECANCELED;
+                        co_return -1;
+                    }
                     continue;
                 }
                 co_return -1;
@@ -1138,6 +1207,13 @@ namespace usub::uvent::net
 
         co_await detail::AwaiterWrite{this->header_};
 
+        if (system::this_coroutine::cancel_requested()) [[unlikely]]
+        {
+            ::close(this->header_->fd);
+            this->header_->fd = -1;
+            co_return usub::utils::errors::ConnectError::Cancelled;
+        }
+
         if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
         {
             ::close(this->header_->fd);
@@ -1233,6 +1309,13 @@ namespace usub::uvent::net
 
         co_await detail::AwaiterWrite{this->header_};
 
+        if (system::this_coroutine::cancel_requested()) [[unlikely]]
+        {
+            ::close(this->header_->fd);
+            this->header_->fd = -1;
+            co_return usub::utils::errors::ConnectError::Cancelled;
+        }
+
         if (this->header_->socket_info & static_cast<uint8_t>(AdditionalState::CONNECTION_FAILED))
         {
             ::close(this->header_->fd);
@@ -1294,8 +1377,8 @@ namespace usub::uvent::net
 
                 if constexpr (p == Proto::TCP)
                 {
-                    res = ::send(this->header_->fd, buf + total_written,
-                                 sz - static_cast<size_t>(total_written), MSG_DONTWAIT | MSG_NOSIGNAL);
+                    res = ::send(this->header_->fd, buf + total_written, sz - static_cast<size_t>(total_written),
+                                 MSG_DONTWAIT | MSG_NOSIGNAL);
                 }
                 else
                 {
@@ -1366,6 +1449,11 @@ namespace usub::uvent::net
 
             this->header_->disarm_write();
             co_await detail::AwaiterWrite{this->header_};
+            if (system::this_coroutine::cancel_requested()) [[unlikely]]
+            {
+                this->remove();
+                co_return std::unexpected(usub::utils::errors::SendError::Cancelled);
+            }
         }
 
     send_done:
@@ -1396,6 +1484,11 @@ namespace usub::uvent::net
         requires((p == Proto::TCP && r == Role::ACTIVE) || (p == Proto::UDP))
     {
         co_await detail::AwaiterWrite{this->header_};
+        if (system::this_coroutine::cancel_requested()) [[unlikely]]
+        {
+            errno = ECANCELED;
+            co_return -1;
+        }
         if (this->is_disconnected_now())
             co_return -3;
 
@@ -1493,6 +1586,17 @@ namespace usub::uvent::net
     }
 
     template <Proto p, Role r>
+    bool Socket<p, r>::set_nodelay(bool enable) const noexcept
+        requires(p == Proto::TCP)
+    {
+        if (!this->header_ || this->header_->fd == INVALID_FD)
+            return false;
+        const int one = enable ? 1 : 0;
+        return ::setsockopt(this->header_->fd, IPPROTO_TCP, TCP_NODELAY, &one, static_cast<socklen_t>(sizeof(one))) ==
+            0;
+    }
+
+    template <Proto p, Role r>
     void Socket<p, r>::set_timeout_ms(timeout_t timeout) const
         requires(p == Proto::TCP && r == Role::ACTIVE)
     {
@@ -1542,13 +1646,14 @@ namespace usub::uvent::net
         detail::arm_or_refresh_socket_timer(this->header_, static_cast<uint64_t>(timeout));
 #else
         auto* timer = &this->header_->timer;
-        timer->arm_embedded(timeout,
-                            [](void* hp)
-                            {
-                                std::any a{static_cast<SocketHeader*>(hp)};
-                                detail::processSocketTimeout(a);
-                            },
-                            this->header_);
+        timer->arm_embedded(
+            timeout,
+            [](void* hp)
+            {
+                std::any a{static_cast<SocketHeader*>(hp)};
+                detail::processSocketTimeout(a);
+            },
+            this->header_);
         this->header_->timer_id = system::this_thread::detail::wh.addTimer(timer);
 #endif
     }
