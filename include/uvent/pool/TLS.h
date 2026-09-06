@@ -76,6 +76,13 @@ namespace usub::uvent::thread
 
         void set_poller(core::PollerImpl* p) noexcept { this->poller_.store(p, std::memory_order_release); }
 
+        /**
+         * \brief Unregister the poller before the worker destroys it (thread exit).
+         *        Blocks until every concurrent wake that already grabbed the pointer has finished,
+         *        so nobody writes to a closed wake fd.
+         */
+        void unset_poller() noexcept;
+
         void wake_poller() noexcept;
 
     private:
@@ -88,6 +95,9 @@ namespace usub::uvent::thread
         std::atomic_bool has_sock_ops_{false};
 #endif
         std::atomic<core::PollerImpl*> poller_{nullptr};
+        std::atomic<int> wake_inflight_{0};
+
+        void kick_poller() noexcept;
     };
 } // namespace usub::uvent::thread
 
