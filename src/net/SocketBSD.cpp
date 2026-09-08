@@ -27,8 +27,8 @@ namespace usub::uvent::net::detail
         }
         header->mark_disconnected();
 #endif
-        auto r = std::exchange(header->first, nullptr);
-        auto w = std::exchange(header->second, nullptr);
+        auto r = header->take_read_waiter();
+        auto w = header->take_write_waiter();
 #ifndef UVENT_ENABLE_REUSEADDR
         header->clear_busy();
 #endif

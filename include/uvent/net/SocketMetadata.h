@@ -70,7 +70,29 @@ namespace usub::uvent::net
          */
         std::atomic<uint64_t> timer_id{0};
         uint8_t socket_info;
-        std::coroutine_handle<> first, second;
+        /**
+         * \brief Read / write wake-up words: exactly one of
+         *          0        — idle: no waiter, no pending readiness,
+         *          READY    — the poller saw an edge and nobody was parked (a hint:
+         *                     "probe again before you park"),
+         *          <handle> — a parked continuation (frame address, READY bit clear).
+         *
+         * One atomic word per direction makes "publish the waiter" and "read the
+         * hint" a single CAS, so the classic lost wake-up between a coroutine on
+         * worker A and the owner's poller on worker B cannot happen:
+         *   poller  : prev = rd.exchange(READY); if prev is a handle -> resume it
+         *   waiter  : CAS(0 -> handle) parks; if the word is READY the waiter consumes
+         *             it (CAS READY -> 0) and does not park at all
+         *   consumer: disarm_read() (CAS READY -> 0) BEFORE the probe (recv/accept/
+         *             FIONREAD), never after it — a hint cleared after the probe would
+         *             erase an edge that landed in between and the coroutine would
+         *             sleep on data already in the kernel.
+         * After a successful publish the waiter touches neither the frame nor the
+         * header again: another worker may resume (and even finish) the coroutine
+         * the very next instant.
+         */
+        std::atomic<uintptr_t> rd{0}, wr{0};
+        static constexpr uintptr_t READY = 1;
         utils::Timer timer{0};
 #ifdef UVENT_ENABLE_IO_URING
         void* read_op{nullptr};
@@ -243,42 +265,116 @@ namespace usub::uvent::net
             return (this->state.load(std::memory_order_acquire) & DISCONNECTED_MASK) != 0;
         }
 
-        UVENT_ALWAYS_INLINE_FN void mark_read_pending() noexcept
+        static UVENT_ALWAYS_INLINE_FN std::coroutine_handle<> handle_of(uintptr_t w) noexcept
         {
-            using namespace usub::utils::sync::refc;
-            this->state.fetch_or(READ_PENDING_MASK, std::memory_order_release);
+            return (w & ~READY) ? std::coroutine_handle<>::from_address(reinterpret_cast<void*>(w & ~READY))
+                                : std::coroutine_handle<>{};
         }
 
-        UVENT_ALWAYS_INLINE_FN void mark_write_pending() noexcept
+        /// Poller: an edge arrived. Leaves READY set and returns the parked waiter, if any.
+        UVENT_ALWAYS_INLINE_FN std::coroutine_handle<> fire_read() noexcept
         {
-            using namespace usub::utils::sync::refc;
-            this->state.fetch_or(WRITE_PENDING_MASK, std::memory_order_release);
+            return handle_of(this->rd.exchange(READY, std::memory_order_seq_cst));
         }
 
-        UVENT_ALWAYS_INLINE_FN bool is_read_armed() const noexcept
+        UVENT_ALWAYS_INLINE_FN std::coroutine_handle<> fire_write() noexcept
         {
-            using namespace usub::utils::sync::refc;
-            return (this->state.load(std::memory_order_acquire) & READ_PENDING_MASK) != 0;
+            return handle_of(this->wr.exchange(READY, std::memory_order_seq_cst));
         }
 
-        UVENT_ALWAYS_INLINE_FN bool is_write_armed() const noexcept
+        /// Timeout / teardown: detach the parked waiter (READY hint dropped as well).
+        UVENT_ALWAYS_INLINE_FN std::coroutine_handle<> take_read_waiter() noexcept
         {
-            using namespace usub::utils::sync::refc;
-            return (this->state.load(std::memory_order_acquire) & WRITE_PENDING_MASK) != 0;
+            return handle_of(this->rd.exchange(0, std::memory_order_seq_cst));
+        }
+
+        UVENT_ALWAYS_INLINE_FN std::coroutine_handle<> take_write_waiter() noexcept
+        {
+            return handle_of(this->wr.exchange(0, std::memory_order_seq_cst));
+        }
+
+        /**
+         * \brief Waiter: park \p h. Returns true if parked (the poller / cancel hook
+         *        will resume it), false if a READY hint was consumed instead and the
+         *        caller must resume \p h itself (or just continue).
+         */
+        UVENT_ALWAYS_INLINE_FN bool park_read(std::coroutine_handle<> h) noexcept
+        {
+            return park(this->rd, h);
+        }
+
+        UVENT_ALWAYS_INLINE_FN bool park_write(std::coroutine_handle<> h) noexcept
+        {
+            return park(this->wr, h);
+        }
+
+        /// Cancel hook: un-park exactly this waiter. True if we own its resume.
+        UVENT_ALWAYS_INLINE_FN bool unpark_read(std::coroutine_handle<> h) noexcept
+        {
+            uintptr_t e = reinterpret_cast<uintptr_t>(h.address());
+            return this->rd.compare_exchange_strong(e, 0, std::memory_order_seq_cst, std::memory_order_seq_cst);
+        }
+
+        UVENT_ALWAYS_INLINE_FN bool unpark_write(std::coroutine_handle<> h) noexcept
+        {
+            uintptr_t e = reinterpret_cast<uintptr_t>(h.address());
+            return this->wr.compare_exchange_strong(e, 0, std::memory_order_seq_cst, std::memory_order_seq_cst);
+        }
+
+        /// Consumer-side hint check / clear. disarm_* must run BEFORE the readiness probe.
+        [[nodiscard]] UVENT_ALWAYS_INLINE_FN bool is_read_armed() const noexcept
+        {
+            return (this->rd.load(std::memory_order_seq_cst) & READY) != 0;
+        }
+
+        [[nodiscard]] UVENT_ALWAYS_INLINE_FN bool is_write_armed() const noexcept
+        {
+            return (this->wr.load(std::memory_order_seq_cst) & READY) != 0;
         }
 
         UVENT_ALWAYS_INLINE_FN void disarm_read() noexcept
         {
-            using namespace usub::utils::sync::refc;
-            this->state.fetch_and(~READ_PENDING_MASK, std::memory_order_release);
+            uintptr_t e = READY;
+            this->rd.compare_exchange_strong(e, 0, std::memory_order_seq_cst, std::memory_order_seq_cst);
         }
 
         UVENT_ALWAYS_INLINE_FN void disarm_write() noexcept
         {
-            using namespace usub::utils::sync::refc;
-            this->state.fetch_and(~WRITE_PENDING_MASK, std::memory_order_release);
+            uintptr_t e = READY;
+            this->wr.compare_exchange_strong(e, 0, std::memory_order_seq_cst, std::memory_order_seq_cst);
         }
 
+        /// Kept for callers that used the old hint API: same as the poller's edge without a waiter.
+        UVENT_ALWAYS_INLINE_FN void mark_read_pending() noexcept { (void)this->fire_read(); }
+        UVENT_ALWAYS_INLINE_FN void mark_write_pending() noexcept { (void)this->fire_write(); }
+
+    private:
+        static UVENT_ALWAYS_INLINE_FN bool park(std::atomic<uintptr_t>& word, std::coroutine_handle<> h) noexcept
+        {
+            const uintptr_t me = reinterpret_cast<uintptr_t>(h.address());
+            uintptr_t cur = word.load(std::memory_order_seq_cst);
+            for (;;)
+            {
+                if (cur & READY)
+                {
+                    // An edge landed since the consumer's probe: consume the hint, do not park.
+                    if (word.compare_exchange_weak(cur, 0, std::memory_order_seq_cst, std::memory_order_seq_cst))
+                        return false;
+                    continue;
+                }
+                if (cur == 0)
+                {
+                    if (word.compare_exchange_weak(cur, me, std::memory_order_seq_cst, std::memory_order_seq_cst))
+                        return true;
+                    continue;
+                }
+                // Another continuation is already parked on this direction: unsupported
+                // (one reader + one writer per socket), keep the old one and treat ours as parked.
+                return true;
+            }
+        }
+
+    public:
         [[nodiscard]] UVENT_ALWAYS_INLINE_FN uint64_t timeout_epoch_snapshot() const noexcept
         {
             using namespace usub::utils::sync::refc;

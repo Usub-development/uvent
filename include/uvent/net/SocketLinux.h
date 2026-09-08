@@ -503,6 +503,7 @@ namespace usub::uvent::net
             socklen_t sl = sizeof(ss);
 
             int cfd;
+            if (this->header_->is_read_armed()) this->header_->disarm_read();
             cfd = ::accept4(this->header_->fd, reinterpret_cast<sockaddr*>(&ss), &sl, SOCK_NONBLOCK | SOCK_CLOEXEC);
 
             if (cfd >= 0)
@@ -541,7 +542,6 @@ namespace usub::uvent::net
             case EPROTO:
                 continue;
             case EAGAIN: // same for EWOULDBLOCK (EWOULDBLOCK = EAGAIN = 11)
-                this->header_->disarm_read();
                 co_await detail::AwaiterAccept{this->header_};
                 if (system::this_coroutine::cancel_requested()) [[unlikely]]
                     co_return std::nullopt;
@@ -555,7 +555,6 @@ namespace usub::uvent::net
 #if defined(EMFILE)
             case EMFILE:
 #endif
-                this->header_->disarm_read();
                 co_await detail::AwaiterAccept{this->header_};
                 if (system::this_coroutine::cancel_requested()) [[unlikely]]
                     co_return std::nullopt;
@@ -586,6 +585,7 @@ namespace usub::uvent::net
                 sockaddr_storage ss{};
                 socklen_t sl = sizeof(ss);
 
+                if (this->header_->is_read_armed()) this->header_->disarm_read();
                 int cfd =
                     ::accept4(this->header_->fd, reinterpret_cast<sockaddr*>(&ss), &sl, SOCK_NONBLOCK | SOCK_CLOEXEC);
                 if (cfd >= 0)
@@ -655,7 +655,6 @@ namespace usub::uvent::net
             }
 
         suspend:
-            this->header_->disarm_read();
             co_await detail::AwaiterAccept{this->header_};
             if (system::this_coroutine::cancel_requested()) [[unlikely]]
                 co_return;
@@ -681,6 +680,7 @@ namespace usub::uvent::net
             {
                 uint8_t* dst = buffer.reserve_tail(max_read_size);
 
+                if (this->header_->is_read_armed()) this->header_->disarm_read();
                 ssize_t res = ::recvfrom(this->header_->fd, dst, max_read_size, 0, nullptr, nullptr);
 
                 if (res > 0)
@@ -707,7 +707,6 @@ namespace usub::uvent::net
 
                 if (errno == EAGAIN || errno == EWOULDBLOCK)
                 {
-                    this->header_->disarm_read();
                     co_await detail::AwaiterRead{this->header_};
                     if (system::this_coroutine::cancel_requested()) [[unlikely]]
                     {
@@ -735,6 +734,7 @@ namespace usub::uvent::net
 
                     uint8_t* dst = buffer.reserve_tail(to_read);
 
+                    if (this->header_->is_read_armed()) this->header_->disarm_read();
                     ssize_t res = ::recv(this->header_->fd, dst, to_read, 0);
 
                     if (res > 0)
@@ -784,7 +784,6 @@ namespace usub::uvent::net
                             co_return total_read;
                         }
 
-                        this->header_->disarm_read();
                         co_await detail::AwaiterRead{this->header_};
                         if (system::this_coroutine::cancel_requested()) [[unlikely]]
                         {
@@ -830,6 +829,7 @@ namespace usub::uvent::net
         {
             for (;;)
             {
+                if (this->header_->is_read_armed()) this->header_->disarm_read();
                 ssize_t res = ::recvfrom(this->header_->fd, dst, max_read_size, 0, nullptr, nullptr);
 
                 if (res > 0)
@@ -855,7 +855,6 @@ namespace usub::uvent::net
 
                 if (errno == EAGAIN || errno == EWOULDBLOCK)
                 {
-                    this->header_->disarm_read();
                     co_await detail::AwaiterRead{this->header_};
                     if (system::this_coroutine::cancel_requested()) [[unlikely]]
                     {
@@ -880,6 +879,7 @@ namespace usub::uvent::net
                 {
                     const size_t remaining = max_read_size - static_cast<size_t>(total_read);
 
+                    if (this->header_->is_read_armed()) this->header_->disarm_read();
                     ssize_t res = ::recv(this->header_->fd, out, remaining, 0);
 
                     if (res > 0)
@@ -929,7 +929,6 @@ namespace usub::uvent::net
                             co_return total_read;
                         }
 
-                        this->header_->disarm_read();
                         co_await detail::AwaiterRead{this->header_};
                         if (system::this_coroutine::cancel_requested()) [[unlikely]]
                         {
@@ -979,6 +978,7 @@ namespace usub::uvent::net
             int retries = 0;
             for (;;)
             {
+                if (this->header_->is_write_armed()) this->header_->disarm_write();
                 ssize_t res = ::send(this->header_->fd, buf, sz, MSG_DONTWAIT);
                 if (res >= 0)
                 {
@@ -996,7 +996,6 @@ namespace usub::uvent::net
                 }
                 if (errno == EAGAIN || errno == EWOULDBLOCK)
                 {
-                    this->header_->disarm_write();
                     co_await detail::AwaiterWrite{this->header_};
                     if (system::this_coroutine::cancel_requested()) [[unlikely]]
                     {
@@ -1015,6 +1014,7 @@ namespace usub::uvent::net
 
             while (total_written < static_cast<ssize_t>(sz))
             {
+                if (this->header_->is_write_armed()) this->header_->disarm_write();
                 ssize_t res = ::send(this->header_->fd, buf + total_written, sz - static_cast<size_t>(total_written),
                                      MSG_DONTWAIT);
                 if (res > 0)
@@ -1048,7 +1048,6 @@ namespace usub::uvent::net
 #if UVENT_DEBUG
                     spdlog::info("async_write: EAGAIN, waiting for EPOLLOUT: fd={}", this->header_->fd);
 #endif
-                    this->header_->disarm_write();
                     co_await detail::AwaiterWrite{this->header_};
                     if (system::this_coroutine::cancel_requested()) [[unlikely]]
                     {
@@ -1370,6 +1369,7 @@ namespace usub::uvent::net
         {
             for (;;)
             {
+                if (this->header_->is_write_armed()) this->header_->disarm_write();
                 if (this->is_disconnected_now())
                     co_return std::unexpected(usub::utils::errors::SendError::Closed);
 
@@ -1447,7 +1447,6 @@ namespace usub::uvent::net
                 co_return std::unexpected(usub::utils::errors::SendError::SendFailed);
             }
 
-            this->header_->disarm_write();
             co_await detail::AwaiterWrite{this->header_};
             if (system::this_coroutine::cancel_requested()) [[unlikely]]
             {

@@ -159,62 +159,25 @@ namespace usub::uvent::core
 #if UVENT_DEBUG
                 spdlog::info("Socket #{} triggered as IN", sock->fd);
 #endif
-                if (sock->first)
-                {
-                    auto c = std::exchange(sock->first, nullptr);
+                if (auto c = sock->fire_read())
                     system::this_thread::detail::q.enqueue(c);
-                }
-                else
-                {
-                    sock->mark_read_pending();
-                }
             }
             if (event.events & EPOLLOUT)
             {
 #if UVENT_DEBUG
                 spdlog::info("Socket #{} triggered as OUT", sock->fd);
 #endif
-                if (!(sock->socket_info & static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING)))
-                {
-                    if (sock->second)
-                    {
-                        auto c = std::exchange(sock->second, nullptr);
-                        system::this_thread::detail::q.enqueue(c);
-                    }
-                    else
-                    {
-                        sock->mark_write_pending();
-                    }
-                }
-                else
+                if (sock->socket_info & static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING))
                 {
                     int err = 0;
                     socklen_t len = sizeof(err);
                     getsockopt(sock->fd, SOL_SOCKET, SO_ERROR, &err, &len);
                     sock->socket_info &= ~static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING);
                     if (err != 0)
-                    {
                         sock->socket_info |= static_cast<uint8_t>(net::AdditionalState::CONNECTION_FAILED);
-                        if (sock->second)
-                        {
-                            auto c = std::exchange(sock->second, nullptr);
-                            system::this_thread::detail::q.enqueue(c);
-                        }
-                        else
-                        {
-                            sock->mark_write_pending();
-                        }
-                    }
-                    else if (sock->second)
-                    {
-                        auto c = std::exchange(sock->second, nullptr);
-                        system::this_thread::detail::q.enqueue(c);
-                    }
-                    else
-                    {
-                        sock->mark_write_pending();
-                    }
                 }
+                if (auto c = sock->fire_write())
+                    system::this_thread::detail::q.enqueue(c);
             }
             if (hup)
             {
