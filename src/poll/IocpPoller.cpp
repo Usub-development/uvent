@@ -199,9 +199,8 @@ namespace usub::uvent::core
                              (int)ov->op,
                              transferred);
 #endif
-                if (header->first)
+                if (auto c = header->fire_read())
                 {
-                    auto c = std::exchange(header->first, nullptr);
 #if UVENT_DEBUG
                     spdlog::trace("IocpPoller::poll: enqueue FIRST continuation fd={}",
                                   (std::uint64_t)header->fd);
@@ -238,9 +237,8 @@ namespace usub::uvent::core
                         header->socket_info |= static_cast<uint8_t>(net::AdditionalState::CONNECTION_FAILED);
                 }
 
-                if (header->second)
+                if (auto c = header->fire_write())
                 {
-                    auto c = std::exchange(header->second, nullptr);
 #if UVENT_DEBUG
                     spdlog::trace("IocpPoller::poll: enqueue SECOND continuation fd={}",
                                   (std::uint64_t)header->fd);

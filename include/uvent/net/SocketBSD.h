@@ -427,6 +427,8 @@ namespace usub::uvent::net
             sockaddr_storage ss{};
             socklen_t sl = sizeof(ss);
 
+            if (this->header_->is_read_armed())
+                this->header_->disarm_read();
             int cfd = ::accept(this->header_->fd, reinterpret_cast<sockaddr*>(&ss), &sl);
             if (cfd >= 0)
             {
@@ -517,6 +519,8 @@ namespace usub::uvent::net
                 sockaddr_storage ss{};
                 socklen_t sl = sizeof(ss);
 
+                if (this->header_->is_read_armed())
+                    this->header_->disarm_read();
                 int cfd = ::accept(this->header_->fd, reinterpret_cast<sockaddr*>(&ss), &sl);
                 if (cfd >= 0)
                 {
@@ -636,6 +640,8 @@ namespace usub::uvent::net
 
                 size_t to_read = std::min(sizeof(temp), remaining);
 
+                if (this->header_->is_read_armed())
+                    this->header_->disarm_read();
                 ssize_t res = ::recv(fd, temp, to_read, MSG_DONTWAIT);
 
                 if (res > 0)
@@ -769,6 +775,8 @@ namespace usub::uvent::net
                 }
 
                 int fd = this->header_->fd;
+                if (this->header_->is_read_armed())
+                    this->header_->disarm_read();
                 ssize_t res = ::recvfrom(fd, dst, max_read_size, MSG_DONTWAIT, nullptr, nullptr);
 
                 if (res > 0)
@@ -840,6 +848,8 @@ namespace usub::uvent::net
                     if (remaining == 0)
                         break;
 
+                    if (this->header_->is_read_armed())
+                        this->header_->disarm_read();
                     ssize_t res = ::recv(fd, out, remaining, MSG_DONTWAIT);
 
                     if (res > 0)
@@ -951,6 +961,8 @@ namespace usub::uvent::net
             int retries = 0;
             for (;;)
             {
+                if (this->header_->is_write_armed())
+                    this->header_->disarm_write();
                 ssize_t res = ::send(this->header_->fd, buf, sz, MSG_DONTWAIT);
                 if (res >= 0)
                 {
@@ -980,6 +992,8 @@ namespace usub::uvent::net
 
             while (total_written < static_cast<ssize_t>(sz))
             {
+                if (this->header_->is_write_armed())
+                    this->header_->disarm_write();
                 ssize_t res = ::send(this->header_->fd, buf + total_written, sz - static_cast<size_t>(total_written),
                                      MSG_DONTWAIT);
                 if (res > 0)
@@ -1266,6 +1280,8 @@ namespace usub::uvent::net
         {
             for (;;)
             {
+                if (this->header_->is_write_armed())
+                    this->header_->disarm_write();
                 if (this->is_disconnected_now())
                     co_return std::unexpected(usub::utils::errors::SendError::Closed);
 

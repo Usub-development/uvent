@@ -151,26 +151,21 @@ namespace usub::uvent::core
             sock->try_mark_busy();
 #endif
 
-            if (ev.filter == EVFILT_READ && sock->first)
+            if (ev.filter == EVFILT_READ)
             {
 #if UVENT_DEBUG
                 spdlog::info("Socket #{} triggered as IN", sock->fd);
 #endif
-                auto c = std::exchange(sock->first, nullptr);
-                system::this_thread::detail::q.enqueue(c);
+                if (auto c = sock->fire_read())
+                    system::this_thread::detail::q.enqueue(c);
             }
 
-            if (ev.filter == EVFILT_WRITE && sock->second)
+            if (ev.filter == EVFILT_WRITE)
             {
 #if UVENT_DEBUG
                 spdlog::info("Socket #{} triggered as OUT", sock->fd);
 #endif
-                if (!(sock->socket_info & static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING)))
-                {
-                    auto c = std::exchange(sock->second, nullptr);
-                    system::this_thread::detail::q.enqueue(c);
-                }
-                else
+                if (sock->socket_info & static_cast<uint8_t>(net::AdditionalState::CONNECTION_PENDING))
                 {
                     int err = 0;
                     socklen_t len = sizeof(err);
@@ -182,17 +177,10 @@ namespace usub::uvent::core
 #if UVENT_DEBUG
                         spdlog::debug("Connect failed on fd={} err={}", sock->fd, err);
 #endif
-                        // Будим запаркованный connect — иначе он ждёт только
-                        // таймер (см. аналогичный фикс в EPoller).
-                        auto c = std::exchange(sock->second, nullptr);
-                        system::this_thread::detail::q.enqueue(c);
-                    }
-                    else
-                    {
-                        auto c = std::exchange(sock->second, nullptr);
-                        system::this_thread::detail::q.enqueue(c);
                     }
                 }
+                if (auto c = sock->fire_write())
+                    system::this_thread::detail::q.enqueue(c);
             }
         }
 
